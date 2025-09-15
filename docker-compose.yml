@@ -40,7 +40,7 @@ services:
       - "8002:8002"             # freeciv-proxy state extraction
     user: docker
     healthcheck:
-      test: ["CMD", "bash", "-lc", "curl -sf http://localhost:8080/freeciv-web/ -o /dev/null"]
+      test: ["CMD", "curl", "-o", "/dev/null", "-sf", "http://localhost:8080/about"]
       interval: 30s
       timeout: 10s
       retries: 5
