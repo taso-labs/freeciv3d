@@ -21,7 +21,8 @@ services:
       - "8888:8080"
     user: docker
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/civclientlauncher", "-X", "POST", "-d", "action=new"]
+      # Use a lightweight GET to the public about page for health checks
+      test: ["CMD", "curl", "-f", "http://localhost:8080/about"]
       interval: 30s
       timeout: 10s
       retries: 5
