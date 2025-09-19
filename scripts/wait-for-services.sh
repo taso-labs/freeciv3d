@@ -30,9 +30,6 @@ wait_for_service() {
     return 1
 }
 
-# Wait for MySQL to be ready (socket or TCP)
-wait_for_service "MySQL" "mysqladmin ping -h 127.0.0.1 --silent" 60 2
-
 # Wait for nginx
 wait_for_service "nginx" "curl -f http://localhost >/dev/null" 30 2
 

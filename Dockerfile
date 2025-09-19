@@ -55,17 +55,6 @@ RUN DEBIAN_FRONTEND=noninteractive sudo apt-get update --yes --quiet && \
     DEBIAN_FRONTEND=noninteractive sudo apt-get clean --yes && \
     sudo rm --recursive --force /var/lib/apt/lists/*
 
-# Configure MySQL to allow passwordless root access over TCP
-# Use mysqld --skip-grant-tables to bypass authentication
-RUN sudo mkdir -p /var/run/mysqld && \
-    sudo chown mysql:mysql /var/run/mysqld && \
-    sudo mysqld --skip-grant-tables --skip-networking --user=mysql & \
-    sleep 8 && \
-    sudo mysql -u root -e "FLUSH PRIVILEGES; ALTER USER 'root'@'localhost' IDENTIFIED WITH mysql_native_password BY '';" && \
-    sudo mysql -u root -e "FLUSH PRIVILEGES;" && \
-    sudo pkill -9 mysqld && \
-    sleep 2
-
 # Install Python dependencies for freeciv-proxy and LLM Gateway
 RUN pip install --break-system-packages python-dotenv && \
     cd /docker/llm-gateway && pip install --break-system-packages -r requirements.txt

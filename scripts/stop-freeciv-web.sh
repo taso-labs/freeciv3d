@@ -41,4 +41,4 @@ killall -9 freeciv-web
 ps aux | grep -ie freeciv-proxy | awk '{print $2}' | xargs kill -9 
 
 # Clean up server list in metaserver database.
-echo "delete from servers" | mysql -u "${DB_USER}" -p"${DB_PASSWORD}" "${DB_NAME}"
+mysql -u "${DB_USER}" -p"${DB_PASSWORD}" "${DB_NAME}" -e 'TRUNCATE servers;'

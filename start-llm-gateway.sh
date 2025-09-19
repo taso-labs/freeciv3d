@@ -16,8 +16,6 @@ export LLM_GATEWAY_HOST=0.0.0.0
 export LLM_GATEWAY_PORT=8003
 export LLM_API_TOKENS=${LLM_API_TOKENS:-test-token-fc3d-001,test-token-fc3d-002}
 export LOG_LEVEL=INFO
-# Disable Redis dependency - use in-memory rate limiting instead
-export GATEWAY_REDIS_URL="redis://nonexistent:6379"
 
 # Install requirements if they don't exist
 if [ ! -f "/tmp/llm-gateway-deps-installed" ]; then

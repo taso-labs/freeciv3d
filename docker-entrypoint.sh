@@ -19,28 +19,9 @@ sudo sed -e "s|#DB_HOST#|${DB_HOST}|g" \
 sudo chown tomcat:tomcat /var/lib/tomcat10/conf/Catalina/localhost/freeciv-web.xml
 echo "✓ Tomcat database configuration ready"
 
-# Start Redis if available (optional for LLM features)
-if which redis-server > /dev/null 2>&1; then
-    echo "Starting Redis for LLM features..."
-    redis-server --daemonize yes --bind 127.0.0.1 --port 6379 --dir /tmp 2>/dev/null || echo "Note: Redis failed to start, continuing without it"
-else
-    echo "Redis not installed, LLM features will use in-memory fallbacks"
-fi
-
-# Start all Freeciv-web services (this starts MySQL, nginx, tomcat, publite2)
+# Start all Freeciv-web services (this starts nginx, tomcat, publite2)
 echo "Starting Freeciv-web services..."
 /docker/scripts/start-freeciv-web.sh
-
-# Initialize database AFTER services are running
-echo "Running database initialization..."
-# Run database init with password-based authentication
-if ! /docker/scripts/docker-init-db.sh; then
-    echo "ERROR: Database initialization FAILED!"
-    echo "Game servers cannot start without database tables and server registration"
-    echo "Check MySQL logs at /var/log/mysql/error.log for details"
-    exit 1
-fi
-echo "✓ Database initialization completed successfully"
 
 # Start LLM Gateway components automatically
 # Note: Game-specific proxies (7000-7009) are managed by publite2 via start-freeciv-web.sh

@@ -99,12 +99,6 @@ docker exec fciv-net bash -c "curl -sf http://localhost/freeciv-web/" > /dev/nul
 test_result $? "nginx proxies to Tomcat correctly"
 echo ""
 
-# Test 10: Database connectivity
-echo "10. Checking database..."
-docker exec fciv-net bash -c "mysql -u docker -pchangeme freeciv_web -e 'SELECT 1' 2>/dev/null" > /dev/null
-test_result $? "MySQL database accessible"
-echo ""
-
 # Summary
 echo "========================================="
 echo "Results: $TESTS_PASSED/$TESTS_TOTAL tests passed"

@@ -1,5 +1,4 @@
 services:
-
   fciv-net:
     image: freeciv/fciv-net
     build:
@@ -7,8 +6,8 @@ services:
     container_name: fciv-net
     command: ["sleep", "infinity"]
     environment:
-      # Database Configuration - using localhost since MySQL is internal
-      - DB_HOST=127.0.0.1
+      # Database Configuration
+      - DB_HOST=db
       - DB_USER=docker
       - DB_PASSWORD=changeme
       - DB_NAME=freeciv_web
@@ -23,14 +22,19 @@ services:
       - REQUESTS_PER_SECOND=${REQUESTS_PER_SECOND:-10}
       - BURST_CAPACITY=${BURST_CAPACITY:-100}
       - DEFAULT_CIVSERVER_PORT=${DEFAULT_CIVSERVER_PORT:-6001}
-      # Redis Configuration - using localhost since Redis is internal
-      - REDIS_HOST=127.0.0.1
+      # Redis Configuration
+      - REDIS_HOST=redis
       - REDIS_PORT=6379
     volumes:
       - ./freeciv-web:/docker/freeciv-web-shared
       - ./logs:/docker/logs
-      - mysql_data:/var/lib/mysql
-      - redis_data:/data
+    depends_on:
+      flyway:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      db:
+        condition: service_healthy
     ports:
       - "8080:80"               # nginx web interface
       - "8003:8003"             # LLM gateway API
@@ -38,6 +42,7 @@ services:
       - "6000-6009:6000-6009"   # game servers
       - "7100-7109:7000-7009"   # websocket proxies (remapped to avoid macOS port 7000 conflict)
       - "8002:8002"             # freeciv-proxy state extraction
+      - "8888:8080"
     user: docker
     healthcheck:
       test: ["CMD", "curl", "-o", "/dev/null", "-sf", "http://localhost:8080/about"]
@@ -46,6 +51,71 @@ services:
       retries: 5
       start_period: 120s
 
+  db:
+    image: mariadb:11.7
+    container_name: fciv-db
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: changeme
+      MYSQL_DATABASE: freeciv_web
+      MYSQL_USER: docker
+      MYSQL_PASSWORD: changeme
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      start_period: 1m
+      start_interval: 10s
+      interval: 1m
+      timeout: 5s
+      retries: 3
+
+  flyway:
+    image: flyway/flyway:11
+    container_name: fciv-flyway
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      # Mount the SQL migration files that live in the project
+      - ./freeciv-web/src/main/resources/db/migration:/flyway/sql:ro
+    environment:
+      FLYWAY_URL: jdbc:mariadb://db:3306/freeciv_web?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC
+      FLYWAY_USER: docker
+      FLYWAY_PASSWORD: changeme
+    # Allow Flyway to retry connecting while the DB finishes starting. We
+    # explicitly set the migrations location to avoid the future deprecation
+    # warning about scanning 'sql'. Increase retries and interval for slow DB
+    # startups.
+    command:
+      [
+        "-connectRetries=60",
+        "-connectRetriesInterval=2",
+        "-locations=filesystem:/flyway/sql",
+        "migrate",
+      ]
+    restart: "no"
+
+  redis:
+    image: redis:8
+    container_name: fciv-redis
+    # For local development we run Redis without a password by default. To enable
+    # authentication set the REDIS_PASSWORD environment variable before running
+    # docker-compose (and update `REDIS_PASSWORD` in other services accordingly).
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
 volumes:
   mysql_data:
   redis_data:
+
