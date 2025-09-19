@@ -30,6 +30,18 @@ else
 fi
 
 echo "maven package"
-mvn ${BATCH_MODE} -Dflyway.configFiles=./flyway.properties flyway:migrate package && \
-echo "Copying target/freeciv-web.war to ${TOMCATDIR}/webapps" && \
-  cp target/freeciv-web.war "${TOMCATDIR}/webapps/"
+# By default keep current behaviour but allow callers to opt-out of running Flyway
+# Set RUN_FLYWAY=0 or RUN_FLYWAY=false in the environment to skip migrations here.
+RUN_FLYWAY="${RUN_FLYWAY:-1}"
+
+if [ "$RUN_FLYWAY" = "1" ] || [ "$RUN_FLYWAY" = "true" ]; then
+  echo "Running Flyway migrations during package"
+  mvn ${BATCH_MODE} -Dflyway.configFiles=./flyway.properties flyway:migrate package && \
+    echo "Copying target/freeciv-web.war to ${TOMCATDIR}/webapps" && \
+    cp target/freeciv-web.war "${TOMCATDIR}/webapps/"
+else
+  echo "Skipping Flyway migrations during package (RUN_FLYWAY=${RUN_FLYWAY})"
+  mvn ${BATCH_MODE} package && \
+    echo "Copying target/freeciv-web.war to ${TOMCATDIR}/webapps" && \
+    cp target/freeciv-web.war "${TOMCATDIR}/webapps/"
+fi

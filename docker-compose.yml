@@ -1,33 +1,80 @@
 services:
-
   fciv-net:
     image: freeciv/fciv-net
     build: .
     container_name: fciv-net
     command: ["sleep", "infinity"]
     environment:
-      - DB_HOST=127.0.0.1
-      - DB_USER=docker
-      - DB_PASSWORD=changeme
-      - DB_NAME=freeciv_web
+      DB_HOST: db
+      DB_USER: docker
+      DB_PASSWORD: changeme
+      DB_NAME: freeciv_web
     volumes:
       - ./freeciv-web:/docker/freeciv-web-shared
-      - mysql_data:/var/lib/mysql
+    depends_on:
+      flyway:
+        condition: service_completed_successfully
     ports:
       - "8080:80"
       - "4002:4002"
       - "6000-6009:6000-6009"
       - "7100-7109:7000-7009"
       - "8888:8080"
+      - "8002:8002"
     user: docker
     healthcheck:
-      # Use a lightweight GET to the public about page for health checks
       test: ["CMD", "curl", "-f", "http://localhost:8080/about"]
       interval: 30s
       timeout: 10s
       retries: 5
       start_period: 120s
 
+  db:
+    image: mariadb:11.7
+    container_name: fciv-db
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: changeme
+      MYSQL_DATABASE: freeciv_web
+      MYSQL_USER: docker
+      MYSQL_PASSWORD: changeme
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      start_period: 1m
+      start_interval: 10s
+      interval: 1m
+      timeout: 5s
+      retries: 3
+
+  flyway:
+    image: flyway/flyway:11
+    container_name: fciv-flyway
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      # Mount the SQL migration files that live in the project
+      - ./freeciv-web/src/main/resources/db/migration:/flyway/sql:ro
+      # Optional: allow a flyway.conf to be provided from the repo
+      - ./freeciv-web/flyway.properties:/flyway/conf/flyway.conf:ro
+    environment:
+      FLYWAY_URL: jdbc:mariadb://db:3306/freeciv_web
+      FLYWAY_USER: docker
+      FLYWAY_PASSWORD: changeme
+    # Allow Flyway to retry connecting while the DB finishes starting. We
+    # explicitly set the migrations location to avoid the future deprecation
+    # warning about scanning 'sql'. Increase retries and interval for slow DB
+    # startups.
+    command:
+      [
+        "-connectRetries=60",
+        "-connectRetriesInterval=2",
+        "-locations=filesystem:/flyway/sql",
+        "migrate",
+      ]
+    restart: "no"
+
 volumes:
-  data:
   mysql_data:

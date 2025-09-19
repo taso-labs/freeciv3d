@@ -10,6 +10,7 @@ FCW_HOST=example.com
 DB_NAME=freeciv_web
 DB_USER=$(id -run)
 DB_PASSWORD=changeme
+DB_HOST=db
 
 # This is the DB manager superuser password.
 # Leave it blank to be asked for it when needed.

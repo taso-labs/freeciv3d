@@ -30,8 +30,9 @@ wait_for_service() {
     return 1
 }
 
-# Wait for MySQL to be ready (socket or TCP)
-wait_for_service "MySQL" "mysqladmin ping -h 127.0.0.1 --silent" 60 2
+# Wait for MySQL to be ready (socket or TCP). Allow override via DB_HOST env var.
+DB_HOST="${DB_HOST:-127.0.0.1}"
+wait_for_service "MySQL" "mysqladmin ping -h ${DB_HOST} --silent" 60 2
 
 # Wait for nginx
 wait_for_service "nginx" "curl -f http://localhost >/dev/null" 30 2
