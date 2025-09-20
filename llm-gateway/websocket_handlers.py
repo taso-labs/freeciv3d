@@ -16,9 +16,13 @@ try:
     from .connection_manager import connection_manager
     from .config import settings
     from .main import gateway
+    from .utils.origin_validator import validate_websocket_origin, get_websocket_origin_info, create_origin_rejection_response
+    from .utils.rate_limiter import comprehensive_rate_limiter
 except ImportError:
     from connection_manager import connection_manager
     from config import settings
+    from utils.origin_validator import validate_websocket_origin, get_websocket_origin_info, create_origin_rejection_response
+    from utils.rate_limiter import comprehensive_rate_limiter
     # gateway will be available when main.py imports this
 
 logger = logging.getLogger("llm-gateway")
@@ -37,9 +41,19 @@ class AgentWebSocketHandler:
 
     async def handle_connection(self):
         """Handle the WebSocket connection lifecycle"""
+        # Validate origin before accepting connection
+        if not self._validate_origin():
+            await self.websocket.close(code=1008, reason="Unauthorized origin")
+            return
+
         await self.websocket.accept()
 
         try:
+            # Check connection limits
+            if not await comprehensive_rate_limiter.track_connection(self.agent_id):
+                await self._send_error("Connection limit exceeded for agent")
+                return
+
             # Add to connection manager
             self.connection_id = await connection_manager.add_connection(
                 self.websocket, "agent", self.agent_id
@@ -52,6 +66,18 @@ class AgentWebSocketHandler:
             while True:
                 try:
                     data = await self.websocket.receive_text()
+
+                    # Rate limiting and message size validation
+                    is_allowed, reason = await comprehensive_rate_limiter.check_rate_limits(
+                        self.agent_id,
+                        message_size=len(data.encode('utf-8')),
+                        message_content=data
+                    )
+
+                    if not is_allowed:
+                        await self._send_rate_limit_error(reason)
+                        continue
+
                     message = json.loads(data)
                     await self._handle_message(message)
 
@@ -73,6 +99,9 @@ class AgentWebSocketHandler:
             # Cleanup
             if self.connection_id:
                 await connection_manager.handle_disconnect(self.connection_id)
+
+            # Release connection tracking
+            await comprehensive_rate_limiter.release_connection(self.agent_id)
 
     async def _send_welcome(self):
         """Send welcome message"""
@@ -288,6 +317,53 @@ class AgentWebSocketHandler:
         }
         await self.websocket.send_text(json.dumps(error))
 
+    async def _send_rate_limit_error(self, reason: str):
+        """Send rate limit error message"""
+        error = {
+            "type": "rate_limit_error",
+            "agent_id": self.agent_id,
+            "timestamp": time.time(),
+            "data": {
+                "type": "error",
+                "success": False,
+                "error_code": "E429",
+                "error_message": f"Rate limit exceeded: {reason}"
+            }
+        }
+        await self.websocket.send_text(json.dumps(error))
+
+    def _validate_origin(self) -> bool:
+        """
+        Validate WebSocket origin for security
+
+        Returns:
+            bool: True if origin is allowed, False otherwise
+        """
+        try:
+            # Get origin info for logging
+            origin_info = get_websocket_origin_info(self.websocket)
+            logger.debug(f"Agent {self.agent_id} connection from: {origin_info}")
+
+            # For LLM agents, allow null origins (non-browser clients)
+            # but validate against allowed origins if present
+            is_valid = validate_websocket_origin(
+                self.websocket,
+                settings.allowed_origins,
+                strict_mode=False  # Allow null origins for LLM agents
+            )
+
+            if not is_valid:
+                logger.warning(
+                    f"Rejected agent {self.agent_id} connection from unauthorized origin: "
+                    f"{origin_info.get('origin', 'null')}"
+                )
+
+            return is_valid
+
+        except Exception as e:
+            logger.error(f"Error validating origin for agent {self.agent_id}: {e}")
+            return False
+
 
 class SpectatorWebSocketHandler:
     """Handler for spectator WebSocket connections"""
@@ -299,6 +375,11 @@ class SpectatorWebSocketHandler:
 
     async def handle_connection(self):
         """Handle the WebSocket connection lifecycle"""
+        # Validate origin before accepting connection (strict mode for spectators)
+        if not self._validate_origin():
+            await self.websocket.close(code=1008, reason="Unauthorized origin")
+            return
+
         await self.websocket.accept()
 
         try:
@@ -370,6 +451,37 @@ class SpectatorWebSocketHandler:
             "message": error_message
         }
         await self.websocket.send_text(json.dumps(error))
+
+    def _validate_origin(self) -> bool:
+        """
+        Validate WebSocket origin for security (strict mode for spectators)
+
+        Returns:
+            bool: True if origin is allowed, False otherwise
+        """
+        try:
+            # Get origin info for logging
+            origin_info = get_websocket_origin_info(self.websocket)
+            logger.debug(f"Spectator connection to game {self.game_id} from: {origin_info}")
+
+            # For spectators (browsers), require valid origin
+            is_valid = validate_websocket_origin(
+                self.websocket,
+                settings.allowed_origins,
+                strict_mode=True  # Strict mode for browser clients
+            )
+
+            if not is_valid:
+                logger.warning(
+                    f"Rejected spectator connection to game {self.game_id} from unauthorized origin: "
+                    f"{origin_info.get('origin', 'null')}"
+                )
+
+            return is_valid
+
+        except Exception as e:
+            logger.error(f"Error validating origin for spectator connection to game {self.game_id}: {e}")
+            return False
 
 
 # WebSocket route registration
