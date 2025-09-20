@@ -10,3 +10,4 @@ pytest-cov>=4.1.0
 httpx>=0.25.0
 aioredis>=2.0.0
 slowapi>=0.1.9
+cryptography>=41.0.0

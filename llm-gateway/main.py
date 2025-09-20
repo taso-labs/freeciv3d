@@ -33,9 +33,17 @@ try:
     from .connection_manager import connection_manager, ConnectionInfo
     from .api_endpoints import GameConfig, FreeCivAction
     from .websocket_handlers import AgentWebSocketHandler, SpectatorWebSocketHandler
+    from .request_manager import request_manager
+    from .connection_state_manager import connection_state_manager
+    from .security.token_manager import secure_token_manager
+    from .utils.safe_access import get_agent_game_id, get_agent_config, safe_get_nested
 except ImportError:
     from config import settings, get_cors_origins, get_freeciv_proxy_url, validate_settings
     from connection_manager import connection_manager, ConnectionInfo
+    from request_manager import request_manager
+    from connection_state_manager import connection_state_manager
+    from security.token_manager import secure_token_manager
+    from utils.safe_access import get_agent_game_id, get_agent_config, safe_get_nested
 
 # Configure logging
 logging.basicConfig(
@@ -86,31 +94,37 @@ class LLMGateway:
     def __init__(self):
         self.active_agents: Dict[str, Dict[str, Any]] = {}
         self.game_sessions: Dict[str, Dict[str, Any]] = {}
-        self.proxy_connections: Dict[str, websockets.WebSocketServerProtocol] = {}
         self.connection_retry_counts: Dict[str, int] = {}
         self.failed_connections: Dict[str, float] = {}  # game_id -> last_failure_time
-        self.pending_requests: Dict[str, asyncio.Future] = {}  # correlation_id -> Future
         self._running = False
+
+        # Use new secure components instead of direct dictionaries
+        # proxy_connections now managed by connection_state_manager
+        # pending_requests now managed by request_manager
+        # API tokens now managed by secure_token_manager
 
     async def start(self):
         """Start the gateway"""
         self._running = True
+
+        # Start all managers
         await connection_manager.start()
+        await request_manager.start()
+        await connection_state_manager.start()
+        await secure_token_manager.start()
+
         logger.info("LLM Gateway started")
 
     async def stop(self):
         """Stop the gateway"""
         self._running = False
+
+        # Stop all managers
         await connection_manager.stop()
+        await request_manager.stop()
+        await connection_state_manager.stop()
+        await secure_token_manager.stop()
 
-        # Close proxy connections
-        for game_id, proxy_ws in self.proxy_connections.items():
-            try:
-                await proxy_ws.close()
-            except Exception as e:
-                logger.warning(f"Error closing proxy connection for {game_id}: {e}")
-
-        self.proxy_connections.clear()
         logger.info("LLM Gateway stopped")
 
     async def register_agent(self, agent_id: str, config: Dict[str, Any]) -> Dict[str, Any]:
@@ -122,7 +136,7 @@ class LLMGateway:
                     "error": f"Agent {agent_id} already registered"
                 }
 
-            # Validate configuration
+            # Validate configuration using safe access
             required_fields = ["api_token", "model", "game_id"]
             for field in required_fields:
                 if field not in config:
@@ -131,15 +145,27 @@ class LLMGateway:
                         "error": f"Missing required field: {field}"
                     }
 
-            # Store agent configuration
+            # Extract and securely store API token
+            api_token = config["api_token"]
+            if not await secure_token_manager.store_token(agent_id, api_token):
+                return {
+                    "success": False,
+                    "error": "Failed to securely store API token"
+                }
+
+            # Store agent configuration (without the plaintext token)
+            secure_config = {k: v for k, v in config.items() if k != "api_token"}
+            secure_config["token_stored"] = True
+
             self.active_agents[agent_id] = {
-                "config": config,
+                "config": secure_config,
                 "registered_at": time.time(),
                 "session_id": str(uuid.uuid4()),
                 "status": "registered"
             }
 
-            logger.info(f"Agent {agent_id} registered for game {config['game_id']}")
+            game_id = safe_get_nested(config, "game_id")
+            logger.info(f"Agent {agent_id} registered for game {game_id}")
 
             return {
                 "success": True,
@@ -177,14 +203,24 @@ class LLMGateway:
     async def connect_to_freeciv_proxy(self, game_id: str) -> Dict[str, Any]:
         """Establish connection to FreeCiv proxy for a game"""
         try:
-            if game_id in self.proxy_connections:
+            # Check if already connected using connection state manager
+            existing_connection = await connection_state_manager.get_connection(game_id)
+            if existing_connection:
                 return {"success": True, "message": "Already connected"}
 
             proxy_url = get_freeciv_proxy_url()
 
             # Connect to FreeCiv proxy
             websocket = await websockets.connect(proxy_url)
-            self.proxy_connections[game_id] = websocket
+
+            # Add to connection state manager (thread-safe)
+            success = await connection_state_manager.add_connection(game_id, websocket)
+            if not success:
+                await websocket.close()
+                return {
+                    "success": False,
+                    "error": "Connection capacity exceeded"
+                }
 
             logger.info(f"Connected to FreeCiv proxy for game {game_id}")
 
@@ -196,6 +232,7 @@ class LLMGateway:
 
         except Exception as e:
             logger.error(f"Failed to connect to FreeCiv proxy for game {game_id}: {e}")
+            await connection_state_manager.mark_connection_failed(game_id, str(e))
             return {
                 "success": False,
                 "error": f"Connection failed: {str(e)}"
@@ -204,22 +241,27 @@ class LLMGateway:
     async def forward_to_proxy(self, game_id: str, message: Dict[str, Any]) -> bool:
         """Forward message to FreeCiv proxy with retry logic"""
         try:
-            # Check if we have a working connection
-            if game_id not in self.proxy_connections or not await self._is_connection_healthy(game_id):
+            # Check if we have a working connection using connection state manager
+            proxy_ws = await connection_state_manager.get_connection(game_id)
+            if not proxy_ws or not await connection_state_manager.is_connection_healthy(game_id):
                 success = await self._ensure_proxy_connection(game_id)
                 if not success:
                     logger.error(f"Failed to establish proxy connection for game {game_id}")
                     return False
+                proxy_ws = await connection_state_manager.get_connection(game_id)
 
-            proxy_ws = self.proxy_connections[game_id]
+            if not proxy_ws:
+                logger.error(f"No proxy connection available for game {game_id}")
+                return False
+
             await proxy_ws.send(json.dumps(message))
             logger.debug(f"Message forwarded to proxy for game {game_id}")
             return True
 
         except Exception as e:
             logger.error(f"Error forwarding message to proxy for game {game_id}: {e}")
-            # Mark connection as failed and remove it
-            await self._handle_connection_failure(game_id)
+            # Mark connection as failed using connection state manager
+            await connection_state_manager.mark_connection_failed(game_id, str(e))
             return False
 
     async def _ensure_proxy_connection(self, game_id: str) -> bool:
@@ -312,12 +354,13 @@ class LLMGateway:
         """Handle incoming message from FreeCiv proxy"""
         try:
             correlation_id = message.get("correlation_id")
-            if correlation_id and correlation_id in self.pending_requests:
-                # Resolve the pending request
-                future = self.pending_requests.pop(correlation_id)
-                if not future.done():
-                    future.set_result(message)
-                logger.debug(f"Resolved pending request {correlation_id}")
+            if correlation_id:
+                # FIXED: Use RequestManager to resolve requests (prevents memory leaks)
+                success = await request_manager.resolve_request(correlation_id, message)
+                if success:
+                    logger.debug(f"Resolved pending request {correlation_id}")
+                else:
+                    logger.debug(f"No pending request found for correlation_id {correlation_id}")
             else:
                 # Handle non-request messages (broadcasts, events, etc.)
                 logger.debug(f"Received non-correlated message from proxy: {message.get('type', 'unknown')}")
@@ -328,43 +371,30 @@ class LLMGateway:
 
     async def _send_request_and_wait(self, game_id: str, message: Dict[str, Any], timeout: float = 30.0) -> Dict[str, Any]:
         """Send request to proxy and wait for response"""
-        # Generate correlation ID
-        correlation_id = str(uuid.uuid4())
-        message["correlation_id"] = correlation_id
-
-        # Create future for response
-        future = asyncio.Future()
-        self.pending_requests[correlation_id] = future
-
+        # FIXED: Use RequestManager to prevent memory leaks (addresses lines 336-367 issue)
         try:
-            # Send message
-            success = await self.forward_to_proxy(game_id, message)
-            if not success:
-                raise Exception("Failed to send message to proxy")
+            # Use RequestManager's send_request_and_wait method
+            response = await request_manager.send_request_and_wait(
+                send_callback=lambda msg: self.forward_to_proxy(game_id, msg),
+                message=message,
+                timeout=timeout,
+                agent_id=f"gateway-{game_id}",
+                request_type="proxy_request"
+            )
+            return response
 
-            # Wait for response with timeout
-            try:
-                response = await asyncio.wait_for(future, timeout=timeout)
-                return response
-            except asyncio.TimeoutError:
-                logger.warning(f"Request {correlation_id} timed out after {timeout}s")
-                return {
-                    "success": False,
-                    "error": "Request timed out",
-                    "correlation_id": correlation_id
-                }
-
-        except Exception as e:
-            logger.error(f"Error sending request {correlation_id}: {e}")
+        except asyncio.TimeoutError:
+            logger.warning(f"Request to game {game_id} timed out after {timeout}s")
             return {
                 "success": False,
-                "error": str(e),
-                "correlation_id": correlation_id
+                "error": "Request timed out"
             }
-        finally:
-            # Clean up pending request
-            if correlation_id in self.pending_requests:
-                del self.pending_requests[correlation_id]
+        except Exception as e:
+            logger.error(f"Error sending request to game {game_id}: {e}")
+            return {
+                "success": False,
+                "error": str(e)
+            }
 
     async def create_game(self, config: Dict[str, Any]) -> Dict[str, Any]:
         """Create a new game session"""
@@ -489,10 +519,15 @@ class LLMGateway:
                 "error": f"Action submission failed: {str(e)}"
             }
 
-    def get_health_status(self) -> Dict[str, Any]:
+    async def get_health_status(self) -> Dict[str, Any]:
         """Get gateway health status"""
         try:
-            stats = connection_manager.get_connection_stats()
+            # Get stats from all managers
+            connection_stats = await connection_manager.get_connection_stats()
+            request_stats = await request_manager.get_stats()
+            connection_state_stats = await connection_state_manager.get_stats()
+            token_stats = await secure_token_manager.get_stats()
+
             active_games = len(self.game_sessions)
             active_agents = len(self.active_agents)
 
@@ -504,16 +539,25 @@ class LLMGateway:
                 status = "degraded"
                 issues.append("At maximum game capacity")
 
-            if len(self.proxy_connections) < active_games:
+            proxy_connections = connection_state_stats.get("active_connections", 0)
+            if proxy_connections < active_games:
                 status = "degraded"
                 issues.append("Some FreeCiv proxy connections missing")
+
+            # Check for high error rates
+            if request_stats.get("timed_out_requests", 0) > 10:
+                status = "degraded"
+                issues.append("High request timeout rate")
 
             return {
                 "status": status,
                 "active_games": active_games,
                 "active_agents": active_agents,
-                "proxy_connections": len(self.proxy_connections),
-                "connection_stats": stats,
+                "proxy_connections": proxy_connections,
+                "connection_stats": connection_stats,
+                "request_stats": request_stats,
+                "connection_state_stats": connection_state_stats,
+                "token_stats": token_stats,
                 "uptime": time.time() - gateway_start_time,
                 "issues": issues if issues else None
             }
@@ -535,14 +579,27 @@ class LLMGateway:
                 "error": "Agent not registered"
             }
 
-        game_id = self.active_agents[agent_id]["config"]["game_id"]
+        # FIXED: Use safe dictionary access to prevent KeyError crashes (addresses line 538 issue)
+        game_id = get_agent_game_id(self.active_agents, agent_id)
+        if not game_id:
+            return {
+                "success": False,
+                "error": "Game ID not found for agent"
+            }
 
-        if game_id not in self.proxy_connections:
+        # Use connection state manager instead of direct proxy_connections access
+        connection = await connection_state_manager.get_connection(game_id)
+        if not connection:
             result = await self.connect_to_freeciv_proxy(game_id)
             if not result["success"]:
                 return result
 
-        await self.forward_to_proxy(game_id, message)
+        success = await self.forward_to_proxy(game_id, message)
+        if not success:
+            return {
+                "success": False,
+                "error": "Failed to forward message to proxy"
+            }
 
         return {"success": True}
 
@@ -582,7 +639,7 @@ async def shutdown_event():
 @limiter.limit(f"{settings.rate_limit_requests_per_minute}/minute") if limiter else lambda x: x
 async def health_check(request: Request):
     """Health check endpoint"""
-    health_status = gateway.get_health_status()
+    health_status = await gateway.get_health_status()
 
     if health_status["status"] == "unhealthy":
         raise HTTPException(status_code=503, detail=health_status)
