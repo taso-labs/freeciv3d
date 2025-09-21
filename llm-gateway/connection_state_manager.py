@@ -14,7 +14,53 @@ from typing import Dict, Any, Optional, Set, List
 from dataclasses import dataclass
 from enum import Enum
 
+try:
+    from .utils.constants import CONNECTION_POOL_MAX, HEALTH_CHECK_INTERVAL, HEALTH_CHECK_TIMEOUT, CLEANUP_CYCLE_SECONDS, GLOBAL_CONNECTION_LIMIT
+except ImportError:
+    from utils.constants import CONNECTION_POOL_MAX, HEALTH_CHECK_INTERVAL, HEALTH_CHECK_TIMEOUT, CLEANUP_CYCLE_SECONDS, GLOBAL_CONNECTION_LIMIT
+
 logger = logging.getLogger("llm-gateway")
+
+
+# Global connection counter to track across all instances
+class GlobalConnectionTracker:
+    """Tracks global connection count across all managers"""
+    _instance = None
+    _lock = asyncio.Lock()
+    _global_count = 0
+
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+
+    async def can_add_connection(self) -> bool:
+        """Check if we can add a new connection without exceeding global limit"""
+        async with self._lock:
+            return self._global_count < GLOBAL_CONNECTION_LIMIT
+
+    async def add_connection(self) -> bool:
+        """Add a connection to global count"""
+        async with self._lock:
+            if self._global_count >= GLOBAL_CONNECTION_LIMIT:
+                return False
+            self._global_count += 1
+            return True
+
+    async def remove_connection(self):
+        """Remove a connection from global count"""
+        async with self._lock:
+            if self._global_count > 0:
+                self._global_count -= 1
+
+    async def get_count(self) -> int:
+        """Get current global connection count"""
+        async with self._lock:
+            return self._global_count
+
+
+# Global instance
+global_connection_tracker = GlobalConnectionTracker()
 
 
 class ConnectionStatus(Enum):
@@ -45,13 +91,14 @@ class ConnectionStateManager:
     Prevents race conditions when modifying shared connection state
     """
 
-    def __init__(self, max_connections: int = 50, health_check_interval: float = 30.0):
+    def __init__(self, max_connections: int = CONNECTION_POOL_MAX, health_check_interval: float = HEALTH_CHECK_INTERVAL):
         self._connections: Dict[str, ConnectionInfo] = {}
         self._connection_lock = asyncio.Lock()
         self._health_lock = asyncio.Lock()
 
         # Connection limits and timeouts
         self.max_connections = max_connections
+        self.global_connection_limit = GLOBAL_CONNECTION_LIMIT
         self.health_check_interval = health_check_interval
         self.connection_timeout = 10.0
         self.max_retry_count = 3
@@ -68,7 +115,9 @@ class ConnectionStateManager:
             "active_connections": 0,
             "failed_connections": 0,
             "reconnections": 0,
-            "health_check_failures": 0
+            "health_check_failures": 0,
+            "global_connections": 0,
+            "rejected_global_limit": 0
         }
 
     async def start(self):
@@ -115,31 +164,50 @@ class ConnectionStateManager:
         Returns:
             bool: True if added successfully, False if at capacity
         """
+        # Check global connection limit first
+        if not await global_connection_tracker.can_add_connection():
+            logger.warning(f"Global connection limit reached ({self.global_connection_limit})")
+            self._stats["rejected_global_limit"] += 1
+            return False
+
         async with self._connection_lock:
-            # Check capacity
+            # Check local capacity
             if len(self._connections) >= self.max_connections:
-                logger.warning(f"Connection capacity reached ({self.max_connections})")
+                logger.warning(f"Local connection capacity reached ({self.max_connections})")
                 return False
 
-            # Close existing connection if any
-            if game_id in self._connections:
-                await self._close_connection_unsafe(game_id)
+            # Reserve global connection slot
+            if not await global_connection_tracker.add_connection():
+                logger.warning(f"Failed to reserve global connection slot")
+                return False
 
-            # Add new connection
-            connection_info = ConnectionInfo(
-                connection=connection,
-                status=ConnectionStatus.CONNECTED,
-                game_id=game_id,
-                created_at=time.time(),
-                last_used=time.time()
-            )
+            try:
+                # Close existing connection if any
+                if game_id in self._connections:
+                    await self._close_connection_unsafe(game_id)
 
-            self._connections[game_id] = connection_info
-            self._stats["total_connections"] += 1
-            self._stats["active_connections"] += 1
+                # Add new connection
+                connection_info = ConnectionInfo(
+                    connection=connection,
+                    status=ConnectionStatus.CONNECTED,
+                    game_id=game_id,
+                    created_at=time.time(),
+                    last_used=time.time()
+                )
 
-            logger.info(f"Added connection for game {game_id}")
-            return True
+                self._connections[game_id] = connection_info
+                self._stats["total_connections"] += 1
+                self._stats["active_connections"] += 1
+                self._stats["global_connections"] = await global_connection_tracker.get_count()
+
+                logger.info(f"Added connection for game {game_id} (global: {self._stats['global_connections']})")
+                return True
+
+            except Exception as e:
+                # Release global connection slot on error
+                await global_connection_tracker.remove_connection()
+                logger.error(f"Failed to add connection for game {game_id}: {e}")
+                return False
 
     async def remove_connection(self, game_id: str) -> bool:
         """
@@ -275,7 +343,12 @@ class ConnectionStateManager:
         if connection_info:
             await self._close_connection_info(connection_info)
             self._stats["active_connections"] = max(0, self._stats["active_connections"] - 1)
-            logger.info(f"Removed connection for game {game_id}")
+
+            # Release global connection slot
+            await global_connection_tracker.remove_connection()
+            self._stats["global_connections"] = await global_connection_tracker.get_count()
+
+            logger.info(f"Removed connection for game {game_id} (global: {self._stats['global_connections']})")
             return True
 
         return False
@@ -340,7 +413,7 @@ class ConnectionStateManager:
                     # Send ping to test connection
                     await asyncio.wait_for(
                         connection_info.connection.ping(),
-                        timeout=5.0
+                        timeout=HEALTH_CHECK_TIMEOUT
                     )
                 else:
                     unhealthy_connections.append(game_id)
@@ -350,19 +423,25 @@ class ConnectionStateManager:
                 unhealthy_connections.append(game_id)
                 self._stats["health_check_failures"] += 1
 
-        # Mark unhealthy connections
+        # Mark unhealthy connections (with race condition protection)
         async with self._connection_lock:
+            validated_unhealthy = []
             for game_id in unhealthy_connections:
-                await self._mark_connection_unhealthy_unsafe(game_id)
+                # Check if connection still exists and is in the same state
+                connection_info = self._connections.get(game_id)
+                if (connection_info and
+                    connection_info.status == ConnectionStatus.CONNECTED):
+                    await self._mark_connection_unhealthy_unsafe(game_id)
+                    validated_unhealthy.append(game_id)
 
-        if unhealthy_connections:
-            logger.info(f"Marked {len(unhealthy_connections)} connections as unhealthy")
+        if validated_unhealthy:
+            logger.info(f"Marked {len(validated_unhealthy)} connections as unhealthy")
 
     async def _cleanup_loop(self):
         """Background task to clean up failed connections"""
         while self._running:
             try:
-                await asyncio.sleep(60.0)  # Run cleanup every minute
+                await asyncio.sleep(CLEANUP_CYCLE_SECONDS)  # Run cleanup every minute
                 await self._cleanup_failed_connections()
             except asyncio.CancelledError:
                 break

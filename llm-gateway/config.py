@@ -9,6 +9,21 @@ import os
 from typing import List, Optional
 from pydantic_settings import BaseSettings
 
+try:
+    from .utils.constants import (
+        MIN_PORT, MAX_PORT, MIN_AGENT_TIMEOUT, MAX_AGENT_TIMEOUT,
+        MIN_CONCURRENT_GAMES, MAX_CONCURRENT_GAMES, MIN_HEARTBEAT_INTERVAL,
+        MAX_HEARTBEAT_INTERVAL, MIN_RATE_LIMIT, MAX_RATE_LIMIT,
+        MAX_CONNECTIONS_PER_AGENT
+    )
+except ImportError:
+    from utils.constants import (
+        MIN_PORT, MAX_PORT, MIN_AGENT_TIMEOUT, MAX_AGENT_TIMEOUT,
+        MIN_CONCURRENT_GAMES, MAX_CONCURRENT_GAMES, MIN_HEARTBEAT_INTERVAL,
+        MAX_HEARTBEAT_INTERVAL, MIN_RATE_LIMIT, MAX_RATE_LIMIT,
+        MAX_CONNECTIONS_PER_AGENT
+    )
+
 
 class Settings(BaseSettings):
     """Configuration settings with environment variable support"""
@@ -83,25 +98,98 @@ def get_cors_origins() -> List[str]:
 
 
 def validate_settings() -> bool:
-    """Validate configuration settings"""
+    """Comprehensive validation of configuration settings"""
+    errors = []
+    warnings = []
+
     try:
-        # Validate ports
-        if not (1 <= settings.port <= 65535):
-            raise ValueError(f"Invalid port: {settings.port}")
+        # Validate port ranges using constants
+        if not (MIN_PORT <= settings.port <= MAX_PORT):
+            errors.append(f"Invalid port: {settings.port} (must be {MIN_PORT}-{MAX_PORT})")
 
-        if not (1 <= settings.freeciv_proxy_port <= 65535):
-            raise ValueError(f"Invalid FreeCiv proxy port: {settings.freeciv_proxy_port}")
+        if not (MIN_PORT <= settings.freeciv_proxy_port <= MAX_PORT):
+            errors.append(f"Invalid FreeCiv proxy port: {settings.freeciv_proxy_port} (must be {MIN_PORT}-{MAX_PORT})")
 
-        # Validate limits
-        if settings.max_concurrent_games <= 0:
-            raise ValueError("max_concurrent_games must be positive")
+        # Validate timeout settings
+        if not (MIN_AGENT_TIMEOUT <= settings.agent_timeout <= MAX_AGENT_TIMEOUT):
+            errors.append(f"Invalid agent_timeout: {settings.agent_timeout} (must be {MIN_AGENT_TIMEOUT}-{MAX_AGENT_TIMEOUT})")
 
-        if settings.agent_timeout <= 0:
-            raise ValueError("agent_timeout must be positive")
+        # Validate game and connection limits
+        if not (MIN_CONCURRENT_GAMES <= settings.max_concurrent_games <= MAX_CONCURRENT_GAMES):
+            errors.append(f"Invalid max_concurrent_games: {settings.max_concurrent_games} (must be {MIN_CONCURRENT_GAMES}-{MAX_CONCURRENT_GAMES})")
+
+        if not (1 <= settings.max_connections_per_agent <= MAX_CONNECTIONS_PER_AGENT):
+            errors.append(f"Invalid max_connections_per_agent: {settings.max_connections_per_agent} (must be 1-{MAX_CONNECTIONS_PER_AGENT})")
+
+        # Validate heartbeat interval
+        if not (MIN_HEARTBEAT_INTERVAL <= settings.heartbeat_interval <= MAX_HEARTBEAT_INTERVAL):
+            errors.append(f"Invalid heartbeat_interval: {settings.heartbeat_interval} (must be {MIN_HEARTBEAT_INTERVAL}-{MAX_HEARTBEAT_INTERVAL})")
+
+        # Validate rate limiting settings
+        if not (MIN_RATE_LIMIT <= settings.rate_limit_requests_per_minute <= MAX_RATE_LIMIT):
+            errors.append(f"Invalid rate_limit_requests_per_minute: {settings.rate_limit_requests_per_minute} (must be {MIN_RATE_LIMIT}-{MAX_RATE_LIMIT})")
+
+        if not (1 <= settings.rate_limit_burst_size <= settings.rate_limit_requests_per_minute):
+            errors.append(f"Invalid rate_limit_burst_size: {settings.rate_limit_burst_size} (must be 1-{settings.rate_limit_requests_per_minute})")
+
+        # Validate retry settings
+        if not (1 <= settings.max_retry_attempts <= 10):
+            errors.append(f"Invalid max_retry_attempts: {settings.max_retry_attempts} (must be 1-10)")
+
+        if not (0.1 <= settings.initial_retry_delay <= 60.0):
+            errors.append(f"Invalid initial_retry_delay: {settings.initial_retry_delay} (must be 0.1-60.0)")
+
+        if not (1.0 <= settings.retry_backoff_multiplier <= 10.0):
+            errors.append(f"Invalid retry_backoff_multiplier: {settings.retry_backoff_multiplier} (must be 1.0-10.0)")
+
+        if not (1.0 <= settings.connection_timeout <= 300.0):
+            errors.append(f"Invalid connection_timeout: {settings.connection_timeout} (must be 1.0-300.0)")
 
         # Validate Redis URL format
         if not settings.redis_url.startswith(("redis://", "rediss://")):
-            raise ValueError("Invalid Redis URL format")
+            errors.append("Invalid Redis URL format (must start with redis:// or rediss://)")
+
+        if not (0 <= settings.redis_db <= 15):
+            errors.append(f"Invalid Redis database: {settings.redis_db} (must be 0-15)")
+
+        # Validate log level
+        valid_log_levels = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
+        if settings.log_level.upper() not in valid_log_levels:
+            errors.append(f"Invalid log_level: {settings.log_level} (must be one of {valid_log_levels})")
+
+        # Validate allowed origins
+        if not settings.allowed_origins:
+            warnings.append("No allowed_origins specified - this may cause CORS issues")
+
+        for origin in settings.allowed_origins:
+            if not origin.startswith(("http://", "https://", "ws://", "wss://")):
+                warnings.append(f"Suspicious origin format: {origin}")
+
+        # Security warnings
+        if "localhost" in str(settings.allowed_origins) and settings.host == "0.0.0.0":
+            warnings.append("Allowing localhost origins while binding to all interfaces (0.0.0.0) may be insecure")
+
+        if not settings.require_api_key:
+            warnings.append("API key requirement is disabled - this may be insecure in production")
+
+        # Performance warnings
+        if settings.max_concurrent_games > 100:
+            warnings.append(f"High max_concurrent_games setting ({settings.max_concurrent_games}) may impact performance")
+
+        if settings.rate_limit_requests_per_minute > 1000:
+            warnings.append(f"High rate limit ({settings.rate_limit_requests_per_minute}/min) may allow abuse")
+
+        # Print validation results
+        if errors:
+            print("❌ Configuration validation FAILED:")
+            for error in errors:
+                print(f"   • {error}")
+            return False
+
+        if warnings:
+            print("⚠️  Configuration warnings:")
+            for warning in warnings:
+                print(f"   • {warning}")
 
         # Test Redis connection
         try:
@@ -116,13 +204,16 @@ def validate_settings() -> bool:
             redis_client.ping()
             print(f"✅ Redis connection successful: {settings.redis_url}")
         except ImportError:
+            warnings.append("Redis package not installed - falling back to in-memory storage")
             print("⚠️  Redis package not installed - falling back to in-memory storage")
         except Exception as e:
+            warnings.append(f"Redis connection failed: {e}")
             print(f"⚠️  Redis connection failed: {e}")
             print("⚠️  Falling back to in-memory storage (not recommended for production)")
 
+        print("✅ Configuration validation passed")
         return True
 
     except Exception as e:
-        print(f"Configuration validation failed: {e}")
+        print(f"❌ Configuration validation error: {e}")
         return False

@@ -37,6 +37,7 @@ try:
     from .connection_state_manager import connection_state_manager
     from .security.token_manager import secure_token_manager
     from .utils.safe_access import get_agent_game_id, get_agent_config, safe_get_nested
+    from .utils.constants import *
 except ImportError:
     from config import settings, get_cors_origins, get_freeciv_proxy_url, validate_settings
     from connection_manager import connection_manager, ConnectionInfo
@@ -44,6 +45,7 @@ except ImportError:
     from connection_state_manager import connection_state_manager
     from security.token_manager import secure_token_manager
     from utils.safe_access import get_agent_game_id, get_agent_config, safe_get_nested
+    from utils.constants import *
 
 # Configure logging
 logging.basicConfig(
@@ -269,7 +271,7 @@ class LLMGateway:
         # Check if connection is in cooldown period
         if game_id in self.failed_connections:
             last_failure = self.failed_connections[game_id]
-            cooldown_period = 60  # 60 seconds cooldown
+            cooldown_period = COOLDOWN_PERIOD
             if time.time() - last_failure < cooldown_period:
                 logger.debug(f"Connection for game {game_id} in cooldown period")
                 return False
@@ -369,7 +371,7 @@ class LLMGateway:
         except Exception as e:
             logger.error(f"Error handling proxy message: {e}")
 
-    async def _send_request_and_wait(self, game_id: str, message: Dict[str, Any], timeout: float = 30.0) -> Dict[str, Any]:
+    async def _send_request_and_wait(self, game_id: str, message: Dict[str, Any], timeout: float = DEFAULT_REQUEST_TIMEOUT) -> Dict[str, Any]:
         """Send request to proxy and wait for response"""
         # FIXED: Use RequestManager to prevent memory leaks (addresses lines 336-367 issue)
         try:
@@ -545,7 +547,7 @@ class LLMGateway:
                 issues.append("Some FreeCiv proxy connections missing")
 
             # Check for high error rates
-            if request_stats.get("timed_out_requests", 0) > 10:
+            if request_stats.get("timed_out_requests", 0) > MAX_TIMED_OUT_REQUESTS_WARNING:
                 status = "degraded"
                 issues.append("High request timeout rate")
 
@@ -566,7 +568,7 @@ class LLMGateway:
             logger.error(f"Error getting health status: {e}")
             return {
                 "status": "unhealthy",
-                "error": str(e)
+                "error": "Internal server error"
             }
 
     async def _route_to_freeciv(self, message: Dict[str, Any]) -> Dict[str, Any]:

@@ -18,11 +18,13 @@ try:
     from .main import gateway
     from .utils.origin_validator import validate_websocket_origin, get_websocket_origin_info, create_origin_rejection_response
     from .utils.rate_limiter import comprehensive_rate_limiter
+    from .utils.constants import MAX_MESSAGE_SIZE_BYTES, ERROR_CODE_VALIDATION
 except ImportError:
     from connection_manager import connection_manager
     from config import settings
     from utils.origin_validator import validate_websocket_origin, get_websocket_origin_info, create_origin_rejection_response
     from utils.rate_limiter import comprehensive_rate_limiter
+    from utils.constants import MAX_MESSAGE_SIZE_BYTES, ERROR_CODE_VALIDATION
     # gateway will be available when main.py imports this
 
 logger = logging.getLogger("llm-gateway")
@@ -67,10 +69,22 @@ class AgentWebSocketHandler:
                 try:
                     data = await self.websocket.receive_text()
 
+                    # WebSocket-level message size enforcement
+                    message_size = len(data.encode('utf-8'))
+                    if message_size > MAX_MESSAGE_SIZE_BYTES:
+                        await self._send_error(
+                            f"Message size {message_size} bytes exceeds limit of {MAX_MESSAGE_SIZE_BYTES} bytes",
+                            error_code=ERROR_CODE_VALIDATION
+                        )
+                        logger.warning(
+                            f"Agent {self.agent_id} sent oversized message: {message_size} bytes"
+                        )
+                        continue
+
                     # Rate limiting and message size validation
                     is_allowed, reason = await comprehensive_rate_limiter.check_rate_limits(
                         self.agent_id,
-                        message_size=len(data.encode('utf-8')),
+                        message_size=message_size,
                         message_content=data
                     )
 
@@ -302,7 +316,7 @@ class AgentWebSocketHandler:
         }
         await self.websocket.send_text(json.dumps(pong))
 
-    async def _send_error(self, error_message: str):
+    async def _send_error(self, error_message: str, error_code: str = "E500"):
         """Send error message"""
         error = {
             "type": "error",
@@ -311,7 +325,7 @@ class AgentWebSocketHandler:
             "data": {
                 "type": "error",
                 "success": False,
-                "error_code": "E500",
+                "error_code": error_code,
                 "error_message": error_message
             }
         }
@@ -401,6 +415,18 @@ class SpectatorWebSocketHandler:
                 try:
                     # Spectators mainly receive updates, minimal message handling
                     data = await self.websocket.receive_text()
+
+                    # WebSocket-level message size enforcement
+                    message_size = len(data.encode('utf-8'))
+                    if message_size > MAX_MESSAGE_SIZE_BYTES:
+                        await self._send_error(
+                            f"Message size {message_size} bytes exceeds limit of {MAX_MESSAGE_SIZE_BYTES} bytes"
+                        )
+                        logger.warning(
+                            f"Spectator on game {self.game_id} sent oversized message: {message_size} bytes"
+                        )
+                        continue
+
                     message = json.loads(data)
 
                     # Handle basic messages like ping
