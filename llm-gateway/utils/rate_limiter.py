@@ -14,6 +14,11 @@ from typing import Dict, Any, Optional, List, Tuple
 from dataclasses import dataclass
 from enum import Enum
 
+try:
+    from .constants import MAX_CONNECTIONS_PER_AGENT, MAX_CONNECTION_ATTEMPTS_PER_MINUTE, CONNECTION_ATTEMPT_BLOCK_DURATION
+except ImportError:
+    from constants import MAX_CONNECTIONS_PER_AGENT, MAX_CONNECTION_ATTEMPTS_PER_MINUTE, CONNECTION_ATTEMPT_BLOCK_DURATION
+
 logger = logging.getLogger("llm-gateway")
 
 
@@ -345,8 +350,27 @@ class ComprehensiveRateLimiter:
             bool: True if connection is allowed
         """
         async with self._lock:
+            # Check if identifier is blocked
+            if identifier in self.blocked_identifiers:
+                if time.time() < self.blocked_identifiers[identifier]:
+                    return False
+                else:
+                    # Block expired
+                    del self.blocked_identifiers[identifier]
+                    self._stats["active_blocks"] = max(0, self._stats["active_blocks"] - 1)
+
+            # Check connection attempt rate limiting
+            now = time.time()
+            recent_attempts = [ts for ts in self.connection_timestamps[identifier] if now - ts < 60]
+            if len(recent_attempts) >= MAX_CONNECTION_ATTEMPTS_PER_MINUTE:
+                # Too many connection attempts, block for specified duration
+                self.blocked_identifiers[identifier] = now + CONNECTION_ATTEMPT_BLOCK_DURATION
+                self._stats["active_blocks"] += 1
+                logger.warning(f"Blocking {identifier} for excessive connection attempts: {len(recent_attempts)} in 60s")
+                return False
+
             # Check connection per agent limit
-            max_connections = 5  # Default limit
+            max_connections = MAX_CONNECTIONS_PER_AGENT
             if RateLimitType.CONNECTIONS_PER_AGENT in self.rate_limiters:
                 max_connections = self.rate_limiters[RateLimitType.CONNECTIONS_PER_AGENT].limit
 
@@ -355,7 +379,7 @@ class ComprehensiveRateLimiter:
 
             # Track connection
             self.active_connections[identifier] += 1
-            self.connection_timestamps[identifier].append(time.time())
+            self.connection_timestamps[identifier].append(now)
 
             return True
 

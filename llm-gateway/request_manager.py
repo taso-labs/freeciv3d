@@ -14,6 +14,11 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Dict, Any, Optional
 
+try:
+    from .utils.constants import DEFAULT_REQUEST_TIMEOUT, CLEANUP_INTERVAL
+except ImportError:
+    from utils.constants import DEFAULT_REQUEST_TIMEOUT, CLEANUP_INTERVAL
+
 logger = logging.getLogger("llm-gateway")
 
 
@@ -34,7 +39,7 @@ class RequestManager:
     Prevents memory leaks by cleaning up expired futures
     """
 
-    def __init__(self, default_timeout: float = 30.0, cleanup_interval: float = 5.0):
+    def __init__(self, default_timeout: float = DEFAULT_REQUEST_TIMEOUT, cleanup_interval: float = CLEANUP_INTERVAL):
         self.pending_requests: Dict[str, PendingRequest] = {}
         self.default_timeout = default_timeout
         self.cleanup_interval = cleanup_interval

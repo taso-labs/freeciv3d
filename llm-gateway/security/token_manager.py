@@ -221,8 +221,7 @@ class SecureTokenManager:
                     self._stats["validation_failures"] += 1
                     return False
 
-                provided_hash = self._create_token_hash(token)
-                is_valid = hmac.compare_digest(stored_hash, provided_hash)
+                is_valid = self._verify_token_hash(token, stored_hash)
 
                 if is_valid:
                     token_info.last_used = time.time()
@@ -398,8 +397,64 @@ class SecureTokenManager:
     # Internal methods
 
     def _create_token_hash(self, token: str) -> str:
-        """Create a secure hash of the token"""
-        return hashlib.sha256(token.encode('utf-8')).hexdigest()
+        """Create a secure hash of the token using PBKDF2-HMAC-SHA256 with a per-token random salt"""
+        salt = os.urandom(16)
+        kdf = PBKDF2HMAC(
+            algorithm=hashes.SHA256(),
+            length=32,
+            salt=salt,
+            iterations=100_000,
+        )
+        key = kdf.derive(token.encode('utf-8'))
+        # Store as base64(salt) + '$' + base64(digest)
+        return base64.b64encode(salt).decode('utf-8') + "$" + base64.b64encode(key).decode('utf-8')
+
+    def _verify_token_hash(self, token: str, stored_hash: str) -> bool:
+        """
+        Verify a token against its stored PBKDF2 hash
+
+        Args:
+            token: Plain text token to verify
+            stored_hash: Stored hash in format base64(salt)$base64(key)
+
+        Returns:
+            bool: True if token matches the stored hash
+        """
+        try:
+            # Handle both old SHA256 hashes and new PBKDF2 hashes for backward compatibility
+            if '$' not in stored_hash:
+                # Legacy SHA256 hash - create new PBKDF2 hash for comparison
+                legacy_hash = hashlib.sha256(token.encode('utf-8')).hexdigest()
+                return hmac.compare_digest(stored_hash, legacy_hash)
+
+            # New PBKDF2 format
+            parts = stored_hash.split('$')
+            if len(parts) != 2:
+                return False
+
+            try:
+                salt = base64.b64decode(parts[0])
+                expected_key = base64.b64decode(parts[1])
+            except Exception:
+                return False
+
+            # Derive key from provided token using same salt
+            kdf = PBKDF2HMAC(
+                algorithm=hashes.SHA256(),
+                length=32,
+                salt=salt,
+                iterations=100_000,
+            )
+
+            try:
+                derived_key = kdf.derive(token.encode('utf-8'))
+                return hmac.compare_digest(expected_key, derived_key)
+            except Exception:
+                return False
+
+        except Exception as e:
+            logger.debug(f"Error verifying token hash: {e}")
+            return False
 
     async def _check_validation_rate_limit(self, agent_id: str) -> bool:
         """Check if agent is within validation rate limits"""
