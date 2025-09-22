@@ -1,0 +1,32 @@
+# Development docker-compose override
+# Use: docker-compose -f docker-compose.yml -f docker-compose.dev.yml up
+
+services:
+  fciv-net:
+    build:
+      args:
+        # For development: skip FreeCiv build if you have pre-compiled binaries
+        - SKIP_FREECIV_BUILD=${SKIP_FREECIV_BUILD:-false}
+        # Use more build jobs on powerful development machines
+        - BUILD_JOBS=${BUILD_JOBS:-4}
+    volumes:
+      # Mount source directories for development
+      - ./freeciv-web:/docker/freeciv-web-shared
+      - ./freeciv-proxy:/docker/freeciv-proxy
+      - ./scripts:/docker/scripts
+      - mysql_data:/var/lib/mysql
+      # Optional: mount pre-built FreeCiv to skip compilation
+      # - ./freeciv/build:/docker/freeciv/build
+    environment:
+      # Development environment variables
+      - DEBUG=true
+      - CACHE_TTL_SECONDS=1
+      - MAX_LLM_AGENTS=20
+      - REQUESTS_PER_SECOND=50
+    # Add health check for faster development feedback
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/civclientlauncher", "||", "nc", "-z", "localhost", "8002"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 60s

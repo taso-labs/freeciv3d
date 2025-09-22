@@ -2,14 +2,30 @@ services:
 
   fciv-net:
     image: freeciv/fciv-net
-    build: .
+    build:
+      context: .
+      target: runtime
+      args:
+        - SKIP_FREECIV_BUILD=${SKIP_FREECIV_BUILD:-false}
+        - BUILD_JOBS=${BUILD_JOBS:-2}
     container_name: fciv-net
     command: ["sleep", "infinity"]
     environment:
+      # Database Configuration
       - DB_HOST=127.0.0.1
       - DB_USER=docker
       - DB_PASSWORD=changeme
       - DB_NAME=freeciv_web
+      # LLM Gateway Configuration
+      - CACHE_HMAC_SECRET=${CACHE_HMAC_SECRET:-}
+      - API_KEY_SECRET=${API_KEY_SECRET:-}
+      - LLM_API_TOKENS=${LLM_API_TOKENS:-test-token-fc3d-001,test-token-fc3d-002}
+      - SESSION_TIMEOUT_SECONDS=${SESSION_TIMEOUT_SECONDS:-3600}
+      - MAX_LLM_AGENTS=${MAX_LLM_AGENTS:-10}
+      - MAX_SESSIONS_PER_PLAYER=${MAX_SESSIONS_PER_PLAYER:-3}
+      - CACHE_TTL_SECONDS=${CACHE_TTL_SECONDS:-5}
+      - REQUESTS_PER_SECOND=${REQUESTS_PER_SECOND:-10}
+      - BURST_CAPACITY=${BURST_CAPACITY:-100}
     volumes:
       - ./freeciv-web:/docker/freeciv-web-shared
       - mysql_data:/var/lib/mysql
@@ -19,6 +35,7 @@ services:
       - "6000-6009:6000-6009"
       - "7100-7109:7000-7009"
       - "8888:8080"
+      - "8002:8002"
     user: docker
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/civclientlauncher", "-X", "POST", "-d", "action=new"]

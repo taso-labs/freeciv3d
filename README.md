@@ -38,9 +38,10 @@ Freeciv-Web consists of these components:
   Git repository, and patched to work with a WebSocket/JSON protocol. Implemented in C.
 
 * [Freeciv-proxy](freeciv-proxy) - a WebSocket proxy which allows WebSocket clients in Freeciv-web
-  to send socket requests to Freeciv servers. WebSocket requests are sent from Javascript 
-  in Freeciv-web to nginx, which then proxies the WebSocket messages to freeciv-proxy, 
-  which finally sends Freeciv socket requests to the Freeciv servers. Implemented in Python.
+  to send socket requests to Freeciv servers. WebSocket requests are sent from Javascript
+  in Freeciv-web to nginx, which then proxies the WebSocket messages to freeciv-proxy,
+  which finally sends Freeciv socket requests to the Freeciv servers. Also includes an
+  LLM gateway for AI agent integration via WebSocket API. Implemented in Python.
 
 * [Publite2](publite2) - a process launcher for Freeciv C servers, which manages
   multiple Freeciv server processes and checks capacity through the Metaserver. 
@@ -87,11 +88,75 @@ Freeciv-web can easily be built and run from Docker using `docker-compose`.
 
 http://localhost:8080/
 
-Enjoy.
+#### LLM Gateway for AI Integration
 
-Start and stop Freeciv-web with the following commands:  
-  start-freeciv-web.sh  
-  stop-freeciv-web.sh  
+FreeCiv3D includes an LLM gateway that enables AI agents (like those in [game_arena](https://github.com/your-org/game_arena)) to play FreeCiv through a WebSocket API.
+
+**Quick Start:**
+```bash
+# Start with LLM gateway enabled
+docker-compose up -d
+
+# The LLM WebSocket gateway will be available at:
+# ws://localhost:8002/llmsocket/8002
+```
+
+**Environment Variables for LLM Gateway:**
+```bash
+# Required for production
+CACHE_HMAC_SECRET=your-64-character-secure-string
+API_KEY_SECRET=your-32-character-secure-string
+LLM_API_TOKENS=comma,separated,api,tokens
+
+# Optional configuration
+MAX_LLM_AGENTS=10
+SESSION_TIMEOUT_SECONDS=3600
+```
+
+**Local Development Setup:**
+```bash
+# 1. Create logs directory
+mkdir -p logs
+
+# 2. Start freeciv-proxy locally (for development/testing)
+cd freeciv-proxy
+CACHE_HMAC_SECRET="abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890" \
+API_KEY_SECRET="test1234567890123456789012345" \
+LLM_API_TOKENS="test-token-fc3d-001,test-token-fc3d-002" \
+python3 freeciv-proxy.py
+
+# 3. Test LLM gateway connection
+python3 tests/test_llm_websocket.py localhost 8002
+
+# 4. Test Docker build (optional)
+./tests/test_docker_build.sh
+```
+
+For detailed Docker optimization information, see [DOCKER_OPTIMIZATION.md](DOCKER_OPTIMIZATION.md).
+
+**game_arena Integration:**
+To connect game_arena to FreeCiv3D:
+
+```python
+from game_arena.harness.freeciv_proxy_client import FreeCivProxyClient
+
+client = FreeCivProxyClient(
+    host="localhost",
+    port=8002,
+    api_token="test-token-fc3d-001",
+    agent_id="my_ai_agent",
+    game_id="test_game"
+)
+
+# Connect and play
+await client.connect()
+state = await client.get_state()
+# ... AI logic here ...
+```
+
+Start and stop Freeciv-web with the following commands:
+  start-freeciv-web.sh
+  stop-freeciv-web.sh
   status-freeciv-web.sh
 
 ### Running Freeciv-web on Windows Subsystem for Linux (WSL)

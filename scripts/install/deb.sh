@@ -45,6 +45,9 @@ dependencies="\
   python3-pillow \
   python3-dev \
   python3-wheel \
+  python3-bcrypt \
+  python3-redis \
+  python3-yaml \
   sed \
   tar \
   unzip \
