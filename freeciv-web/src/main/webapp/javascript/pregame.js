@@ -1032,7 +1032,7 @@ function show_intro_dialog(title, message) {
 
   blur_input_on_touchdevice();
 
-  $(".ui-widget-overlay").css("background-image", window.location.href.includes('localhost')  ? "url('/images/backgrounds/6.jpg')" : "url('/data/game_of_the_day.png')");
+  $(".ui-widget-overlay").css("background-image", "url('/data/game_of_the_day.png'), url('/images/backgrounds/6.jpg')");
   $(".ui-widget-overlay").css("background-position", "center");
   $(".ui-widget-overlay").css("background-repeat", "no-repeat");
   $(".ui-widget-overlay").css("background-size", "cover");
