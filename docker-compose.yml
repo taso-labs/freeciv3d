@@ -9,11 +9,21 @@ services:
       DB_USER: docker
       DB_PASSWORD: changeme
       DB_NAME: freeciv_web
+      CACHE_HMAC_SECRET: "d664ed20fcce9ef8d0177f01a5ae408b96272a7202c642e0e7e127622cd3acce67fff861b7b6e5b1b3e2d6696886e6fe8d8b98c5e6db83f7236c31560bf9aac4"
+      # Redis configuration for DistributedRateLimiter (used by freeciv-proxy)
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      # Optionally set a password via an environment variable on the host
+      REDIS_PASSWORD: ""
     volumes:
       - ./freeciv-web:/docker/freeciv-web-shared
     depends_on:
       flyway:
         condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      db:
+        condition: service_healthy
     ports:
       - "8080:80"
       - "4002:4002"
@@ -76,5 +86,27 @@ services:
       ]
     restart: "no"
 
+  redis:
+    image: redis:8
+    container_name: fciv-redis
+    # For local development we run Redis without a password by default. To enable
+    # authentication set the REDIS_PASSWORD environment variable before running
+    # docker-compose (and update `REDIS_PASSWORD` in other services accordingly).
+    volumes:
+      - redis-data:/data
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
 volumes:
   mysql_data:
+  redis-data:
