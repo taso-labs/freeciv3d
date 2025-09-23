@@ -19,9 +19,15 @@ fi
 echo "Starting up Freeciv-web: nginx, tomcat, publite2, freeciv-proxy."
 
 mkdir -p ${FREECIV_WEB_DIR}/logs
-if [ ! -f /etc/nginx/sites-enabled/freeciv-web ]; then
-    # Not enabled. Try to enable Freeciv-web.
-    sudo ln -f /etc/nginx/sites-available/freeciv-web /etc/nginx/sites-enabled/freeciv-web
+# If nginx is present locally, ensure the conf is available (legacy single-host installs)
+if command -v nginx >/dev/null 2>&1; then
+    # Modern layout places the effective site in conf.d/freeciv-web.conf
+    if [ ! -f /etc/nginx/conf.d/freeciv-web.conf ] && [ -f /etc/nginx/sites-available/freeciv-web ]; then
+        # Create a compatibility symlink for older installations that expect sites-enabled
+        sudo ln -f /etc/nginx/sites-available/freeciv-web /etc/nginx/conf.d/freeciv-web.conf
+    fi
+else
+    echo "nginx not present in this container; skipping local site enable. (nginx will run in a dedicated service)"
 fi
 
 # Start Freeciv-web's dependency services according to the users

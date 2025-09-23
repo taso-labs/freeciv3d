@@ -24,8 +24,14 @@ url="http://${TOMCATMANAGER_USER}:${TOMCATMANAGER_PASSWORD}@localhost:8080/manag
 EOF
 fi
 
-if [ ! "${NGINX_DISABLE_ON_SHUTDOW}" = "N" ]; then
-    sudo rm -f /etc/nginx/sites-enabled/freeciv-web
+if command -v nginx >/dev/null 2>&1; then
+    if [ ! "${NGINX_DISABLE_ON_SHUTDOW}" = "N" ]; then
+        # Remove either the modern conf.d file or the legacy sites-enabled symlink
+        sudo rm -f /etc/nginx/conf.d/freeciv-web.conf
+        sudo rm -f /etc/nginx/sites-enabled/freeciv-web
+    fi
+else
+    echo "nginx not present in this container; skipping site removal."
 fi
 
 # Shutdown Freeciv-web's dependency services according to the users

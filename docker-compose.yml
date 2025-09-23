@@ -3,7 +3,7 @@ services:
     image: freeciv/fciv-net
     build: .
     container_name: fciv-net
-    command: ["sleep", "infinity"]
+    command: [ "sleep", "infinity" ]
     environment:
       DB_HOST: db
       DB_USER: docker
@@ -24,16 +24,17 @@ services:
         condition: service_healthy
       db:
         condition: service_healthy
+      nginx:
+        condition: service_started
     ports:
-      - "8080:80"
+      # Expose only the services that should be reachable directly from host
       - "4002:4002"
       - "6000-6009:6000-6009"
       - "7100-7109:7000-7009"
-      - "8888:8080"
       - "8002:8002"
     user: docker
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/about"]
+      test: [ "CMD", "curl", "-f", "http://localhost:8080/about" ]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -51,7 +52,7 @@ services:
     volumes:
       - mysql_data:/var/lib/mysql
     healthcheck:
-      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      test: [ "CMD", "healthcheck.sh", "--connect", "--innodb_initialized" ]
       start_period: 1m
       start_interval: 10s
       interval: 1m
@@ -77,13 +78,7 @@ services:
     # explicitly set the migrations location to avoid the future deprecation
     # warning about scanning 'sql'. Increase retries and interval for slow DB
     # startups.
-    command:
-      [
-        "-connectRetries=60",
-        "-connectRetriesInterval=2",
-        "-locations=filesystem:/flyway/sql",
-        "migrate",
-      ]
+    command: [ "-connectRetries=60", "-connectRetriesInterval=2", "-locations=filesystem:/flyway/sql", "migrate" ]
     restart: "no"
 
   redis:
@@ -98,7 +93,7 @@ services:
       - "6379:6379"
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: [ "CMD", "redis-cli", "ping" ]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -106,6 +101,21 @@ services:
       resources:
         limits:
           memory: 256M
+
+  nginx:
+    image: nginx:1.29
+    container_name: fciv-nginx
+    ports:
+      # Preserve historical host binding on :8080 used by scripts/docs
+      - "8080:80"
+      - "443:443"
+    volumes:
+      # Server config is provided directly in conf.d to avoid mount-order issues
+      - ./config/nginx/conf.d/freeciv-web.conf:/etc/nginx/conf.d/freeciv-web.conf:ro
+      - ./config/nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./config/nginx/snippets:/etc/nginx/snippets:ro
+      - ./freeciv-web:/docker/freeciv-web-shared:ro
+    restart: unless-stopped
 
 volumes:
   mysql_data:

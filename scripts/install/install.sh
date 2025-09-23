@@ -336,7 +336,7 @@ You may want to personalize some things before starting it:
   templates for the messages in pbem/email_template* (at least the URL).
 - Users for tomcat-admin web interface.
 - Point /etc/nginx/snippets/freeciv-web-ssl.conf to your certificate and key,
-  or remove SSL support from /etc/nginx/sites-available/freeciv-web.
+  or remove SSL support from /etc/nginx/conf.d/freeciv-web.conf.
 
 Then run scripts/start-freeciv-web.sh and enjoy!
 EOF
