@@ -11,8 +11,6 @@ else
   ACCESS_MANAGER=sudo
 fi
 
-${ACCESS_MANAGER} systemctl reload nginx.service || ${ACCESS_MANAGER} systemctl start nginx.service
-
 for unit in tomcat10; do
   systemctl is-active --quiet ${unit}.service || ${ACCESS_MANAGER} systemctl start ${unit}.service
 done

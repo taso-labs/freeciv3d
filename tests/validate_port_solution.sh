@@ -93,12 +93,6 @@ curl -sf "http://localhost:8080/freeciv-web/" | grep -iq "freeciv"
 test_result $? "Web interface loads successfully"
 echo ""
 
-# Test 9: nginx is proxying correctly
-echo "9. Checking nginx proxy configuration..."
-docker exec fciv-net bash -c "curl -sf http://localhost/freeciv-web/" > /dev/null
-test_result $? "nginx proxies to Tomcat correctly"
-echo ""
-
 # Summary
 echo "========================================="
 echo "Results: $TESTS_PASSED/$TESTS_TOTAL tests passed"

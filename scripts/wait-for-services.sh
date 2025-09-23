@@ -30,9 +30,6 @@ wait_for_service() {
     return 1
 }
 
-# Wait for nginx
-wait_for_service "nginx" "curl -f http://localhost >/dev/null" 30 2
-
 # Wait for Tomcat (may take longer to start)
 wait_for_service "Tomcat" "curl -f http://localhost:8080/manager/text/list >/dev/null 2>&1 || curl -f http://localhost:8080 >/dev/null" 90 3
 

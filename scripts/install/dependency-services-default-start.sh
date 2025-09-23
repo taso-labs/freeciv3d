@@ -11,11 +11,7 @@ export JAVA_OPTS="-Djava.security.egd=file:/dev/urandom"
 export CATALINA_HOME=/usr/share/tomcat10
 export CATALINA_BASE=/var/lib/tomcat10
 
-# 1. nginx
-echo "Starting nginx" && \
-sudo service nginx start || sudo nginx
-
-# 2. Tomcat
+# Tomcat
 echo "Starting up Tomcat" && \
 if service --status-all 2>&1 | grep -Fq 'tomcat10' && [ -x /usr/sbin/service ]; then
    sudo service tomcat10 start || echo "unable to start tomcat10 service, trying direct startup..."

@@ -59,18 +59,29 @@ RUN DEBIAN_FRONTEND=noninteractive sudo apt-get update --yes --quiet && \
 RUN pip install --break-system-packages python-dotenv && \
     cd /docker/llm-gateway && pip install --break-system-packages -r requirements.txt
 
-# Copy nginx configuration from working commit
-COPY config/nginx/sites-available/freeciv-web /etc/nginx/sites-available/freeciv-web
-RUN sudo rm -f /etc/nginx/sites-enabled/default && \
-    sudo ln -s /etc/nginx/sites-available/freeciv-web /etc/nginx/sites-enabled/freeciv-web
-
 ## Give server access to savegames / scenarios directory.
 ## TODO: Figure out more targeted solution.
 RUN sudo adduser docker tomcat
 
 COPY docker-entrypoint.sh /docker/docker-entrypoint.sh
 
-EXPOSE 80 8080 8002 8003 4002 6000 6001 6002 6003 6004 6005 6006 6007 6008 6009 7000 7001 7002 7003 7004 7005 7006 7007 7008 7009
+# civsockets ports
+EXPOSE 7000-7009
+
+# Freeciv-web port
+EXPOSE 8080
+
+# pubstatus port
+EXPOSE 4002
+
+# PBEM port
+EXPOSE 4003
+
+# State Extraction Service Port
+EXPOSE 8002
+
+# LLM Gateway port
+EXPOSE 8003
 
 ENTRYPOINT ["/docker/docker-entrypoint.sh"]
 

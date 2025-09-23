@@ -19,7 +19,7 @@ sudo sed -e "s|#DB_HOST#|${DB_HOST}|g" \
 sudo chown tomcat:tomcat /var/lib/tomcat10/conf/Catalina/localhost/freeciv-web.xml
 echo "✓ Tomcat database configuration ready"
 
-# Start all Freeciv-web services (this starts nginx, tomcat, publite2)
+# Start all Freeciv-web services (this starts tomcat and publite2)
 echo "Starting Freeciv-web services..."
 /docker/scripts/start-freeciv-web.sh
 
