@@ -68,10 +68,8 @@ services:
     volumes:
       # Mount the SQL migration files that live in the project
       - ./freeciv-web/src/main/resources/db/migration:/flyway/sql:ro
-      # Optional: allow a flyway.conf to be provided from the repo
-      - ./freeciv-web/flyway.properties:/flyway/conf/flyway.conf:ro
     environment:
-      FLYWAY_URL: jdbc:mariadb://db:3306/freeciv_web
+      FLYWAY_URL: jdbc:mariadb://db:3306/freeciv_web?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC
       FLYWAY_USER: docker
       FLYWAY_PASSWORD: changeme
     # Allow Flyway to retry connecting while the DB finishes starting. We
