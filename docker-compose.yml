@@ -17,6 +17,7 @@ services:
       REDIS_PASSWORD: ""
     volumes:
       - ./freeciv-web:/docker/freeciv-web-shared
+      - ./logs:/docker/logs
     depends_on:
       flyway:
         condition: service_completed_successfully
