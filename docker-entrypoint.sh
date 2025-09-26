@@ -2,7 +2,7 @@
 
 echo "=== Freeciv3D Docker Container Starting ==="
 
-# Start all Freeciv-web services first (this starts MySQL, nginx, tomcat)
+# Start all Freeciv-web services first (this starts MySQL and tomcat)
 echo "Starting Freeciv-web services..."
 /docker/scripts/start-freeciv-web.sh
 

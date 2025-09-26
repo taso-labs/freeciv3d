@@ -13,20 +13,7 @@ export CATALINA_HOME=/var/lib/tomcat10
 # 0. mysql
 pidof mysqld > /dev/null || sudo service mariadb start || sudo service mysql start
 
-# 1. nginx
-echo "Starting nginx first."
-
-if [ "$(pidof nginx)" ]
-then
-  echo "nginx already running!"
-  sudo nginx -s reload
-else
-  sudo service nginx start && \
-  echo "nginx started!" && \
-  sleep 1
-fi
-
-# 2. Tomcat
+# 1. Tomcat
 echo "Starting up Tomcat" && \
 if service --status-all | grep -Fq 'tomcat10'; then
    sudo /usr/sbin/service tomcat10 start || echo "unable to start tomcat10 service"

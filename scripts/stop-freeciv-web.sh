@@ -12,7 +12,7 @@ if [ ! -f ${SCRIPT_DIR}/configuration.sh ]; then
 fi
 . ./configuration.sh
 
-echo "Shutting down Freeciv-web: nginx, tomcat, publite2, freeciv-proxy."
+echo "Shutting down Freeciv-web: tomcat, publite2, freeciv-proxy."
 
 if [ "${TOMCATMANAGER}" = "Y" ]; then
     if [ -z "${TOMCATMANAGER_PASSWORD}" ]; then
@@ -22,16 +22,6 @@ if [ "${TOMCATMANAGER}" = "Y" ]; then
     curl -LsSg -K - << EOF
 url="http://${TOMCATMANAGER_USER}:${TOMCATMANAGER_PASSWORD}@localhost:8080/manager/text/stop?path=/freeciv-web"
 EOF
-fi
-
-if command -v nginx >/dev/null 2>&1; then
-    if [ ! "${NGINX_DISABLE_ON_SHUTDOW}" = "N" ]; then
-        # Remove either the modern conf.d file or the legacy sites-enabled symlink
-        sudo rm -f /etc/nginx/conf.d/freeciv-web.conf
-        sudo rm -f /etc/nginx/sites-enabled/freeciv-web
-    fi
-else
-    echo "nginx not present in this container; skipping site removal."
 fi
 
 # Shutdown Freeciv-web's dependency services according to the users

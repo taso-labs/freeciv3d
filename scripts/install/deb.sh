@@ -32,7 +32,6 @@ dependencies="\
   libtool \
   maven \
   default-mysql-server \
-  nginx \
   openjdk-17-jdk-headless \
   patch \
   pkg-config \

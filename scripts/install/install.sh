@@ -305,18 +305,6 @@ cd "${basedir}"/freeciv-web && \
   ./build.sh -B || \
   handle_error 7 "Failed to build freeciv-web server"
 
-echo "==== Setting up nginx ===="
-stop_svc nginx
-sudo rm -f /etc/nginx/sites-enabled/default
-sudo cp -R "${basedir}"/config/nginx /etc/
-if [ "${FCW_INSTALL_MODE}" = TEST ] && [ ! -f /etc/nginx/ssl/freeciv-web.crt ]; then
-  sudo mkdir -p /etc/nginx/ssl/private
-  sudo chmod 700 /etc/nginx/ssl/private
-  openssl req -x509 -newkey rsa:2048 -keyout freeciv-web.key -out freeciv-web.crt -days 3650 -nodes -subj '/CN=localhost' -batch
-  sudo mv freeciv-web.crt /etc/nginx/ssl/
-  sudo mv freeciv-web.key /etc/nginx/ssl/private/
-fi
-
 echo
 echo FCIV.NET installed!
 if [ ${#ext_installed[*]} -ne 0 ]; then
@@ -335,8 +323,6 @@ You may want to personalize some things before starting it:
 - Set the mail account data for pbem games in pbem/settings.ini, and the
   templates for the messages in pbem/email_template* (at least the URL).
 - Users for tomcat-admin web interface.
-- Point /etc/nginx/snippets/freeciv-web-ssl.conf to your certificate and key,
-  or remove SSL support from /etc/nginx/conf.d/freeciv-web.conf.
 
 Then run scripts/start-freeciv-web.sh and enjoy!
 EOF

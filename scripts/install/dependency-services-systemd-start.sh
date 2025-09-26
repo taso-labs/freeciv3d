@@ -11,8 +11,6 @@ else
   ACCESS_MANAGER=sudo
 fi
 
-${ACCESS_MANAGER} systemctl reload nginx.service || ${ACCESS_MANAGER} systemctl start nginx.service
-
 systemctl is-active --quiet mariadb.service || systemctl is-active --quiet mysql.service ||
     ${ACCESS_MANAGER} systemctl start mariadb.service ||
     ${ACCESS_MANAGER} systemctl start mysql.service

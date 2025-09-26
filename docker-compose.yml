@@ -27,7 +27,9 @@ services:
         condition: service_healthy
     user: docker
     healthcheck:
-      test: [ "CMD", "curl", "-f", "http://localhost:8080/freeciv-web/about" ]
+      # Check both the webapp and an example freeciv-proxy instance so the
+      # container is considered healthy only after proxy endpoints are ready.
+      test: [ "CMD", "bash", "-lc", "curl -f http://localhost:8080/freeciv-web/about && curl -f http://localhost:7001/status" ]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -110,7 +112,7 @@ services:
       - ./freeciv-web:/docker/freeciv-web-shared:ro
     depends_on:
       fciv-net:
-        condition: service_started
+        condition: service_healthy
     restart: unless-stopped
 
 volumes:
