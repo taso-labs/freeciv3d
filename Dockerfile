@@ -63,8 +63,23 @@ RUN sudo adduser docker tomcat
 
 COPY docker-entrypoint.sh /docker/docker-entrypoint.sh
 
-EXPOSE 80 8080 4002 6000 6001 6002 7000 7001 7002
+# civsockets ports
+EXPOSE 7000-7999
 
+# Freeciv-web port
+EXPOSE 8080
+
+# pubstatus port
+EXPOSE 4002
+
+# PBEM port
+EXPOSE 4003
+
+# State Extraction Service Port
+EXPOSE 8002
+
+# Game server ports
+EXPOSE 7000-7009
 
 ENTRYPOINT ["/docker/docker-entrypoint.sh"]
 

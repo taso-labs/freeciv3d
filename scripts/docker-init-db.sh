@@ -87,16 +87,16 @@ else
 	fi
 fi
 
-# Register game servers
-echo "Registering game servers..."
-mysql -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" -p"$DB_PASSWORD" "$DB_NAME" -e "
-INSERT INTO servers (host, port, version, state, type, available, stamp) VALUES
-('localhost', 6000, 'freeciv-web-devel', 'Pregame', 'singleplayer', 1, NOW()),
-('localhost', 6001, 'freeciv-web-devel', 'Pregame', 'multiplayer', 1, NOW()),
-('localhost', 6002, 'freeciv-web-devel', 'Pregame', 'singleplayer', 1, NOW()),
-('localhost', 6003, 'freeciv-web-devel', 'Pregame', 'singleplayer', 1, NOW()),
-('localhost', 6004, 'freeciv-web-devel', 'Pregame', 'multiplayer', 1, NOW())
-ON DUPLICATE KEY UPDATE available=1, stamp=NOW();
-" 2> /dev/null
+# # Register game servers
+# echo "Registering game servers..."
+# mysql -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" -p"$DB_PASSWORD" "$DB_NAME" -e "
+# INSERT INTO servers (host, port, version, state, type, available, stamp) VALUES
+# ('localhost', 6000, 'freeciv-web-devel', 'Pregame', 'singleplayer', 1, NOW()),
+# ('localhost', 6001, 'freeciv-web-devel', 'Pregame', 'multiplayer', 1, NOW()),
+# ('localhost', 6002, 'freeciv-web-devel', 'Pregame', 'singleplayer', 1, NOW()),
+# ('localhost', 6003, 'freeciv-web-devel', 'Pregame', 'singleplayer', 1, NOW()),
+# ('localhost', 6004, 'freeciv-web-devel', 'Pregame', 'multiplayer', 1, NOW())
+# ON DUPLICATE KEY UPDATE available=1, stamp=NOW();
+# " 2> /dev/null
 
 echo "=== Database Initialization Complete ==="
