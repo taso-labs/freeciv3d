@@ -36,8 +36,6 @@ There is also a build-js.sh script to build just JavaScript quickly for developm
 
 The build script will also create a data webapp directory where savegames and scorelogs are stored.
 
-Flyway migrations of the database are supported. The repository provides a configuration template and a generator to create `freeciv-web/flyway.properties`:
-
 1. Copy the example config into place (if you don't already have `config/config`):
 
 ```bash
@@ -46,16 +44,9 @@ cp config/config.dist config/config
 
 1. Edit `config/config` and set your DB variables (`DB_USER`, `DB_PASSWORD`, `DB_NAME`, and any other required values).
 
-1. Run the template generator to produce configuration files from the templates (this will create `freeciv-web/flyway.properties` from `config/flyway.tmpl`):
-
 ```bash
 ./config/gen-from-templates.sh config/config
 ```
-
-1. Confirm `freeciv-web/flyway.properties` exists and contains your DB settings. Note: `freeciv-web/flyway.properties` is ignored by git (`freeciv-web/.gitignore`).
-To migrate the database to the latest version, run this Maven command:
-mvn flyway:migrate
-
 
 Copyright (C) 2007-2024 Andreas Røsdal. 
 Released under the GNU AFFERO GENERAL PUBLIC LICENSE.

@@ -46,10 +46,6 @@ USER docker
 
 WORKDIR /docker/scripts/
 
-# Prevent Flyway migrations from running inside the image build. Migrations are
-# handled by a separate one-shot service in docker-compose (flyway/flyway).
-ENV RUN_FLYWAY=0 EXTERNAL_FLYWAY=1
-
 RUN DEBIAN_FRONTEND=noninteractive sudo apt-get update --yes --quiet && \
     DEBIAN_FRONTEND=noninteractive DEB_NO_TOMCAT=Y \
                                    PIP_SKIP=Y \
