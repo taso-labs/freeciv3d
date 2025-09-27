@@ -10,10 +10,7 @@
 export JAVA_OPTS="-Djava.security.egd=file:/dev/urandom"
 export CATALINA_HOME=/var/lib/tomcat10
 
-# 0. mysql
-pidof mysqld > /dev/null || sudo service mariadb start || sudo service mysql start
-
-# 1. Tomcat
+# Tomcat
 echo "Starting up Tomcat" && \
 if service --status-all | grep -Fq 'tomcat10'; then
    sudo /usr/sbin/service tomcat10 start || echo "unable to start tomcat10 service"

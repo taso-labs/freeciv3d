@@ -31,7 +31,7 @@ dependencies="\
   libsqlite3-dev \
   libtool \
   maven \
-  default-mysql-server \
+  default-mysql-client \
   openjdk-17-jdk-headless \
   patch \
   pkg-config \
@@ -75,9 +75,6 @@ if apt-get --simulate install liblua5.4-dev &> /dev/null; then
 fi
 
 echo "==== Installing Dependencies ===="
-echo "mysql setup..."
-sudo debconf-set-selections <<< "mysql-server mysql-server/root_password password ${DB_ROOT_PASSWORD}"
-sudo debconf-set-selections <<< "mysql-server mysql-server/root_password_again password ${DB_ROOT_PASSWORD}"
 echo "apt-get install dependencies"
 sudo ${APT_GET} install --no-install-recommends ${dependencies}
 

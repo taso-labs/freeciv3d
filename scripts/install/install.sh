@@ -253,21 +253,6 @@ done
 echo "==== Filling configuration templates ===="
 "${basedir}/config/gen-from-templates.sh"
 
-echo "==== Setting up DB ===="
-pidof mysqld > /dev/null || start_svc mariadb || start_svc mysql
-if [ -z "${DB_ROOT_PASSWORD}" ]; then
-  echo "Will need the DB root password twice"
-fi
-sudo mysqladmin -u root -p"${DB_ROOT_PASSWORD}" create "${DB_NAME}"
-sudo mysql -u root -p"${DB_ROOT_PASSWORD}" << EOF
-CREATE USER '${DB_USER}'@'localhost' IDENTIFIED BY '${DB_PASSWORD}',
-            '${DB_USER}'@'127.0.0.1' IDENTIFIED BY '${DB_PASSWORD}',
-            '${DB_USER}'@'::1'       IDENTIFIED BY '${DB_PASSWORD}';
-GRANT ALL ON ${DB_NAME}.* TO '${DB_USER}'@'localhost',
-                             '${DB_USER}'@'127.0.0.1',
-                             '${DB_USER}'@'::1';
-EOF
-
 echo "==== Preparing Tomcat ===="
 cd "${TOMCAT_HOME}"
 sudo setfacl -m d:u:$(id -u):rwX,u:$(id -u):rwx webapps
