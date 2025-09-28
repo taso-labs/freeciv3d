@@ -309,6 +309,11 @@
 		<param-name>buildTimeStamp</param-name>
 		<param-value>${timestamp}</param-value>
 	</context-param>
+
+	<!-- Listener to clean up JDBC drivers and MySQL cleanup thread on shutdown -->
+	<listener>
+		<listener-class>org.freeciv.util.WebappShutdownListener</listener-class>
+	</listener>
 	
 	<welcome-file-list>
 		<welcome-file>index.jsp</welcome-file>
