@@ -232,6 +232,33 @@ class ConnectionManager:
 
         return False
 
+    async def broadcast_to_spectators(self, game_id: str, message: Dict[str, Any]):
+        """Broadcast message to all spectators of a game"""
+        spectator_connections = await self.get_spectator_connections(game_id)
+
+        if not spectator_connections:
+            logger.debug(f"No spectators connected to game {game_id}")
+            return
+
+        failed_connections = []
+        successful_broadcasts = 0
+
+        for connection_info in spectator_connections:
+            try:
+                await connection_info.websocket.send_text(json.dumps(message))
+                connection_info.update_activity()
+                successful_broadcasts += 1
+            except Exception as e:
+                logger.warning(f"Error broadcasting to spectator {connection_info.connection_id}: {e}")
+                failed_connections.append(connection_info.connection_id)
+
+        # Clean up failed connections
+        for connection_id in failed_connections:
+            asyncio.create_task(self.handle_disconnect(connection_id))
+
+        if successful_broadcasts > 0:
+            logger.debug(f"Broadcasted to {successful_broadcasts} spectators of game {game_id}")
+
     def get_connection_stats(self) -> Dict[str, Any]:
         """Get connection statistics"""
         total_connections = len(self.connections)

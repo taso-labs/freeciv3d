@@ -275,13 +275,19 @@ mkdir -p webapps/data/{savegames/pbem,scorelogs,ranklogs}
 setfacl -Rm d:u:tomcat:rwX webapps/data
 
 echo "==== Building Freeciv C server ===="
-echo "Please be patient"
-echo "If you get an error: Clock skew detected, on Windows, then try setting the clock exactly correct on your computer using ntp or some clock software."
+if [ "${SKIP_FREECIV_BUILD}" = "true" ]; then
+  echo "Skipping Freeciv build (SKIP_FREECIV_BUILD=true)"
+elif [ ! -d "${basedir}/freeciv" ]; then
+  echo "Skipping Freeciv build (freeciv directory not present)"
+else
+  echo "Please be patient"
+  echo "If you get an error: Clock skew detected, on Windows, then try setting the clock exactly correct on your computer using ntp or some clock software."
 
-cd "${basedir}"/freeciv && \
-  ./prepare_freeciv.sh  && \
-  cd build && ninja install || \
-  handle_error 5 "Failed to install freeciv"
+  cd "${basedir}"/freeciv && \
+    ./prepare_freeciv.sh  && \
+    cd build && ninja install || \
+    handle_error 5 "Failed to install freeciv"
+fi
 
 
 echo "==== Building freeciv-web ===="
@@ -293,13 +299,18 @@ cd "${basedir}"/scripts/migration
 mig_scripts=([0-9]*)
 echo "${mig_scripts[-1]}" > checkpoint
 
-mkdir -p "${basedir}/freeciv-web/src/derived/webapp" && \
-"${basedir}"/scripts/sync-js-hand.sh \
-  -f "${basedir}/freeciv/freeciv" \
-  -i "${HOME}/freeciv" \
-  -o "${basedir}/freeciv-web/src/derived/webapp" \
-  -d "${TOMCAT_HOME}/webapps/data" || \
-  handle_error 6 "Failed to synchronize freeciv project"
+if [ -d "${basedir}/freeciv" ]; then
+  mkdir -p "${basedir}/freeciv-web/src/derived/webapp" && \
+  "${basedir}"/scripts/sync-js-hand.sh \
+    -f "${basedir}/freeciv/freeciv" \
+    -i "${HOME}/freeciv" \
+    -o "${basedir}/freeciv-web/src/derived/webapp" \
+    -d "${TOMCAT_HOME}/webapps/data" || \
+    handle_error 6 "Failed to synchronize freeciv project"
+else
+  echo "Skipping freeciv project synchronization (freeciv directory not present)"
+  mkdir -p "${basedir}/freeciv-web/src/derived/webapp"
+fi
 
 cd "${basedir}"/freeciv-web && \
   ./build.sh -B || \

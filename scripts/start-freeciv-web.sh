@@ -37,13 +37,10 @@ url="http://${TOMCATMANAGER_USER}:${TOMCATMANAGER_PASSWORD}@localhost:8080/manag
 EOF
 fi
 
-#3. freeciv-proxy (LLM gateway)
-echo "Starting freeciv-proxy with LLM gateway..." && \
-bash ${FREECIV_WEB_DIR}/scripts/start-freeciv-proxy.sh && \
-echo "freeciv-proxy started" && \
-sleep 2 && \
+# Note: freeciv-proxy for port 8002 is now started separately in docker-entrypoint.sh
+# publite2 will spawn per-game proxies on ports 7000-7009 as needed
 
-#4. publite2
+#3. publite2
 echo "Starting publite2" && \
 (cd ${FREECIV_WEB_DIR}/publite2/ && \
 sh run.sh) && \

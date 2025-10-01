@@ -18,6 +18,8 @@ from struct import *
 from threading import Thread
 import logging
 import time
+import json
+from tornado import ioloop
 
 HOST = '127.0.0.1'
 logger = logging.getLogger("freeciv-proxy")
@@ -44,6 +46,16 @@ class CivCom(Thread):
         self.daemon = True
         self.civwebserver = civwebserver
 
+        # Game state tracking - populated from parsed packets
+        self.map_info = {}
+        self.player_units = {}  # Dict keyed by unit_id for efficient updates
+        self.player_cities = {}  # Dict keyed by city_id for efficient updates
+        self.all_players = []
+        self.known_techs = []
+        self.visible_tiles = []
+        self.game_turn = 1
+        self.game_phase = 'movement'
+
     def run(self):
         # setup connection to civserver
         if (logger.isEnabledFor(logging.INFO)):
@@ -54,7 +66,9 @@ class CivCom(Thread):
         try:
             self.socket.connect((HOST, self.civserverport))
             self.socket.settimeout(0.01)
+            print(f"[DEBUG civcom] ✓ Connected to civserver {HOST}:{self.civserverport}", flush=True)
         except socket.error as reason:
+            print(f"[DEBUG civcom] ✗ Failed to connect to {HOST}:{self.civserverport}: {reason}", flush=True)
             self.send_error_to_client(
                 "Proxy unable to connect to civserver. Error: %s" %
                 (reason))
@@ -76,8 +90,15 @@ class CivCom(Thread):
                 self.net_buf += packet
 
                 if (len(self.net_buf) == self.packet_size and self.net_buf[-1] == 0):
-                    # valid packet received from freeciv server, send it to
-                    # client.
+                    # valid packet received from freeciv server
+                    # Parse and store game state before forwarding
+                    try:
+                        packet_str = self.net_buf[:-1].decode('utf-8')
+                        self.parse_and_store_packet(packet_str)
+                    except Exception as e:
+                        logger.debug(f"Error parsing packet for state: {e}")
+
+                    # Forward packet to client
                     self.send_buffer_append(self.net_buf[:-1])
                     self.packet_size = -1
                     self.net_buf = bytearray(0)
@@ -159,7 +180,7 @@ class CivCom(Thread):
         if (packet is not None and self.civwebserver is not None):
             # Calls the write_message callback on the next Tornado I/O loop iteration (thread safely).
             conn = self.civwebserver
-            conn.io_loop.add_callback(lambda: conn.write_message(packet))
+            ioloop.IOLoop.current().add_callback(lambda: conn.write_message(packet))
 
     def get_client_result_string(self):
         result = ""
@@ -181,7 +202,11 @@ class CivCom(Thread):
     # Send packets from freeciv-proxy to civserver
     def send_packets_to_civserver(self):
         if (self.civserver_messages is None or self.socket is None):
+            print(f"[DEBUG civcom] Cannot send packets: messages={self.civserver_messages is not None}, socket={self.socket is not None}", flush=True)
             return
+
+        if len(self.civserver_messages) > 0:
+            print(f"[DEBUG civcom] Sending {len(self.civserver_messages)} packets to civserver for {self.username}", flush=True)
 
         try:
             for net_message in self.civserver_messages:
@@ -191,6 +216,7 @@ class CivCom(Thread):
                     header +
                     utf8_encoded +
                     b'\0')
+                print(f"[DEBUG civcom] ✓ Sent packet to civserver: {net_message[:150]}", flush=True)
         except Exception:
             self.send_error_to_client(
                 "Proxy unable to communicate with civserver on port " + str(self.civserverport))
@@ -200,6 +226,99 @@ class CivCom(Thread):
     # queue message for the civserver
     def queue_to_civserver(self, message):
         self.civserver_messages.append(message)
+
+    def parse_and_store_packet(self, packet_json):
+        """Parse incoming packets and store relevant game state"""
+        try:
+            packet = json.loads(packet_json)
+            packet_type = packet.get('pid')
+
+            # Map info packet (contains xsize, ysize)
+            if packet_type == 17:  # PACKET_MAP_INFO
+                self.map_info = {
+                    'width': packet.get('xsize', 0),
+                    'height': packet.get('ysize', 0),
+                    'tiles': [],
+                    'visibility': {}
+                }
+                logger.info(f"Stored map info: {self.map_info['width']}x{self.map_info['height']}")
+
+            # Game info packet (turn number, etc)
+            elif packet_type == 24:  # PACKET_GAME_INFO
+                self.game_turn = packet.get('turn', self.game_turn)
+                logger.debug(f"Updated game turn: {self.game_turn}")
+
+            # Player info packet
+            elif packet_type == 35:  # PACKET_PLAYER_INFO
+                # Update or add player to list
+                player_id = packet.get('playerno')
+                if player_id is not None:
+                    # Remove old entry if exists
+                    self.all_players = [p for p in self.all_players if p.get('id') != player_id]
+                    # Add updated player
+                    self.all_players.append({
+                        'id': player_id,
+                        'name': packet.get('username', f'Player{player_id}'),
+                        'nation': packet.get('nation', 'Unknown'),
+                        'score': packet.get('score', 0),
+                        'gold': packet.get('gold', 0)
+                    })
+
+            # Unit info packet - stores units by ID for all players
+            elif packet_type == 95:  # PACKET_UNIT_INFO
+                unit_id = packet.get('id')
+                owner = packet.get('owner')
+                if unit_id is not None and owner is not None:
+                    unit_data = {
+                        'id': unit_id,
+                        'owner': owner,
+                        'type': packet.get('type'),
+                        'tile': packet.get('tile'),
+                        'homecity': packet.get('homecity', 0),
+                        'moves_left': packet.get('moves_left', 0),
+                        'hp': packet.get('hp', 0),
+                        'veteran': packet.get('veteran', 0),
+                        'transported': packet.get('transported', False),
+                        'done_moving': packet.get('done_moving', False),
+                        'activity': packet.get('activity', 'idle')
+                    }
+
+                    # Convert player_units to dict if it's still a list
+                    if not isinstance(self.player_units, dict):
+                        self.player_units = {}
+
+                    self.player_units[unit_id] = unit_data
+                    logger.debug(f"Stored unit {unit_id} for owner {owner}")
+
+            # City info packet - stores cities by ID for all players
+            elif packet_type == 85:  # PACKET_CITY_INFO
+                city_id = packet.get('id')
+                owner = packet.get('owner')
+                if city_id is not None and owner is not None:
+                    city_data = {
+                        'id': city_id,
+                        'owner': owner,
+                        'name': packet.get('name', f'City{city_id}'),
+                        'tile': packet.get('tile'),
+                        'size': packet.get('size', 1),
+                        'production': packet.get('production'),
+                        'food_stock': packet.get('food_stock', 0),
+                        'shield_stock': packet.get('shield_stock', 0),
+                        'trade': packet.get('trade', [0, 0, 0]),
+                        'luxury': packet.get('luxury', 0),
+                        'science': packet.get('science', 0),
+                        'tax': packet.get('tax', 0)
+                    }
+
+                    # Convert player_cities to dict if it's still a list
+                    if not isinstance(self.player_cities, dict):
+                        self.player_cities = {}
+
+                    self.player_cities[city_id] = city_data
+                    logger.debug(f"Stored city {city_id} ({city_data['name']}) for owner {owner}")
+
+        except (json.JSONDecodeError, KeyError, TypeError) as e:
+            logger.debug(f"Could not parse packet for state storage: {e}")
 
     # LLM-optimized state query methods
     def handle_state_query(self, player_id, format='full'):
@@ -333,16 +452,48 @@ class CivCom(Thread):
 
     def get_full_state(self, player_id):
         """Get complete game state (larger format)"""
+        # Ensure map_info has valid dimensions
+        map_info = getattr(self, 'map_info', {})
+        if not map_info or map_info.get('width', 0) < 1 or map_info.get('height', 0) < 1:
+            map_info = {'width': 80, 'height': 50, 'tiles': [], 'visibility': {}}
+
+        # Ensure players is returned as a list (not dict)
+        all_players = getattr(self, 'all_players', [])
+        if isinstance(all_players, dict):
+            all_players = list(all_players.values()) if all_players else []
+
+        # Convert units dict to list, filtering by player_id
+        units_dict = getattr(self, 'player_units', {})
+        if isinstance(units_dict, dict):
+            player_units_list = [u for u in units_dict.values() if u.get('owner') == player_id]
+            logger.debug(f"Filtered {len(player_units_list)} units for player {player_id} from {len(units_dict)} total")
+        else:
+            player_units_list = units_dict if isinstance(units_dict, list) else []
+
+        # Convert cities dict to list, filtering by player_id
+        cities_dict = getattr(self, 'player_cities', {})
+        if isinstance(cities_dict, dict):
+            player_cities_list = [c for c in cities_dict.values() if c.get('owner') == player_id]
+            logger.debug(f"Filtered {len(player_cities_list)} cities for player {player_id} from {len(cities_dict)} total")
+        else:
+            player_cities_list = cities_dict if isinstance(cities_dict, list) else []
+
         return {
             'turn': getattr(self, 'game_turn', 1),
             'phase': getattr(self, 'game_phase', 'movement'),
             'player_id': player_id,
-            'units': getattr(self, 'player_units', []),
-            'cities': getattr(self, 'player_cities', []),
+            'units': player_units_list,  # Filtered list of player's units
+            'cities': player_cities_list,  # Filtered list of player's cities
             'visible_tiles': getattr(self, 'visible_tiles', []),
-            'players': getattr(self, 'all_players', {}),
+            'players': all_players,
             'techs': getattr(self, 'known_techs', []),
-            'map_info': getattr(self, 'map_info', {})
+            'map': map_info,
+            'game': {
+                'turn': getattr(self, 'game_turn', 1),
+                'phase': getattr(self, 'game_phase', 'movement'),
+                'is_over': False,
+                'current_player': player_id
+            }
         }
 
     def get_state_delta(self, player_id):

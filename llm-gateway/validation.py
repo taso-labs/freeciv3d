@@ -61,6 +61,16 @@ class LLMConnectData(BaseModel):
         description="List of agent capabilities",
         max_items=20
     )
+    nation: Optional[str] = Field(
+        default=None,
+        description="Preferred nation/civilization name",
+        max_length=50
+    )
+    leader_name: Optional[str] = Field(
+        default=None,
+        description="Preferred leader name",
+        max_length=100
+    )
 
     @validator('api_token')
     def validate_token(cls, v):

@@ -44,19 +44,23 @@ class MessageValidator:
     SCHEMAS = {
         MessageType.LLM_CONNECT: {
             'required_fields': ['type', 'agent_id', 'api_token'],
-            'optional_fields': ['capabilities', 'port'],
+            'optional_fields': ['capabilities', 'port', 'nation', 'leader_name'],
             'field_types': {
                 'type': str,
                 'agent_id': str,
                 'api_token': str,
                 'capabilities': list,
-                'port': int
+                'port': int,
+                'nation': str,
+                'leader_name': str
             },
             'field_constraints': {
                 'agent_id': {'max_length': 50, 'pattern': r'^[a-zA-Z0-9_-]+$'},
                 'api_token': {'min_length': 10, 'max_length': 100},
                 'capabilities': {'max_length': 20},
-                'port': {'min_value': 1000, 'max_value': 65535}
+                'port': {'min_value': 1000, 'max_value': 65535},
+                'nation': {'max_length': 50},
+                'leader_name': {'max_length': 100}
             }
         },
         MessageType.STATE_QUERY: {

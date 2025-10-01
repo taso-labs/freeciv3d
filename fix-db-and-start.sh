@@ -1,14 +1,10 @@
 #!/bin/bash
+# Custom startup script that fixes the database initialization and starts normally
 
-echo "=== Freeciv3D Docker Container Starting ==="
+echo "=== Clean Freeciv3D Startup (Replacing Broken Database Script) ==="
 
-# Start all Freeciv-web services first (this starts MySQL, nginx, tomcat)
-echo "Starting Freeciv-web services..."
-/docker/scripts/start-freeciv-web.sh
-
-# Fix and run database initialization
-echo "Fixing and running database initialization..."
-# Create a fixed version of the script at runtime
+# Replace the broken database script with our fixed version
+echo "Replacing broken database script with fixed version..."
 cat > /tmp/docker-init-db-fixed.sh << 'SCRIPT_END'
 #!/bin/bash
 # Docker database initialization script - Fixed version
@@ -41,7 +37,7 @@ done
 
 # Check if database exists, create if not
 echo "Ensuring database exists..."
-sudo mysql -u root << 'EOF'
+mysql -h $DB_HOST -P $DB_PORT -u root << 'EOF'
 CREATE DATABASE IF NOT EXISTS freeciv_web;
 CREATE USER IF NOT EXISTS 'docker'@'localhost' IDENTIFIED BY 'changeme';
 CREATE USER IF NOT EXISTS 'docker'@'%' IDENTIFIED BY 'changeme';
@@ -57,18 +53,12 @@ fi
 
 echo "Database and user setup complete!"
 
-# Test connection as docker user (using TCP connection instead of socket)
+# Test connection as docker user
 echo "Testing database connection..."
-mysql -h $DB_HOST -P $DB_PORT -u $DB_USER -p$DB_PASSWORD $DB_NAME -e "SELECT 1;" >/dev/null 2>&1
+mysql -h $DB_HOST -P $DB_PORT -u $DB_USER -p$DB_PASSWORD $DB_NAME -e "SELECT 1;" >/dev/null
 if [ $? -ne 0 ]; then
-    echo "WARNING: Cannot connect to database as $DB_USER via TCP"
-    echo "Trying socket connection..."
-    # Fallback: try socket if TCP doesn't work
-    mysql -u $DB_USER -p$DB_PASSWORD $DB_NAME -e "SELECT 1;" >/dev/null 2>&1
-    if [ $? -ne 0 ]; then
-        echo "ERROR: Cannot connect to database as $DB_USER"
-        exit 1
-    fi
+    echo "ERROR: Cannot connect to database as $DB_USER"
+    exit 1
 fi
 
 # Create tables if they don't exist
@@ -136,47 +126,15 @@ fi
 echo "=== Database Initialization Complete ==="
 SCRIPT_END
 
-chmod +x /tmp/docker-init-db-fixed.sh
-/tmp/docker-init-db-fixed.sh || {
-    echo "Database initialization failed, but continuing..."
-    echo "You may need to run database initialization manually"
-}
+# Replace the broken script with our fixed version
+cp /tmp/docker-init-db-fixed.sh /docker/scripts/docker-init-db.sh
+chmod +x /docker/scripts/docker-init-db.sh
 
-# Deploy spectator files to webapp
-echo "Deploying spectator files..."
-/docker/scripts/deploy-spectator-files.sh || {
-    echo "Spectator file deployment failed, but continuing..."
-    echo "You may need to deploy spectator files manually"
-}
+echo "✅ Database script replaced with fixed version"
 
-echo "=== Starting FreeCiv Proxy for LLM Gateway (Port 8002) ==="
-# Start dedicated proxy for LLM Gateway on port 8002
-# This is separate from game-specific proxies (7000-7009) managed by publite2
-cd /docker/freeciv-proxy && \
-bash -c "cd /docker/freeciv-proxy && python3 -u freeciv-proxy.py 8002 2>&1 | tee /docker/logs/freeciv-proxy-PORT6000.log" &
-PROXY_8002_PID=$!
+echo "=== Starting Freeciv3D Services ==="
 
-# Wait for proxy to start
-sleep 2
-if kill -0 $PROXY_8002_PID 2>/dev/null; then
-    echo "✓ FreeCiv proxy started on port 8002 (PID: $PROXY_8002_PID)"
-else
-    echo "✗ FreeCiv proxy failed to start on port 8002"
-fi
-
-echo "=== Starting LLM Gateway (Port 8003) ==="
-cd /docker/llm-gateway && \
-nohup /home/docker/.local/bin/uvicorn main:app --host 0.0.0.0 --port 8003 --log-level info > /docker/logs/llm-gateway.log 2>&1 &
-GATEWAY_PID=$!
-
-# Wait for gateway to start
-sleep 2
-if kill -0 $GATEWAY_PID 2>/dev/null; then
-    echo "✓ LLM Gateway started on port 8003 (PID: $GATEWAY_PID)"
-else
-    echo "✗ LLM Gateway failed to start on port 8003"
-fi
-
-echo "=== Freeciv3D Container Ready ==="
-
-exec "$@"
+# Now run the original entrypoint which will use our fixed script
+# Note: docker-entrypoint.sh will start proxy (8002) and gateway (8003)
+echo "Running original entrypoint with fixed database script..."
+exec /docker/docker-entrypoint.sh "$@"

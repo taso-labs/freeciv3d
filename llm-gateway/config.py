@@ -31,7 +31,7 @@ class Settings(BaseSettings):
     # FreeCiv Proxy connection settings
     freeciv_proxy_host: str = "localhost"
     freeciv_proxy_port: int = 8002
-    freeciv_proxy_ws_path: str = "/llmsocket/8002"
+    freeciv_proxy_ws_path: str = "/llmsocket/8002"  # Use LLM handler endpoint
 
     # Redis connection for state management
     redis_url: str = "redis://localhost:6379"

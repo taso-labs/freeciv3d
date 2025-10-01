@@ -350,6 +350,88 @@ async def list_games(
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
+# Spectator endpoints
+@router.get("/games/{game_id}/spectate")
+async def get_spectator_url(
+    game_id: str,
+    request: Request
+) -> Dict[str, Any]:
+    """Get spectator URL for viewing a game"""
+    try:
+        gw = get_gateway()
+
+        # Check if game exists
+        if game_id not in gw.game_sessions:
+            raise HTTPException(status_code=404, detail="Game not found")
+
+        game_session = gw.game_sessions[game_id]
+
+        # Get the game port
+        game_port = game_session.get("port", 6000)
+
+        # Generate spectator URL - assuming FreeCiv3D web interface is on port 8080
+        base_url = "http://localhost:8080"  # Could be made configurable
+        spectator_url = f"{base_url}/webclient/spectator.jsp?game_id={game_id}&port={game_port}&mode=full"
+
+        return {
+            "success": True,
+            "game_id": game_id,
+            "spectator_url": spectator_url,
+            "websocket_url": f"ws://localhost:{game_port}/ws",
+            "game_info": {
+                "port": game_port,
+                "status": game_session.get("status", "unknown"),
+                "players": len(game_session.get("agents", {})),
+                "created_at": game_session.get("created_at"),
+                "turn": game_session.get("turn", 0)
+            }
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting spectator URL for game {game_id}: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+@router.get("/games")
+async def list_games(
+    request: Request,
+    status: Optional[str] = Query(None, description="Filter by game status")
+) -> Dict[str, Any]:
+    """List all active games available for spectating"""
+    try:
+        gw = get_gateway()
+
+        games = []
+        for game_id, session in gw.game_sessions.items():
+            game_status = session.get("status", "unknown")
+
+            # Filter by status if provided
+            if status and game_status != status:
+                continue
+
+            games.append({
+                "game_id": game_id,
+                "port": session.get("port", 6000),
+                "status": game_status,
+                "players": len(session.get("agents", {})),
+                "created_at": session.get("created_at"),
+                "turn": session.get("turn", 0),
+                "spectator_url": f"http://localhost:8080/webclient/spectator.jsp?game_id={game_id}&port={session.get('port', 6000)}&mode=full"
+            })
+
+        return {
+            "success": True,
+            "games": games,
+            "total": len(games)
+        }
+
+    except Exception as e:
+        logger.error(f"Error listing games: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
 # Metrics and monitoring endpoints
 @router.get("/metrics")
 async def get_metrics(auth: Dict[str, Any] = Depends(verify_api_key)) -> Dict[str, Any]:

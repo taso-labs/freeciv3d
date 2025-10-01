@@ -10,9 +10,11 @@ import json
 import logging
 import time
 import uuid
+import asyncio
 from tornado import websocket
 from civcom import CivCom
 from state_cache import state_cache
+from state_extractor import StateExtractor, StateFormat
 from action_validator import LLMActionValidator, ActionType, ValidationResult
 from config_loader import llm_config
 from message_validator import MessageValidator, ValidationError
@@ -27,6 +29,22 @@ logger = logging.getLogger("freeciv-proxy")
 # Global registry for active LLM agents
 llm_agents = {}
 MAX_LLM_AGENTS = llm_config.get_max_agents()
+
+# Nation ID mapping for common civilizations
+# These IDs correspond to the FreeCiv nation definitions
+NATION_MAP = {
+    "Americans": 0,
+    "Romans": 1,
+    "Chinese": 2,
+    "French": 3,
+    "Germans": 4,
+    "British": 5,
+    "Japanese": 6,
+    "Indians": 7,
+    "Russians": 8,
+    "Spanish": 9
+}
+DEFAULT_NATIONS = ["Americans", "Romans", "Chinese", "French", "Germans"]
 
 # Global distributed rate limiter
 distributed_rate_limiter = DistributedRateLimiter({
@@ -63,6 +81,9 @@ class LLMWSHandler(websocket.WebSocketHandler):
         # Initialize message validator with configurable size limit
         max_size_mb = llm_config.get('validation.max_message_size_mb', 1.0)
         self.message_validator = MessageValidator(max_message_size=int(max_size_mb * 1024 * 1024))
+
+        # Initialize state extractor for proper state formatting
+        self.state_extractor = StateExtractor()
 
     def open(self):
         """Handle WebSocket connection opening"""
@@ -141,6 +162,8 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 self._handle_action(msg_data)
             elif msg_type == 'ping':
                 self._handle_ping(msg_data)
+            elif msg_type == 'player_ready':
+                self._handle_player_ready(msg_data)
             elif self.is_llm_agent:
                 # Forward other messages to civcom if authenticated
                 self._forward_to_civcom(message)
@@ -159,6 +182,8 @@ class LLMWSHandler(websocket.WebSocketHandler):
 
     def _handle_llm_connect(self, msg_data: Dict[str, Any]):
         """Handle LLM agent authentication with session management"""
+        print(f"[DEBUG] _handle_llm_connect called, msg_data keys: {list(msg_data.keys())}", flush=True)
+        print(f"[DEBUG] msg_data nation: {msg_data.get('nation')}, leader_name: {msg_data.get('leader_name')}", flush=True)
         try:
             # Extract agent info
             self.agent_id = msg_data.get('agent_id', f'agent-{self.id[:8]}')
@@ -209,8 +234,53 @@ class LLMWSHandler(websocket.WebSocketHandler):
             self.is_llm_agent = True
 
             # Connect to civserver (simplified connection)
-            civserver_port = msg_data.get('port', 6001)  # Default port
+            # TODO: Implement proper game server allocation via metaserver
+            # Use port 6000 (singleplayer but we'll configure for multi) since multiplayer ports had issues
+            # Ports 6001/6004 crashed, 6007 may have existing players
+            civserver_port = msg_data.get('port', 6000)  # Try port 6000 (singleplayer, will set minplayers)
+            logger.info(f"Connecting agent {self.agent_id} to civserver port {civserver_port}")
             self._connect_to_civserver(civserver_port)
+
+            # After connection, complete pregame flow: select nation and mark ready
+            # Extract nation preference from message
+            nation_name = msg_data.get('nation', 'random')
+            leader_name = msg_data.get('leader_name', self.agent_id)
+
+            print(f"[DEBUG] Starting nation selection for {self.agent_id}: nation={nation_name}, leader={leader_name}", flush=True)
+
+            # Get nation ID
+            nation_id = self._get_nation_id(nation_name)
+            print(f"[DEBUG] Got nation ID: {nation_id}", flush=True)
+
+            # Wait briefly for connection to stabilize
+            time.sleep(0.5)
+
+            # Send PACKET_NATION_SELECT_REQ (pid=10)
+            print(f"[DEBUG] About to send PACKET_NATION_SELECT_REQ, civcom={self.civcom is not None}", flush=True)
+            nation_packet = json.dumps({
+                "pid": 10,
+                "player_no": self.player_id,
+                "nation_no": nation_id,
+                "is_male": True,
+                "name": leader_name,
+                "style": 0  # Default city style
+            })
+            print(f"[DEBUG] Nation packet: {nation_packet}", flush=True)
+            self.civcom.queue_to_civserver(nation_packet)
+            print(f"[DEBUG] Packet queued successfully", flush=True)
+            logger.info(f"Sent PACKET_NATION_SELECT_REQ for {nation_name} (ID {nation_id}) - Leader: {leader_name}")
+
+            # Wait briefly for nation selection to process
+            time.sleep(0.5)
+
+            # Send PACKET_PLAYER_READY (pid=11)
+            ready_packet = json.dumps({
+                "pid": 11,
+                "is_ready": True,
+                "player_no": self.player_id
+            })
+            self.civcom.queue_to_civserver(ready_packet)
+            logger.info(f"Sent PACKET_PLAYER_READY for player {self.player_id}")
 
             # Send success response with session information
             self.write_message(json.dumps({
@@ -377,8 +447,65 @@ class LLMWSHandler(websocket.WebSocketHandler):
             'agent_id': self.agent_id
         }))
 
+    def _handle_player_ready(self, msg_data: Dict[str, Any]):
+        """Handle player ready status from LLM agent"""
+        if not self.is_llm_agent:
+            self.write_message(json.dumps({
+                'type': 'error',
+                'code': 'E401',
+                'message': 'Not authenticated as LLM agent'
+            }))
+            return
+
+        if self.player_id is None:
+            self.write_message(json.dumps({
+                'type': 'error',
+                'code': 'E402',
+                'message': 'No player ID assigned yet'
+            }))
+            return
+
+        # Get ready status from message (default to True)
+        is_ready = msg_data.get('is_ready', True)
+
+        # Create PACKET_PLAYER_READY packet
+        ready_packet = {
+            "pid": 11,  # PACKET_PLAYER_READY from packets.def:434
+            "player_no": self.player_id,
+            "is_ready": is_ready
+        }
+
+        # Send to civcom
+        if self.civcom:
+            try:
+                # Queue packet for sending to civserver
+                self.civcom.queue_to_civserver(json.dumps(ready_packet))
+                self.civcom.send_packets_to_civserver()
+                logger.info(f"Agent {self.agent_id} marked ready={is_ready} (player_no={self.player_id})")
+
+                # Send confirmation back to agent
+                self.write_message(json.dumps({
+                    'type': 'ready_confirmed',
+                    'player_no': self.player_id,
+                    'is_ready': is_ready,
+                    'message': f'Player {self.player_id} marked {"ready" if is_ready else "not ready"}'
+                }))
+            except Exception as e:
+                logger.error(f"Failed to send ready packet: {e}")
+                self.write_message(json.dumps({
+                    'type': 'error',
+                    'code': 'E403',
+                    'message': f'Failed to send ready packet: {str(e)}'
+                }))
+        else:
+            self.write_message(json.dumps({
+                'type': 'error',
+                'code': 'E404',
+                'message': 'Not connected to game server'
+            }))
+
     def _build_optimized_state(self, format_type: str, include_actions: bool) -> Dict[str, Any]:
-        """Build optimized game state for LLM consumption"""
+        """Build optimized game state for LLM consumption using StateExtractor"""
         # Get actual game state from civcom if available
         if self.civcom and hasattr(self.civcom, 'get_full_state'):
             try:
@@ -389,48 +516,54 @@ class LLMWSHandler(websocket.WebSocketHandler):
         else:
             full_state = self._get_fallback_state()
 
-        base_state = {
-            'turn': full_state.get('turn', 1),
-            'phase': full_state.get('phase', 'movement'),
-            'player_id': self.player_id,
-            'timestamp': time.time()
+        # Map format_type to StateFormat enum
+        format_map = {
+            'llm_optimized': StateFormat.LLM_OPTIMIZED,
+            'full': StateFormat.FULL,
+            'delta': StateFormat.DELTA
         }
+        state_format = format_map.get(format_type, StateFormat.LLM_OPTIMIZED)
 
-        if format_type == 'llm_optimized':
-            # Highly compressed state for LLM
+        # Use StateExtractor to format the state - this ensures map validation and proper structure
+        try:
+            state = self.state_extractor.get_state(full_state, state_format)
+        except Exception as e:
+            logger.error(f"StateExtractor failed: {e}, falling back to manual construction")
+            import traceback
+            logger.error(f"StateExtractor traceback: {traceback.format_exc()}")
+            # Fallback to basic state if extractor fails - ENSURE LISTS NOT DICTS
             state = {
-                **base_state,
-                'strategic_summary': self._get_strategic_summary(),
-                'immediate_priorities': self._get_immediate_priorities(),
-                'threats': self._assess_threats(),
-                'opportunities': self._identify_opportunities()
+                'turn': full_state.get('turn', 1),
+                'phase': full_state.get('phase', 'movement'),
+                'player_id': self.player_id,
+                'timestamp': time.time(),
+                'game': {
+                    'turn': full_state.get('turn', 1),
+                    'phase': full_state.get('phase', 'movement')
+                },
+                'map': {'width': 80, 'height': 50, 'tiles': [], 'visibility': {}},
+                'players': [],
+                'units': [],  # MUST BE LIST
+                'cities': []  # MUST BE LIST
             }
+
+        # Add player_id and timestamp which are handler-specific
+        state['player_id'] = self.player_id
+        state['timestamp'] = time.time()
+
+        # For llm_optimized format, add AI analysis layers
+        if format_type == 'llm_optimized':
+            state['strategic_summary'] = self._get_strategic_summary()
+            state['immediate_priorities'] = self._get_immediate_priorities()
+            state['threats'] = self._assess_threats()
+            state['opportunities'] = self._identify_opportunities()
 
             if include_actions:
                 state['legal_actions'] = self._get_legal_actions_optimized(full_state)
 
-        elif format_type == 'full':
-            # Complete state (larger, for detailed analysis)
-            state = {
-                **base_state,
-                'units': full_state.get('units', []),
-                'cities': full_state.get('cities', []),
-                'visible_tiles': full_state.get('visible_tiles', []),
-                'players': full_state.get('players', {}),
-                'techs': full_state.get('techs', []),
-                'map_info': full_state.get('map_info', {})
-            }
-
-        else:  # 'delta' format
-            # Changes since last query
-            state = {
-                **base_state,
-                'changes_since': self.last_state_query,
-                'new_units': [],
-                'moved_units': [],
-                'new_cities': [],
-                'tech_progress': {}
-            }
+        # For delta format, add change tracking
+        elif format_type == 'delta':
+            state['changes_since'] = self.last_state_query
 
         return state
 
@@ -750,26 +883,53 @@ class LLMWSHandler(websocket.WebSocketHandler):
 
         return action  # Fallback
 
+    def _get_nation_id(self, nation_name: str) -> int:
+        """Get nation ID from nation name.
+
+        Args:
+            nation_name: Name of the nation (e.g., "Americans", "Romans")
+
+        Returns:
+            Nation ID integer (0-9 for known nations, 0 for unknown)
+        """
+        if not nation_name or nation_name.lower() == 'random':
+            # Select random nation from defaults
+            import random
+            nation_name = random.choice(DEFAULT_NATIONS)
+            logger.info(f"Auto-selecting random nation: {nation_name}")
+
+        nation_id = NATION_MAP.get(nation_name, 0)
+        logger.debug(f"Nation '{nation_name}' → ID {nation_id}")
+        return nation_id
+
     def _connect_to_civserver(self, port: int):
         """Connect to civserver (simplified for MVP)"""
         try:
-            # Create a simplified login packet for LLM agent
+            # Create proper FreeCiv login packet (PACKET_SERVER_JOIN_REQ)
+            # Must include pid=4 and version fields for server to parse it
             login_packet = json.dumps({
-                'pid': 1,  # Login packet
+                'pid': 4,  # PACKET_SERVER_JOIN_REQ
                 'username': self.agent_id,
-                'capability': '+Freeciv.Devel.2.6',
-                'version_label': 'LLM Agent',
-                'major_version': 2,
-                'minor_version': 6,
-                'patch_version': 0
+                'capability': '+Freeciv.Web.Devel-3.3',
+                'version_label': '-dev',
+                'major_version': 3,
+                'minor_version': 3,
+                'patch_version': 0,
+                'port': port
             })
+
+            # Set loginpacket on the handler first (CivCom expects civwebserver.loginpacket)
+            self.loginpacket = login_packet
 
             # Create CivCom connection
             self.civcom = CivCom(self.agent_id, port, f"{self.agent_id}_{self.id}", self)
-            self.civcom.loginpacket = login_packet
             self.civcom.start()
 
             logger.info(f"LLM agent {self.agent_id} connected to civserver on port {port}")
+
+            # Wait a moment for connection to establish, then start the game
+            # This is needed because the FreeCiv server waits in pregame mode
+            asyncio.create_task(self._start_game_after_delay())
 
         except Exception as e:
             logger.exception(f"Failed to connect LLM agent to civserver: {e}")
@@ -778,6 +938,67 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 'code': 'E140',
                 'message': 'Failed to connect to game server'
             }))
+
+    async def _start_game_after_delay(self):
+        """Start the FreeCiv game after a short delay to allow connections to establish"""
+        print(f"[DEBUG] _start_game_after_delay() CALLED for agent {self.agent_id}, player_id={self.player_id}", flush=True)
+        logger.info(f"_start_game_after_delay() started for agent {self.agent_id}")
+        try:
+            # Wait longer for both agents to connect AND complete nation selection
+            # Nation selection packets take ~1s per agent (2 agents = 2s)
+            # Add extra buffer for network latency
+            print(f"[DEBUG] Sleeping for 10s before starting game...", flush=True)
+            await asyncio.sleep(10.0)
+            print(f"[DEBUG] Woke up after 10s sleep, checking agent count...", flush=True)
+
+            print(f"[DEBUG] Checking civcom: {self.civcom is not None}", flush=True)
+            if self.civcom:
+                # Track connected agents globally
+                global llm_agents
+                agent_count = len(llm_agents)
+                print(f"[DEBUG] agent_count={agent_count}, player_id={self.player_id}, llm_agents={list(llm_agents.keys())}", flush=True)
+
+                # Only start the game once we have at least 2 agents connected
+                # and only the first player starts it
+                if self.player_id == 1 and agent_count >= 2:
+                    print(f"[DEBUG] Player 1 starting game with {agent_count} agents!", flush=True)
+                    print(f"[DEBUG] civcom thread status: alive={self.civcom.is_alive()}, socket={self.civcom.socket is not None}", flush=True)
+                    logger.info(f"🎮 All {agent_count} agents have selected nations and marked ready, starting game...")
+
+                    # Set game options for LLM gameplay using proper PACKET_CHAT_MSG_REQ format
+                    # Packet ID 26 = PACKET_CHAT_MSG_REQ
+                    print(f"[DEBUG] Queueing game settings...", flush=True)
+                    self.civcom.queue_to_civserver(json.dumps({"pid": 26, "message": "/set minplayers 2"}))
+                    self.civcom.queue_to_civserver(json.dumps({"pid": 26, "message": "/set aifill 0"}))
+                    self.civcom.queue_to_civserver(json.dumps({"pid": 26, "message": "/set autotoggle enabled"}))
+                    self.civcom.queue_to_civserver(json.dumps({"pid": 26, "message": "/set timeout 0"}))
+                    print(f"[DEBUG] Game settings queued successfully", flush=True)
+
+                    # Wait for settings to apply
+                    print(f"[DEBUG] Sleeping 1s for settings to apply...", flush=True)
+                    await asyncio.sleep(1.0)
+
+                    # Send the /start command to begin the game
+                    print(f"[DEBUG] Queueing /start command...", flush=True)
+                    logger.info(f"🚀 Sending /start command from agent {self.agent_id}")
+                    self.civcom.queue_to_civserver(json.dumps({"pid": 26, "message": "/start"}))
+                    print(f"[DEBUG] /start command queued!", flush=True)
+
+                    # Wait for game to initialize and send initial unit/city packets
+                    await asyncio.sleep(3.0)
+                    logger.info(f"✅ Game initialization complete - starting units should now be available")
+
+                elif self.player_id == 1 and agent_count < 2:
+                    # If we're player 1 but not enough agents yet, try again later
+                    logger.info(f"⏳ Only {agent_count} agents connected, waiting for more...")
+                    await asyncio.sleep(3.0)
+                    # Try again
+                    asyncio.create_task(self._start_game_after_delay())
+                else:
+                    logger.info(f"⏳ Player {self.player_id} waiting for game to start")
+
+        except Exception as e:
+            logger.error(f"❌ Failed to start game for {self.agent_id}: {e}")
 
     def _forward_to_civcom(self, message: str):
         """Forward message to civcom"""

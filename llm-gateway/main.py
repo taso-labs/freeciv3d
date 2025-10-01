@@ -9,6 +9,7 @@ Main FastAPI application with WebSocket and REST endpoints
 import asyncio
 import json
 import logging
+import os
 import random
 import time
 import uuid
@@ -36,6 +37,7 @@ try:
     from .request_manager import request_manager
     from .connection_state_manager import connection_state_manager
     from .security.token_manager import secure_token_manager
+    from .metaserver_client import metaserver_client
     from .utils.safe_access import get_agent_game_id, get_agent_config, safe_get_nested
     from .utils.constants import *
 except ImportError:
@@ -44,13 +46,22 @@ except ImportError:
     from request_manager import request_manager
     from connection_state_manager import connection_state_manager
     from security.token_manager import secure_token_manager
+    from metaserver_client import metaserver_client
     from utils.safe_access import get_agent_game_id, get_agent_config, safe_get_nested
     from utils.constants import *
 
 # Configure logging
+import os
+os.makedirs("logs", exist_ok=True)
+
+# Configure both console and file logging
 logging.basicConfig(
     level=getattr(logging, settings.log_level.upper()),
-    format=settings.log_format
+    format=settings.log_format,
+    handlers=[
+        logging.StreamHandler(),  # Console output
+        logging.FileHandler("logs/gateway.log"),  # File output
+    ]
 )
 logger = logging.getLogger("llm-gateway")
 
@@ -91,19 +102,15 @@ else:
 
 
 class LLMGateway:
-    """Main gateway class for coordinating between Game Arena and FreeCiv3D"""
+    """Simplified gateway class - pure pass-through between Game Arena and FreeCiv3D"""
 
     def __init__(self):
+        # Minimal state - just track active agents for connection management
         self.active_agents: Dict[str, Dict[str, Any]] = {}
-        self.game_sessions: Dict[str, Dict[str, Any]] = {}
-        self.connection_retry_counts: Dict[str, int] = {}
-        self.failed_connections: Dict[str, float] = {}  # game_id -> last_failure_time
         self._running = False
 
-        # Use new secure components instead of direct dictionaries
-        # proxy_connections now managed by connection_state_manager
-        # pending_requests now managed by request_manager
-        # API tokens now managed by secure_token_manager
+        # Note: Complex state management removed - gateway acts as pure pass-through
+        # The proxy's LLM handler manages game state, authentication, and actions
 
     async def start(self):
         """Start the gateway"""
@@ -130,49 +137,22 @@ class LLMGateway:
         logger.info("LLM Gateway stopped")
 
     async def register_agent(self, agent_id: str, config: Dict[str, Any]) -> Dict[str, Any]:
-        """Register a new LLM agent"""
+        """Register agent connection - actual auth handled by proxy"""
         try:
-            if agent_id in self.active_agents:
-                return {
-                    "success": False,
-                    "error": f"Agent {agent_id} already registered"
-                }
-
-            # Validate configuration using safe access
-            required_fields = ["api_token", "model", "game_id"]
-            for field in required_fields:
-                if field not in config:
-                    return {
-                        "success": False,
-                        "error": f"Missing required field: {field}"
-                    }
-
-            # Extract and securely store API token
-            api_token = config["api_token"]
-            if not await secure_token_manager.store_token(agent_id, api_token):
-                return {
-                    "success": False,
-                    "error": "Failed to securely store API token"
-                }
-
-            # Store agent configuration (without the plaintext token)
-            secure_config = {k: v for k, v in config.items() if k != "api_token"}
-            secure_config["token_stored"] = True
-
+            # Just track that the agent connected
             self.active_agents[agent_id] = {
-                "config": secure_config,
-                "registered_at": time.time(),
-                "session_id": str(uuid.uuid4()),
-                "status": "registered"
+                "connected_at": time.time(),
+                "session_id": str(uuid.uuid4())
             }
 
-            game_id = safe_get_nested(config, "game_id")
-            logger.info(f"Agent {agent_id} registered for game {game_id}")
+            logger.info(f"Agent {agent_id} registered for pass-through")
 
+            # Return success - proxy will handle actual authentication
             return {
                 "success": True,
                 "agent_id": agent_id,
-                "session_id": self.active_agents[agent_id]["session_id"]
+                "session_id": self.active_agents[agent_id]["session_id"],
+                "player_id": 1  # Proxy will assign actual player_id
             }
 
         except Exception as e:
@@ -225,6 +205,15 @@ class LLMGateway:
                 }
 
             logger.info(f"Connected to FreeCiv proxy for game {game_id}")
+
+            # Initialize the game after connection
+            init_result = await self._initialize_freeciv_game(game_id, websocket)
+            if not init_result["success"]:
+                logger.warning(f"Failed to initialize FreeCiv game: {init_result.get('error')}")
+            else:
+                # Start background listener for proxy messages
+                asyncio.create_task(self._listen_to_proxy_messages(game_id))
+                logger.info(f"Started proxy message listener for game {game_id}")
 
             return {
                 "success": True,
@@ -319,8 +308,8 @@ class LLMGateway:
 
         try:
             proxy_ws = self.proxy_connections[game_id]
-            # Check if WebSocket is closed
-            if proxy_ws.closed:
+            # Check if WebSocket is closed (close_code is None when open)
+            if proxy_ws.close_code is not None:
                 return False
 
             # Send a ping to test connection
@@ -330,6 +319,177 @@ class LLMGateway:
         except Exception as e:
             logger.debug(f"Connection health check failed for game {game_id}: {e}")
             return False
+
+    async def _initialize_freeciv_game(self, game_id: str, websocket) -> Dict[str, Any]:
+        """Initialize a FreeCiv game by sending necessary protocol messages"""
+        try:
+            # Get API token for LLM authentication
+            api_token = os.getenv("LLM_API_TOKENS", "test-token-fc3d-001").split(",")[0]
+
+            # Send LLM authentication message to the LLM handler
+            auth_msg = {
+                "type": "llm_connect",
+                "agent_id": f"llm_player_{game_id[:8]}",
+                "api_token": api_token,
+                "port": 6001,  # Default FreeCiv server port
+                "capabilities": ["unit_move", "city_production", "tech_research", "unit_build_city", "unit_explore"]
+            }
+
+            await websocket.send(json.dumps(auth_msg))
+            logger.info(f"Sent LLM authentication message for game {game_id}")
+
+            # Wait for response (with timeout)
+            response = await asyncio.wait_for(websocket.recv(), timeout=5.0)
+            response_data = json.loads(response)
+
+            # Handle LLM handler authentication response
+            if response_data.get("type") == "auth_success":
+                # Store session info in game sessions
+                if game_id not in self.game_sessions:
+                    self.game_sessions[game_id] = {}
+
+                self.game_sessions[game_id]["player_id"] = response_data.get("player_id")
+                self.game_sessions[game_id]["session_id"] = response_data.get("session_id")
+                self.game_sessions[game_id]["agent_id"] = response_data.get("agent_id")
+
+                logger.info(f"Successfully authenticated LLM agent for game {game_id}: player_id={response_data.get('player_id')}")
+                return {"success": True, "player_id": response_data.get("player_id")}
+            else:
+                error_msg = response_data.get("message", "Authentication failed")
+                logger.error(f"LLM authentication failed for game {game_id}: {error_msg}")
+                return {"success": False, "error": error_msg}
+
+        except asyncio.TimeoutError:
+            return {"success": False, "error": "Game initialization timeout"}
+        except Exception as e:
+            logger.error(f"Error initializing FreeCiv game: {e}")
+            return {"success": False, "error": str(e)}
+
+    async def _listen_to_proxy_messages(self, game_id: str):
+        """Background task to listen for messages from FreeCiv proxy"""
+        try:
+            proxy_ws = await connection_state_manager.get_connection(game_id)
+            if not proxy_ws:
+                logger.warning(f"No proxy connection found for game {game_id}")
+                return
+
+            logger.info(f"Starting proxy message listener for game {game_id}")
+
+            while proxy_ws.close_code is None:
+                try:
+                    response = await asyncio.wait_for(proxy_ws.recv(), timeout=30.0)
+                    messages = json.loads(response)
+
+                    # Handle array format from FreeCiv proxy
+                    if isinstance(messages, list):
+                        for msg in messages:
+                            await self._handle_freeciv_message(game_id, msg)
+                    else:
+                        await self._handle_freeciv_message(game_id, messages)
+
+                except asyncio.TimeoutError:
+                    # Timeout is normal, just continue listening
+                    continue
+                except Exception as e:
+                    logger.error(f"Error receiving proxy message for {game_id}: {e}")
+                    break
+
+            logger.info(f"Proxy message listener stopped for game {game_id}")
+
+        except Exception as e:
+            logger.error(f"Proxy listener error for {game_id}: {e}")
+
+    async def _handle_freeciv_message(self, game_id: str, message: Dict[str, Any]):
+        """Process messages from LLM handler and forward to appropriate recipients"""
+        try:
+            msg_type = message.get("type")
+
+            # Handle LLM handler message types
+            if msg_type == "state_response":
+                # State response from LLM handler
+                logger.debug(f"Received state response for {game_id}: format={message.get('format')}")
+
+                # Resolve any pending state query requests
+                # The request manager expects a response format
+                response_data = {
+                    "success": True,
+                    "data": message.get("data", {}),
+                    "format": message.get("format", "llm_optimized"),
+                    "cached": message.get("cached", False),
+                    "timestamp": message.get("timestamp", time.time())
+                }
+
+                # Check if this is a response to a pending request
+                correlation_id = message.get("correlation_id")
+                if correlation_id:
+                    await request_manager.resolve_request(correlation_id, response_data)
+
+                # Store the state for future reference
+                if game_id in self.game_sessions:
+                    self.game_sessions[game_id]["last_state"] = message.get("data", {})
+                    self.game_sessions[game_id]["last_state_time"] = message.get("timestamp", time.time())
+
+                # Forward state to spectators if it contains map/game data
+                state_data = message.get("data", {})
+                if state_data:
+                    await connection_manager.broadcast_to_spectators(game_id, {
+                        "type": "state_update",
+                        "game_id": game_id,
+                        "turn": state_data.get("turn", 1),
+                        "players": state_data.get("players", {}),
+                        "units": state_data.get("units", []),
+                        "cities": state_data.get("cities", []),
+                        "visible_tiles": state_data.get("visible_tiles", []),
+                        "timestamp": time.time()
+                    })
+
+            elif msg_type == "action_accepted":
+                # Action successfully executed
+                logger.info(f"Action accepted for {game_id}: {message.get('action')}")
+
+                # Notify spectators of successful action
+                await connection_manager.broadcast_to_spectators(game_id, {
+                    "type": "action_executed",
+                    "game_id": game_id,
+                    "action": message.get("action"),
+                    "timestamp": message.get("timestamp", time.time())
+                })
+
+            elif msg_type == "action_rejected":
+                # Action was rejected
+                logger.warning(f"Action rejected for {game_id}: {message.get('error_message')}")
+
+            elif msg_type == "error":
+                # Error from LLM handler
+                logger.error(f"LLM handler error for {game_id}: {message.get('message')}")
+
+            elif msg_type == "welcome":
+                # Initial welcome message, can be ignored
+                logger.debug(f"Welcome message received for {game_id}")
+
+            else:
+                # Unknown message type or FreeCiv protocol message
+                # Check if it's a FreeCiv protocol message (has pid field)
+                msg_pid = message.get("pid")
+                if msg_pid:
+                    # Forward FreeCiv protocol messages to spectators
+                    # pid 15: PACKET_GAME_INFO
+                    # pid 25: PACKET_MAP_INFO
+                    # pid 55: PACKET_TILE_INFO
+                    # pid 75: PACKET_PLAYER_INFO
+                    # pid 85: PACKET_CITY_INFO
+                    # pid 95: PACKET_UNIT_INFO
+                    if msg_pid in [15, 25, 55, 75, 85, 95]:
+                        await connection_manager.broadcast_to_spectators(game_id, {
+                            "type": "freeciv_update",
+                            "game_id": game_id,
+                            "packet_id": msg_pid,
+                            "data": message,
+                            "timestamp": time.time()
+                        })
+
+        except Exception as e:
+            logger.error(f"Error handling FreeCiv message for {game_id}: {e}")
 
     async def _handle_connection_failure(self, game_id: str):
         """Handle connection failure"""
@@ -424,6 +584,9 @@ class LLMGateway:
                 del self.game_sessions[game_id]
                 return proxy_result
 
+            # Notify spectators that the game has started
+            await self.notify_spectators_game_start(game_id)
+
             return {
                 "success": True,
                 "game_id": game_id,
@@ -449,15 +612,11 @@ class LLMGateway:
                     "error": f"Game not found: {game_id}"
                 }
 
-            # Forward request to FreeCiv proxy
+            # Send state query to LLM handler
             state_request = {
                 "type": "state_query",
-                "agent_id": f"gateway-{uuid.uuid4()}",
-                "timestamp": time.time(),
-                "data": {
-                    "format": format_type,
-                    "player_id": player_id
-                }
+                "format": format_type,
+                "include_actions": True
             }
 
             # Send request and wait for response
@@ -503,6 +662,9 @@ class LLMGateway:
             response = await self._send_request_and_wait(game_id, action_message, timeout=10.0)
 
             if response.get("success", False):
+                # Notify spectators of successful action
+                await self._notify_spectators_action(game_id, action, response)
+
                 return {
                     "success": True,
                     "action_id": response.get("action_id", str(uuid.uuid4())),
@@ -521,14 +683,181 @@ class LLMGateway:
                 "error": f"Action submission failed: {str(e)}"
             }
 
+    async def get_spectator_game_state(self, game_id: str) -> Dict[str, Any]:
+        """Get game state for spectators (simplified view)"""
+        try:
+            if game_id not in self.game_sessions:
+                return {
+                    "turn": 1,
+                    "players": {},
+                    "game_info": {"status": "not_found", "turn": 1}
+                }
+
+            session = self.game_sessions[game_id]
+            return {
+                "turn": session.get("current_turn", 1),
+                "players": session.get("players", {}),
+                "game_info": {
+                    "status": session.get("status", "running"),
+                    "turn": session.get("current_turn", 1),
+                    "game_id": game_id
+                }
+            }
+
+        except Exception as e:
+            logger.error(f"Error getting spectator game state for {game_id}: {e}")
+            return {
+                "turn": 1,
+                "players": {},
+                "game_info": {"status": "error", "turn": 1}
+            }
+
+    async def _notify_spectators_action(self, game_id: str, action: Dict[str, Any], response: Dict[str, Any]):
+        """Notify spectators of player actions"""
+        try:
+            player_id = action.get("player_id")
+            if not player_id:
+                return
+
+            action_data = {
+                "type": action.get("action_type", "unknown"),
+                "from": action.get("from"),
+                "to": action.get("to"),
+                "details": action.get("details", {}),
+                "timestamp": time.time()
+            }
+
+            await connection_manager.broadcast_to_spectators(game_id, {
+                "type": "player_action",
+                "game_id": game_id,
+                "player_id": player_id,
+                "action": action_data,
+                "timestamp": time.time()
+            })
+
+        except Exception as e:
+            logger.error(f"Error notifying spectators of action in {game_id}: {e}")
+
+    async def notify_spectators_turn_change(self, game_id: str, turn_number: int):
+        """Notify spectators of turn changes"""
+        try:
+            # Update game session
+            if game_id in self.game_sessions:
+                self.game_sessions[game_id]["current_turn"] = turn_number
+
+            await connection_manager.broadcast_to_spectators(game_id, {
+                "type": "turn_update",
+                "game_id": game_id,
+                "turn": turn_number,
+                "timestamp": time.time()
+            })
+
+        except Exception as e:
+            logger.error(f"Error notifying spectators of turn change in {game_id}: {e}")
+
+    async def notify_spectators_game_state(self, game_id: str, state_data: Dict[str, Any]):
+        """Notify spectators of game state updates"""
+        try:
+            await connection_manager.broadcast_to_spectators(game_id, {
+                "type": "game_state",
+                "game_id": game_id,
+                "data": state_data,
+                "timestamp": time.time()
+            })
+
+        except Exception as e:
+            logger.error(f"Error notifying spectators of game state in {game_id}: {e}")
+
+    async def notify_spectators_game_start(self, game_id: str):
+        """Notify spectators that a game has started"""
+        try:
+            initial_state = await self.get_spectator_game_state(game_id)
+
+            await connection_manager.broadcast_to_spectators(game_id, {
+                "type": "game_started",
+                "game_id": game_id,
+                "data": initial_state,
+                "timestamp": time.time()
+            })
+
+        except Exception as e:
+            logger.error(f"Error notifying spectators of game start in {game_id}: {e}")
+
+    async def notify_spectators_game_end(self, game_id: str, result: Dict[str, Any]):
+        """Notify spectators that a game has ended"""
+        try:
+            await connection_manager.broadcast_to_spectators(game_id, {
+                "type": "game_ended",
+                "game_id": game_id,
+                "result": result,
+                "timestamp": time.time()
+            })
+
+        except Exception as e:
+            logger.error(f"Error notifying spectators of game end in {game_id}: {e}")
+
+    async def end_game(self, game_id: str, result: Dict[str, Any] = None):
+        """End a game session and clean up resources"""
+        try:
+            if game_id not in self.game_sessions:
+                logger.warning(f"Attempted to end non-existent game: {game_id}")
+                return
+
+            # Notify spectators before cleanup
+            end_result = result or {"reason": "Game ended", "winner": None}
+            await self.notify_spectators_game_end(game_id, end_result)
+
+            # Clean up game session
+            session = self.game_sessions[game_id]
+            logger.info(f"Ending game {game_id} after {time.time() - session.get('created_at', time.time()):.1f}s")
+
+            # Remove from active sessions
+            del self.game_sessions[game_id]
+
+            # Clean up any agent connections for this game
+            agents_to_remove = []
+            for agent_id, agent_data in self.active_agents.items():
+                if agent_data.get("game_id") == game_id:
+                    agents_to_remove.append(agent_id)
+
+            for agent_id in agents_to_remove:
+                del self.active_agents[agent_id]
+                logger.info(f"Removed agent {agent_id} from ended game {game_id}")
+
+            # Close proxy connection if it exists
+            await connection_state_manager.remove_connection(game_id)
+
+        except Exception as e:
+            logger.error(f"Error ending game {game_id}: {e}")
+
     async def get_health_status(self) -> Dict[str, Any]:
         """Get gateway health status"""
         try:
-            # Get stats from all managers
-            connection_stats = await connection_manager.get_connection_stats()
-            request_stats = await request_manager.get_stats()
-            connection_state_stats = await connection_state_manager.get_stats()
-            token_stats = await secure_token_manager.get_stats()
+            # Get stats from all managers - gracefully handle failures
+            connection_stats = {}
+            request_stats = {}
+            connection_state_stats = {}
+            token_stats = {}
+
+            try:
+                connection_stats = connection_manager.get_connection_stats()
+            except Exception as e:
+                logger.warning(f"Failed to get connection stats: {e}")
+
+            try:
+                request_stats = await request_manager.get_stats()
+            except Exception as e:
+                logger.warning(f"Failed to get request stats: {e}")
+
+            try:
+                connection_state_stats = await connection_state_manager.get_stats()
+            except Exception as e:
+                logger.warning(f"Failed to get connection state stats: {e}")
+
+            try:
+                token_stats = await secure_token_manager.get_stats()
+            except Exception as e:
+                logger.warning(f"Failed to get token stats: {e}")
 
             active_games = len(self.game_sessions)
             active_agents = len(self.active_agents)
@@ -638,15 +967,18 @@ async def shutdown_event():
 
 # Health check endpoint
 @app.get("/health")
-@limiter.limit(f"{settings.rate_limit_requests_per_minute}/minute") if limiter else lambda x: x
 async def health_check(request: Request):
-    """Health check endpoint"""
-    health_status = await gateway.get_health_status()
+    """Health check endpoint - no rate limiting for health checks"""
+    try:
+        health_status = await gateway.get_health_status()
 
-    if health_status["status"] == "unhealthy":
-        raise HTTPException(status_code=503, detail=health_status)
+        if health_status["status"] == "unhealthy":
+            raise HTTPException(status_code=503, detail=health_status)
 
-    return health_status
+        return health_status
+    except Exception as e:
+        logger.error(f"Health check failed: {e}")
+        return {"status": "unhealthy", "error": str(e)}
 
 
 # Import API endpoints and WebSocket handlers after app creation
@@ -664,6 +996,9 @@ def setup_routes():
 
     try:
         from websocket_handlers import register_websocket_routes
+        # Update the gateway reference in websocket_handlers
+        import websocket_handlers
+        websocket_handlers.gateway = gateway
         register_websocket_routes(app)
         logger.info("WebSocket handlers registered")
     except ImportError as e:

@@ -1,5 +1,20 @@
 services:
 
+  redis:
+    image: redis:7-alpine
+    container_name: fciv-redis
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
   fciv-net:
     image: freeciv/fciv-net
     build:
@@ -9,7 +24,10 @@ services:
         - SKIP_FREECIV_BUILD=${SKIP_FREECIV_BUILD:-false}
         - BUILD_JOBS=${BUILD_JOBS:-2}
     container_name: fciv-net
-    command: ["sleep", "infinity"]
+    depends_on:
+      redis:
+        condition: service_healthy
+    command: ["/bin/bash", "-c", "(sleep 30; /docker/freeciv-web-shared/startup-spectator.sh) & sleep infinity"]
     environment:
       # Database Configuration
       - DB_HOST=127.0.0.1
@@ -17,8 +35,8 @@ services:
       - DB_PASSWORD=changeme
       - DB_NAME=freeciv_web
       # LLM Gateway Configuration
-      - CACHE_HMAC_SECRET=${CACHE_HMAC_SECRET:-}
-      - API_KEY_SECRET=${API_KEY_SECRET:-}
+      - CACHE_HMAC_SECRET=${CACHE_HMAC_SECRET:-75d6fd1ee3fb974b9a04f64eae2d48f2d7acdbc294cda59bc75485bcfe0bf861}
+      - API_KEY_SECRET=${API_KEY_SECRET:-test12345678901234567890123456789012}
       - LLM_API_TOKENS=${LLM_API_TOKENS:-test-token-fc3d-001,test-token-fc3d-002}
       - SESSION_TIMEOUT_SECONDS=${SESSION_TIMEOUT_SECONDS:-3600}
       - MAX_LLM_AGENTS=${MAX_LLM_AGENTS:-10}
@@ -26,8 +44,12 @@ services:
       - CACHE_TTL_SECONDS=${CACHE_TTL_SECONDS:-5}
       - REQUESTS_PER_SECOND=${REQUESTS_PER_SECOND:-10}
       - BURST_CAPACITY=${BURST_CAPACITY:-100}
+      # Redis Configuration
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
     volumes:
       - ./freeciv-web:/docker/freeciv-web-shared
+      - .:/docker/project-root
       - mysql_data:/var/lib/mysql
     ports:
       - "8080:80"
@@ -36,6 +58,7 @@ services:
       - "7100-7109:7000-7009"
       - "8888:8080"
       - "8002:8002"
+      - "8003:8003"
     user: docker
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/civclientlauncher", "-X", "POST", "-d", "action=new"]
@@ -47,3 +70,4 @@ services:
 volumes:
   data:
   mysql_data:
+  redis_data:

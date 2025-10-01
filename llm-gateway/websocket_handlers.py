@@ -11,11 +11,11 @@ import logging
 import time
 from typing import Dict, Any, Optional
 from fastapi import WebSocket, WebSocketDisconnect, FastAPI
+import websockets
 
 try:
     from .connection_manager import connection_manager
     from .config import settings
-    from .main import gateway
     from .utils.origin_validator import validate_websocket_origin, get_websocket_origin_info, create_origin_rejection_response
     from .utils.rate_limiter import comprehensive_rate_limiter
     from .utils.constants import MAX_MESSAGE_SIZE_BYTES, ERROR_CODE_VALIDATION
@@ -25,13 +25,15 @@ except ImportError:
     from utils.origin_validator import validate_websocket_origin, get_websocket_origin_info, create_origin_rejection_response
     from utils.rate_limiter import comprehensive_rate_limiter
     from utils.constants import MAX_MESSAGE_SIZE_BYTES, ERROR_CODE_VALIDATION
-    # gateway will be available when main.py imports this
+
+# Gateway will be injected by main.py to avoid circular imports
+gateway = None
 
 logger = logging.getLogger("llm-gateway")
 
 
 class AgentWebSocketHandler:
-    """Handler for agent WebSocket connections"""
+    """Handler for agent WebSocket connections - pure pass-through to proxy"""
 
     def __init__(self, websocket: WebSocket, agent_id: str):
         self.websocket = websocket
@@ -40,6 +42,7 @@ class AgentWebSocketHandler:
         self.authenticated = False
         self.player_id: Optional[int] = None
         self.game_id: Optional[str] = None
+        self.proxy_connection: Optional[WebSocket] = None  # Connection to freeciv-proxy LLM handler
 
     async def handle_connection(self):
         """Handle the WebSocket connection lifecycle"""
@@ -110,7 +113,12 @@ class AgentWebSocketHandler:
             logger.error(f"Error in agent connection {self.agent_id}: {e}")
 
         finally:
-            # Cleanup
+            # Cleanup proxy connection
+            if self.proxy_connection:
+                await self.proxy_connection.close()
+                self.proxy_connection = None
+
+            # Cleanup connection manager
             if self.connection_id:
                 await connection_manager.handle_disconnect(self.connection_id)
 
@@ -127,185 +135,167 @@ class AgentWebSocketHandler:
         await self.websocket.send_text(json.dumps(welcome))
 
     async def _handle_message(self, message: Dict[str, Any]):
-        """Handle incoming message from agent"""
+        """Handle incoming message from agent - pass through to proxy"""
         message_type = message.get("type")
 
         if message_type == "llm_connect":
-            await self._handle_connect(message)
-        elif message_type == "state_query":
-            await self._handle_state_query(message)
-        elif message_type == "action":
-            await self._handle_action(message)
+            # First message - establish proxy connection and forward
+            await self._connect_to_proxy_and_forward(message)
+        elif self.authenticated and self.proxy_connection:
+            # All other messages - forward directly to proxy
+            await self._forward_to_proxy(message)
         elif message_type == "ping":
+            # Handle pings locally for connection health
             await self._handle_ping(message)
         else:
-            await self._send_error(f"Unknown message type: {message_type}")
+            await self._send_error("Not connected to proxy")
 
-    async def _handle_connect(self, message: Dict[str, Any]):
-        """Handle authentication message"""
+    async def _connect_to_proxy_and_forward(self, message: Dict[str, Any]):
+        """Connect to proxy LLM handler and forward the connect message"""
         try:
-            data = message.get("data", {})
-            api_token = data.get("api_token")
-            model = data.get("model")
-            game_id = data.get("game_id")
+            # Connect to the freeciv-proxy LLM handler endpoint
+            proxy_url = f"ws://{settings.freeciv_proxy_host}:{settings.freeciv_proxy_port}{settings.freeciv_proxy_ws_path}"
+            logger.info(f"Connecting agent {self.agent_id} to proxy: {proxy_url}")
 
-            if not all([api_token, model, game_id]):
-                await self._send_error("Missing required fields: api_token, model, game_id")
-                return
+            self.proxy_connection = await websockets.connect(proxy_url)
+            logger.info(f"Connected to proxy for agent {self.agent_id}")
 
-            # Register agent with gateway
-            config = {
-                "agent_id": self.agent_id,
-                "api_token": api_token,
-                "model": model,
-                "game_id": game_id
-            }
+            # Start listening for proxy messages in background
+            asyncio.create_task(self._listen_to_proxy())
 
-            if hasattr(gateway, 'register_agent'):
-                result = await gateway.register_agent(self.agent_id, config)
-            else:
-                # Fallback for testing
-                result = {
-                    "success": True,
-                    "session_id": f"session-{self.agent_id}",
-                    "player_id": 1
-                }
+            # Transform message format: flatten 'data' fields to top level for proxy
+            proxy_message = self._transform_to_proxy_format(message)
 
-            if result["success"]:
-                self.authenticated = True
-                self.game_id = game_id
-                self.player_id = result.get("player_id", 1)
+            # Forward the connect message to proxy
+            await self.proxy_connection.send(json.dumps(proxy_message))
+            logger.info(f"Forwarded llm_connect message for agent {self.agent_id}")
 
-                # Update connection info
-                if self.connection_id and self.connection_id in connection_manager.connections:
-                    connection_info = connection_manager.connections[self.connection_id]
-                    connection_info.authenticated = True
-                    connection_info.metadata.update({
-                        "game_id": game_id,
-                        "player_id": self.player_id,
-                        "model": model
-                    })
+            # Mark as authenticated to allow further pass-through
+            self.authenticated = True
 
-                response = {
-                    "type": "llm_connect",
-                    "agent_id": self.agent_id,
-                    "timestamp": time.time(),
-                    "data": {
-                        "type": "auth_success",
-                        "success": True,
-                        "agent_id": self.agent_id,
-                        "session_id": result.get("session_id"),
-                        "player_id": self.player_id,
-                        "game_id": game_id,
-                        "model": model
-                    }
-                }
-
-                logger.info(f"Agent {self.agent_id} authenticated for game {game_id}")
-
-            else:
-                response = {
-                    "type": "llm_connect",
-                    "agent_id": self.agent_id,
-                    "timestamp": time.time(),
-                    "data": {
-                        "type": "error",
-                        "success": False,
-                        "error_code": "E102",
-                        "error_message": result.get("error", "Authentication failed")
-                    }
-                }
-
-            await self.websocket.send_text(json.dumps(response))
+            # Extract game_id for connection tracking
+            if "data" in message:
+                self.game_id = message["data"].get("game_id")
 
         except Exception as e:
-            logger.error(f"Error in connect handler: {e}")
-            await self._send_error("Authentication failed")
+            logger.error(f"Failed to connect to proxy for agent {self.agent_id}: {e}")
+            await self._send_error(f"Failed to connect to game server: {e}")
 
-    async def _handle_state_query(self, message: Dict[str, Any]):
-        """Handle state query message"""
-        if not self.authenticated:
-            await self._send_error("Not authenticated")
-            return
-
+    async def _listen_to_proxy(self):
+        """Listen for messages from proxy and forward to agent"""
         try:
-            data = message.get("data", {})
-            format_type = data.get("format", "llm_optimized")
-            correlation_id = message.get("correlation_id")
+            while self.proxy_connection:
+                try:
+                    # Receive message from proxy
+                    proxy_message = await self.proxy_connection.recv()
 
-            if hasattr(gateway, 'get_game_state'):
-                result = await gateway.get_game_state(self.game_id, self.player_id, format_type)
-            else:
-                # Fallback for testing
-                result = {
-                    "success": True,
-                    "format": format_type,
-                    "data": {
-                        "turn": 1,
-                        "strategic_summary": {"cities_count": 1}
-                    }
-                }
+                    # Transform proxy messages to agent format
+                    try:
+                        msg_data = json.loads(proxy_message)
+                        msg_type = msg_data.get("type")
 
-            response = {
-                "type": "state_update",
-                "agent_id": self.agent_id,
-                "timestamp": time.time(),
-                "correlation_id": correlation_id,
-                "data": {
-                    "type": "state_response",
-                    "format": format_type,
-                    "data": result.get("data", {}),
-                    "timestamp": time.time()
-                }
-            }
+                        # Filter out welcome message - agent doesn't expect it
+                        if msg_type == "welcome":
+                            logger.debug(f"Filtered welcome message for agent {self.agent_id}")
+                            continue
 
-            await self.websocket.send_text(json.dumps(response))
+                        # Transform auth_success from proxy to agent format
+                        if msg_type == "auth_success":
+                            # Agent expects: {type: "llm_connect", data: {type: "auth_success", ...}}
+                            agent_message = {
+                                "type": "llm_connect",
+                                "agent_id": self.agent_id,
+                                "timestamp": time.time(),
+                                "data": {**msg_data, "success": True}
+                            }
+                            proxy_message = json.dumps(agent_message)
+                        # Transform state_response to state_update
+                        elif msg_type == "state_response":
+                            # Proxy sends: {type: "state_response", data: {...state...}, format: "llm_optimized", ...}
+                            # Agent expects: {type: "state_update", turn: 1, players: {}, ...state data at top level...}
+                            logger.debug(f"State response from proxy: {json.dumps(msg_data, indent=2)[:500]}")
+
+                            # Extract state data from nested 'data' field and flatten to top level
+                            state_data = msg_data.get("data", {})
+                            agent_message = {
+                                "type": "state_update",
+                                **state_data,  # Flatten state data to top level
+                                "format": msg_data.get("format"),
+                                "cached": msg_data.get("cached"),
+                                "timestamp": msg_data.get("timestamp")
+                            }
+                            proxy_message = json.dumps(agent_message)
+                            logger.debug(f"Transformed to state_update: {json.dumps(agent_message, indent=2)[:500]}")
+
+                    except json.JSONDecodeError:
+                        pass  # Forward non-JSON messages as-is
+
+                    # Forward to agent
+                    await self.websocket.send_text(proxy_message)
+                    logger.debug(f"Forwarded proxy message to agent {self.agent_id}")
+
+                except websockets.ConnectionClosed:
+                    logger.info(f"Proxy connection closed for agent {self.agent_id}")
+                    break
+                except Exception as e:
+                    logger.error(f"Error forwarding proxy message to agent {self.agent_id}: {e}")
 
         except Exception as e:
-            logger.error(f"Error in state query handler: {e}")
-            await self._send_error("State query failed")
+            logger.error(f"Error in proxy listener for agent {self.agent_id}: {e}")
+        finally:
+            # Clean up proxy connection
+            if self.proxy_connection:
+                await self.proxy_connection.close()
+                self.proxy_connection = None
 
-    async def _handle_action(self, message: Dict[str, Any]):
-        """Handle action message"""
-        if not self.authenticated:
-            await self._send_error("Not authenticated")
-            return
-
+    async def _forward_to_proxy(self, message: Dict[str, Any]):
+        """Forward message from agent to proxy"""
         try:
-            data = message.get("data", {})
-            correlation_id = message.get("correlation_id")
-
-            # Add player_id if not present
-            if "player_id" not in data:
-                data["player_id"] = self.player_id
-
-            if hasattr(gateway, 'submit_action'):
-                result = await gateway.submit_action(self.game_id, data)
+            if self.proxy_connection:
+                # Transform message format for proxy
+                proxy_message = self._transform_to_proxy_format(message)
+                await self.proxy_connection.send(json.dumps(proxy_message))
+                logger.debug(f"Forwarded agent message to proxy: {message.get('type')}")
             else:
-                # Fallback for testing
-                result = {
-                    "success": True,
-                    "action_id": f"action-{int(time.time())}"
-                }
-
-            response = {
-                "type": "action_result",
-                "agent_id": self.agent_id,
-                "timestamp": time.time(),
-                "correlation_id": correlation_id,
-                "data": {
-                    "type": "action_result",
-                    "success": result["success"],
-                    "action_type": data.get("action_type"),
-                    "result": result
-                }
-            }
-
-            await self.websocket.send_text(json.dumps(response))
-
+                await self._send_error("Proxy connection lost")
         except Exception as e:
-            logger.error(f"Error in action handler: {e}")
-            await self._send_error("Action failed")
+            logger.error(f"Failed to forward message to proxy: {e}")
+            await self._send_error(f"Failed to forward message: {e}")
+
+    def _transform_to_proxy_format(self, message: Dict[str, Any]) -> Dict[str, Any]:
+        """Transform agent message format to proxy format by flattening 'data' fields"""
+        msg_type = message.get("type")
+
+        # If message has 'data' field, flatten it to top level
+        if "data" in message:
+            transformed = {**message}  # Copy message
+            data_fields = transformed.pop("data")
+            transformed.update(data_fields)  # Merge data fields to top level
+        else:
+            transformed = {**message}
+
+        # Filter fields based on proxy's schema for each message type
+        if msg_type == "llm_connect":
+            # Proxy expects: type, agent_id, api_token, capabilities (optional), port (optional), nation (optional), leader_name (optional)
+            allowed_fields = {"type", "agent_id", "api_token", "capabilities", "port", "nation", "leader_name"}
+            transformed = {k: v for k, v in transformed.items() if k in allowed_fields}
+        elif msg_type == "state_query":
+            # Proxy expects: type, format (opt), include_actions (opt), player_id (opt)
+            allowed_fields = {"type", "format", "include_actions", "player_id"}
+            transformed = {k: v for k, v in transformed.items() if k in allowed_fields}
+        elif msg_type == "ping":
+            # Proxy expects: type, timestamp (opt)
+            allowed_fields = {"type", "timestamp"}
+            transformed = {k: v for k, v in transformed.items() if k in allowed_fields}
+        elif msg_type == "player_ready":
+            # Proxy expects: type, is_ready (opt, defaults to True)
+            allowed_fields = {"type", "is_ready"}
+            transformed = {k: v for k, v in transformed.items() if k in allowed_fields}
+        # For other types (action, etc), pass through as-is
+
+        return transformed
+
+    # Removed complex state query and action handlers - now handled by pass-through
 
     async def _handle_ping(self, message: Dict[str, Any]):
         """Handle ping message"""
@@ -397,10 +387,10 @@ class SpectatorWebSocketHandler:
         await self.websocket.accept()
 
         try:
-            # Check if game exists
-            if hasattr(gateway, 'game_sessions') and self.game_id not in gateway.game_sessions:
-                await self._send_error("Game not found")
-                return
+            # Check if game exists - allow spectators to connect even if game doesn't exist yet
+            game_exists = hasattr(gateway, 'game_sessions') and self.game_id in gateway.game_sessions
+            if not game_exists:
+                logger.info(f"Spectator connecting to game {self.game_id} - game session not found, will wait for game to start")
 
             # Add to connection manager
             self.connection_id = await connection_manager.add_connection(
@@ -429,9 +419,14 @@ class SpectatorWebSocketHandler:
 
                     message = json.loads(data)
 
-                    # Handle basic messages like ping
-                    if message.get("type") == "ping":
+                    # Handle spectator messages
+                    message_type = message.get("type")
+                    if message_type == "ping":
                         await self._handle_ping()
+                    elif message_type == "spectator_join":
+                        await self._handle_spectator_join(message)
+                    else:
+                        logger.debug(f"Unknown spectator message type: {message_type}")
 
                 except WebSocketDisconnect:
                     logger.info(f"Spectator disconnected from game {self.game_id}")
@@ -454,11 +449,15 @@ class SpectatorWebSocketHandler:
     async def _send_welcome(self):
         """Send welcome message to spectator"""
         welcome = {
-            "type": "spectator_welcome",
+            "type": "spectator_joined",
             "game_id": self.game_id,
-            "message": f"Connected as spectator to game {self.game_id}"
+            "message": f"Connected as spectator to game {self.game_id}",
+            "timestamp": time.time()
         }
         await self.websocket.send_text(json.dumps(welcome))
+
+        # Send initial game state if available
+        await self._send_initial_game_state()
 
     async def _handle_ping(self):
         """Handle ping from spectator"""
@@ -468,6 +467,106 @@ class SpectatorWebSocketHandler:
             "timestamp": time.time()
         }
         await self.websocket.send_text(json.dumps(pong))
+
+    async def _handle_spectator_join(self, message: Dict[str, Any]):
+        """Handle spectator join message"""
+        # Already handled in _send_welcome, but can send confirmation
+        response = {
+            "type": "spectator_joined",
+            "game_id": self.game_id,
+            "spectator_id": message.get("spectator_id"),
+            "message": "Successfully joined as spectator",
+            "timestamp": time.time()
+        }
+        await self.websocket.send_text(json.dumps(response))
+
+    async def _send_initial_game_state(self):
+        """Send initial game state to spectator"""
+        try:
+            if hasattr(gateway, 'get_spectator_game_state'):
+                game_state = await gateway.get_spectator_game_state(self.game_id)
+            elif hasattr(gateway, 'game_sessions') and self.game_id in gateway.game_sessions:
+                # Get basic game info from session
+                session = gateway.game_sessions[self.game_id]
+                game_state = {
+                    "turn": getattr(session, 'current_turn', 1),
+                    "players": getattr(session, 'players', {}),
+                    "game_info": {
+                        "status": getattr(session, 'status', 'running'),
+                        "turn": getattr(session, 'current_turn', 1)
+                    }
+                }
+            else:
+                # Fallback state
+                game_state = {
+                    "turn": 1,
+                    "players": {},
+                    "game_info": {"status": "running", "turn": 1}
+                }
+
+            state_message = {
+                "type": "game_state",
+                "game_id": self.game_id,
+                "data": game_state,
+                "timestamp": time.time()
+            }
+            await self.websocket.send_text(json.dumps(state_message))
+
+        except Exception as e:
+            logger.error(f"Error sending initial game state to spectator: {e}")
+
+    async def send_game_update(self, update_data: Dict[str, Any]):
+        """Send game update to spectator (called by game session)"""
+        try:
+            message = {
+                "type": "game_state",
+                "game_id": self.game_id,
+                "data": update_data,
+                "timestamp": time.time()
+            }
+            await self.websocket.send_text(json.dumps(message))
+        except Exception as e:
+            logger.error(f"Error sending game update to spectator: {e}")
+
+    async def send_turn_update(self, turn_number: int):
+        """Send turn update to spectator"""
+        try:
+            message = {
+                "type": "turn_update",
+                "game_id": self.game_id,
+                "turn": turn_number,
+                "timestamp": time.time()
+            }
+            await self.websocket.send_text(json.dumps(message))
+        except Exception as e:
+            logger.error(f"Error sending turn update to spectator: {e}")
+
+    async def send_player_action(self, player_id: int, action_data: Dict[str, Any]):
+        """Send player action to spectator"""
+        try:
+            message = {
+                "type": "player_action",
+                "game_id": self.game_id,
+                "player_id": player_id,
+                "action": action_data,
+                "timestamp": time.time()
+            }
+            await self.websocket.send_text(json.dumps(message))
+        except Exception as e:
+            logger.error(f"Error sending player action to spectator: {e}")
+
+    async def send_game_ended(self, result_data: Dict[str, Any]):
+        """Send game ended message to spectator"""
+        try:
+            message = {
+                "type": "game_ended",
+                "game_id": self.game_id,
+                "result": result_data,
+                "timestamp": time.time()
+            }
+            await self.websocket.send_text(json.dumps(message))
+        except Exception as e:
+            logger.error(f"Error sending game ended to spectator: {e}")
 
     async def _send_error(self, error_message: str):
         """Send error message"""

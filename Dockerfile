@@ -65,7 +65,8 @@ RUN sudo chown -R docker:docker /docker/freeciv
 WORKDIR /docker/freeciv
 RUN if [ "$SKIP_FREECIV_BUILD" = "false" ] ; then \
         echo "Building FreeCiv (this may take 20-30 minutes on ARM64)..." && \
-        MAKEFLAGS="-j${BUILD_JOBS}" ./prepare_freeciv.sh ; \
+        MAKEFLAGS="-j${BUILD_JOBS}" ./prepare_freeciv.sh && \
+        cd build && ninja install ; \
     else \
         echo "Skipping FreeCiv build (SKIP_FREECIV_BUILD=true)" ; \
     fi
@@ -80,8 +81,13 @@ COPY --from=freeciv-builder /home/docker/freeciv /home/docker/freeciv
 # Copy remaining application files (main directories already copied in dependencies stage)
 COPY .git /docker/.git
 COPY LICENSE.md /docker/LICENSE.md
+COPY llm-gateway /docker/llm-gateway
 
 RUN sudo chown -R docker:docker /docker
+
+# Install Python dependencies for freeciv-proxy and LLM Gateway
+RUN pip install --break-system-packages python-dotenv && \
+    cd /docker/llm-gateway && pip install --break-system-packages -r requirements.txt
 
 ## Give server access to savegames / scenarios directory.
 ## TODO: Figure out more targeted solution.

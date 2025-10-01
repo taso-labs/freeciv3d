@@ -531,16 +531,46 @@ class StateExtractor:
 
         return changes
 
+    def _ensure_valid_map(self, map_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Ensure map has valid dimensions (width, height >= 1)."""
+        if not map_data:
+            return {'width': 80, 'height': 50, 'tiles': [], 'visibility': {}}
+
+        # Ensure width and height are at least 1
+        if map_data.get('width', 0) < 1:
+            map_data['width'] = 80
+        if map_data.get('height', 0) < 1:
+            map_data['height'] = 50
+
+        # Ensure required fields exist
+        if 'tiles' not in map_data:
+            map_data['tiles'] = []
+        if 'visibility' not in map_data:
+            map_data['visibility'] = {}
+
+        return map_data
+
+    def _ensure_list(self, data: Any) -> List:
+        """Ensure data is returned as a list (convert dict to list if needed)."""
+        if data is None:
+            return []
+        if isinstance(data, list):
+            return data
+        if isinstance(data, dict):
+            return list(data.values())
+        return []
+
     def _format_full_state(self, raw_state: Dict[str, Any], player_id: int) -> Dict[str, Any]:
         """Format complete game state"""
         return {
             'format': 'full',
             'turn': raw_state.get('turn'),
             'phase': raw_state.get('phase'),
-            'map': raw_state.get('map'),
-            'units': raw_state.get('units', []),
-            'cities': raw_state.get('cities', []),
-            'players': raw_state.get('players', []),
+            'map': self._ensure_valid_map(raw_state.get('map', {})),
+            'game': raw_state.get('game', {'turn': raw_state.get('turn', 1), 'phase': raw_state.get('phase', 'movement'), 'is_over': False, 'current_player': player_id}),
+            'units': self._ensure_list(raw_state.get('units')),
+            'cities': self._ensure_list(raw_state.get('cities')),
+            'players': self._ensure_list(raw_state.get('players')),
             'techs': raw_state.get('techs', {}),
             'timestamp': time.time(),
             'player_perspective': player_id
@@ -567,6 +597,12 @@ class StateExtractor:
             'strategic': strategic,
             'tactical': tactical,
             'economic': economic,
+            # Required fields for game_arena FreeCivState compatibility
+            'game': raw_state.get('game', {'turn': raw_state.get('turn', 1), 'phase': raw_state.get('phase', 'movement'), 'is_over': False, 'current_player': player_id}),
+            'map': self._ensure_valid_map(raw_state.get('map', {})),
+            'players': self._ensure_list(raw_state.get('players')),
+            'units': self._ensure_list(raw_state.get('units')),
+            'cities': self._ensure_list(raw_state.get('cities')),
             'timestamp': time.time(),
             'player_perspective': player_id
         }

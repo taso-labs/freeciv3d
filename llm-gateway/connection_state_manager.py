@@ -287,8 +287,8 @@ class ConnectionStateManager:
             if not connection_info.connection:
                 return False
 
-            # Check if WebSocket is closed
-            if connection_info.connection.closed:
+            # Check if WebSocket is closed (close_code is None when open)
+            if connection_info.connection.close_code is not None:
                 await self._mark_connection_unhealthy_unsafe(game_id)
                 return False
 
@@ -363,7 +363,7 @@ class ConnectionStateManager:
         """Close a connection info object"""
         if connection_info.connection:
             try:
-                if not connection_info.connection.closed:
+                if connection_info.connection.close_code is None:
                     await connection_info.connection.close()
             except Exception as e:
                 logger.debug(f"Error closing connection: {e}")
@@ -408,8 +408,8 @@ class ConnectionStateManager:
                 continue
 
             try:
-                # Check if connection is still open
-                if connection_info.connection and not connection_info.connection.closed:
+                # Check if connection is still open (close_code is None when open)
+                if connection_info.connection and connection_info.connection.close_code is None:
                     # Send ping to test connection
                     await asyncio.wait_for(
                         connection_info.connection.ping(),
