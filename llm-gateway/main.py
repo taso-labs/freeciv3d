@@ -109,6 +109,18 @@ class LLMGateway:
         self.active_agents: Dict[str, Dict[str, Any]] = {}
         self._running = False
 
+        # Backwards-compatible maps used by some tests and legacy code paths.
+        # Prefer using connection_state_manager for real connection operations,
+        # but keep these structures to avoid AttributeError and to provide
+        # low-risk compatibility during incremental refactors.
+        self.proxy_connections: Dict[str, Any] = {}
+        self.failed_connections: Dict[str, float] = {}
+        self.connection_retry_counts: Dict[str, int] = {}
+        self.game_sessions: Dict[str, Dict[str, Any]] = {}
+
+        # Lock to protect gateway-specific ephemeral state (maps above)
+        self._state_lock = asyncio.Lock()
+
         # Note: Complex state management removed - gateway acts as pure pass-through
         # The proxy's LLM handler manages game state, authentication, and actions
 
@@ -257,15 +269,15 @@ class LLMGateway:
 
     async def _ensure_proxy_connection(self, game_id: str) -> bool:
         """Ensure proxy connection exists with retry logic"""
-        # Check if connection is in cooldown period
-        if game_id in self.failed_connections:
-            last_failure = self.failed_connections[game_id]
-            cooldown_period = COOLDOWN_PERIOD
-            if time.time() - last_failure < cooldown_period:
-                logger.debug(f"Connection for game {game_id} in cooldown period")
-                return False
+        # Check if connection is in cooldown period (protect map with lock)
+        async with self._state_lock:
+            last_failure = self.failed_connections.get(game_id)
+            retry_count = self.connection_retry_counts.get(game_id, 0)
 
-        retry_count = self.connection_retry_counts.get(game_id, 0)
+        cooldown_period = COOLDOWN_PERIOD
+        if last_failure and (time.time() - last_failure < cooldown_period):
+            logger.debug(f"Connection for game {game_id} in cooldown period")
+            return False
 
         for attempt in range(settings.max_retry_attempts):
             try:
@@ -274,9 +286,11 @@ class LLMGateway:
                 success = await self.connect_to_freeciv_proxy(game_id)
                 if success.get("success", False):
                     # Reset retry count on successful connection
-                    self.connection_retry_counts[game_id] = 0
-                    if game_id in self.failed_connections:
-                        del self.failed_connections[game_id]
+                    async with self._state_lock:
+                        self.connection_retry_counts[game_id] = 0
+                        if game_id in self.failed_connections:
+                            del self.failed_connections[game_id]
+
                     logger.info(f"Successfully connected to proxy for game {game_id}")
                     return True
 
@@ -296,26 +310,35 @@ class LLMGateway:
                 logger.info(f"Waiting {total_delay:.2f}s before retry for game {game_id}")
                 await asyncio.sleep(total_delay)
 
-        # All attempts failed
-        self.connection_retry_counts[game_id] = retry_count + 1
+        # All attempts failed - increment retry count and handle failure
+        async with self._state_lock:
+            self.connection_retry_counts[game_id] = retry_count + 1
+
         await self._handle_connection_failure(game_id)
         return False
 
     async def _is_connection_healthy(self, game_id: str) -> bool:
         """Check if connection is healthy"""
-        if game_id not in self.proxy_connections:
+        # Prefer delegating health checks to the centralized ConnectionStateManager
+        try:
+            if connection_state_manager:
+                return await connection_state_manager.is_connection_healthy(game_id)
+        except Exception:
+            # Fall back to local proxy_connections if connection_state_manager fails
+            logger.debug("connection_state_manager health check failed, falling back to local map", exc_info=True)
+
+        # Fallback: inspect local map under lock
+        async with self._state_lock:
+            proxy_ws = self.proxy_connections.get(game_id)
+
+        if not proxy_ws:
             return False
 
         try:
-            proxy_ws = self.proxy_connections[game_id]
-            # Check if WebSocket is closed (close_code is None when open)
-            if proxy_ws.close_code is not None:
+            if getattr(proxy_ws, "close_code", None) is not None:
                 return False
-
-            # Send a ping to test connection
             await proxy_ws.ping()
             return True
-
         except Exception as e:
             logger.debug(f"Connection health check failed for game {game_id}: {e}")
             return False
@@ -345,12 +368,14 @@ class LLMGateway:
             # Handle LLM handler authentication response
             if response_data.get("type") == "auth_success":
                 # Store session info in game sessions
-                if game_id not in self.game_sessions:
-                    self.game_sessions[game_id] = {}
+                # Store session info under lock
+                async with self._state_lock:
+                    if game_id not in self.game_sessions:
+                        self.game_sessions[game_id] = {}
 
-                self.game_sessions[game_id]["player_id"] = response_data.get("player_id")
-                self.game_sessions[game_id]["session_id"] = response_data.get("session_id")
-                self.game_sessions[game_id]["agent_id"] = response_data.get("agent_id")
+                    self.game_sessions[game_id]["player_id"] = response_data.get("player_id")
+                    self.game_sessions[game_id]["session_id"] = response_data.get("session_id")
+                    self.game_sessions[game_id]["agent_id"] = response_data.get("agent_id")
 
                 logger.info(f"Successfully authenticated LLM agent for game {game_id}: player_id={response_data.get('player_id')}")
                 return {"success": True, "player_id": response_data.get("player_id")}
@@ -362,8 +387,8 @@ class LLMGateway:
         except asyncio.TimeoutError:
             return {"success": False, "error": "Game initialization timeout"}
         except Exception as e:
-            logger.error(f"Error initializing FreeCiv game: {e}")
-            return {"success": False, "error": str(e)}
+            logger.error("Error initializing FreeCiv game", exc_info=True)
+            return {"success": False, "error": "Internal server error"}
 
     async def _listen_to_proxy_messages(self, game_id: str):
         """Background task to listen for messages from FreeCiv proxy"""
@@ -496,18 +521,30 @@ class LLMGateway:
         logger.warning(f"Handling connection failure for game {game_id}")
 
         # Record failure time
-        self.failed_connections[game_id] = time.time()
+        async with self._state_lock:
+            self.failed_connections[game_id] = time.time()
 
-        # Remove the failed connection
-        if game_id in self.proxy_connections:
+            # Remove the failed connection from local map if present
+            proxy_ws = self.proxy_connections.pop(game_id, None)
+
+        if proxy_ws:
             try:
-                await self.proxy_connections[game_id].close()
-            except:
-                pass
-            del self.proxy_connections[game_id]
+                await proxy_ws.close()
+            except Exception as e:
+                logger.debug(f"Error closing failed proxy connection for {game_id}: {e}")
+
+        # Also inform connection_state_manager to mark/remove the connection
+        try:
+            if connection_state_manager:
+                await connection_state_manager.mark_connection_failed(game_id, "gateway detected failure")
+                await connection_state_manager.remove_connection(game_id)
+        except Exception:
+            logger.debug("connection_state_manager handling failed during _handle_connection_failure", exc_info=True)
 
         # Implement circuit breaker pattern
-        retry_count = self.connection_retry_counts.get(game_id, 0)
+        async with self._state_lock:
+            retry_count = self.connection_retry_counts.get(game_id, 0)
+
         if retry_count >= settings.max_retry_attempts:
             logger.error(f"Max retry attempts reached for game {game_id}. Implementing circuit breaker.")
             # Could trigger alerts, disable game, etc.
@@ -977,8 +1014,10 @@ async def health_check(request: Request):
 
         return health_status
     except Exception as e:
-        logger.error(f"Health check failed: {e}")
-        return {"status": "unhealthy", "error": str(e)}
+        # Log full exception (including traceback) server-side, but return a
+        # generic error message to the client to avoid leaking internals.
+        logger.error("Health check failed", exc_info=True)
+        return {"status": "unhealthy", "error": "Internal server error"}
 
 
 # Import API endpoints and WebSocket handlers after app creation

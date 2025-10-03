@@ -344,8 +344,14 @@ function handle_spectator_freeciv_message(message) {
       break;
 
     default:
-      // Try to route to existing packet handlers
-      if (typeof packet_handlers !== 'undefined' && packet_handlers[message.pid]) {
+      // Try to route to existing packet handlers.
+      // Ensure the property is an own property and that it's a function
+      // before invoking to avoid prototype pollution or unexpected calls.
+      if (
+        typeof packet_handlers !== 'undefined' &&
+        Object.prototype.hasOwnProperty.call(packet_handlers, message.pid) &&
+        typeof packet_handlers[message.pid] === 'function'
+      ) {
         packet_handlers[message.pid](message);
       }
       break;
