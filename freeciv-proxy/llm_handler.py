@@ -943,10 +943,14 @@ class LLMWSHandler(websocket.WebSocketHandler):
 
             logger.info(f"LLM agent {self.agent_id} connected to civserver on port {port}")
 
-            # Register player with game session manager
-            game_session = game_session_manager.get_or_create_session(game_id, port, min_players=2)
-            game_session.add_player(self.agent_id, self.player_id, self)
-            logger.info(f"Registered agent {self.agent_id} with game session {game_id}")
+            # Register player with game session manager (async)
+            async def register_with_session():
+                game_session = await game_session_manager.get_or_create_session(game_id, port, min_players=2)
+                game_session.add_player(self.agent_id, self.player_id, self)
+                logger.info(f"Registered agent {self.agent_id} with game session {game_id}")
+
+            # Schedule async registration
+            asyncio.create_task(register_with_session())
 
         except Exception as e:
             logger.exception(f"Failed to connect LLM agent to civserver: {e}")

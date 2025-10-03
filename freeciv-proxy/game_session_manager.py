@@ -164,6 +164,11 @@ class GameSession:
                 logger.error(f"Game {self.game_id}: No civcom connection available!")
                 return
 
+            # Check if civcom connection is alive
+            if not civcom.is_alive():
+                logger.error(f"Game {self.game_id}: civcom connection is dead!")
+                return
+
             # Send game settings
             logger.info(f"Game {self.game_id}: Configuring game settings...")
             civcom.queue_to_civserver(json.dumps({"pid": 26, "message": f"/set minplayers {len(self.players)}"}))
@@ -221,14 +226,15 @@ class GameSessionManager:
         self.sessions: Dict[str, GameSession] = {}
         self._lock = asyncio.Lock()
 
-    def get_or_create_session(self, game_id: str, civserver_port: int,
-                             min_players: int = 2) -> GameSession:
-        """Get existing session or create new one"""
-        if game_id not in self.sessions:
-            session = GameSession(game_id, civserver_port, min_players)
-            self.sessions[game_id] = session
-            logger.info(f"Created new game session: {game_id} on port {civserver_port}")
-        return self.sessions[game_id]
+    async def get_or_create_session(self, game_id: str, civserver_port: int,
+                                   min_players: int = 2) -> GameSession:
+        """Get existing session or create new one (thread-safe)"""
+        async with self._lock:
+            if game_id not in self.sessions:
+                session = GameSession(game_id, civserver_port, min_players)
+                self.sessions[game_id] = session
+                logger.info(f"Created new game session: {game_id} on port {civserver_port}")
+            return self.sessions[game_id]
 
     def get_session(self, game_id: str) -> Optional[GameSession]:
         """Get existing session"""

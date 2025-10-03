@@ -340,8 +340,8 @@ def get_agent_config(active_agents: Dict[str, Any], agent_id: str) -> Optional[D
     if agent_id not in active_agents:
         return None
 
-    # Then check if agent has config
-    agent_data = active_agents.get(agent_id, {})
+    # Direct access since we already verified existence
+    agent_data = active_agents[agent_id]
     if "config" not in agent_data:
         return None
 
