@@ -95,6 +95,23 @@ class CivCom(Thread):
                     try:
                         packet_str = self.net_buf[:-1].decode('utf-8')
                         self.parse_and_store_packet(packet_str)
+
+                        # Log important packet types
+                        try:
+                            packet_json = json.loads(packet_str)
+                            pid = packet_json.get('pid')
+                            if pid == 95:  # PACKET_UNIT_INFO
+                                logger.debug(f"← Received PACKET_UNIT_INFO (pid=95) for {self.username}")
+                            elif pid == 85:  # PACKET_CITY_INFO
+                                logger.debug(f"← Received PACKET_CITY_INFO (pid=85) for {self.username}")
+                            elif pid == 24:  # PACKET_GAME_INFO
+                                logger.debug(f"← Received PACKET_GAME_INFO (pid=24) - game starting for {self.username}")
+                            elif pid == 26:  # PACKET_CHAT_MSG - could be response to /start
+                                msg_text = packet_json.get('message', '')
+                                if 'start' in msg_text.lower() or 'game' in msg_text.lower():
+                                    print(f"[DEBUG civcom] ← Received chat response: {msg_text}", flush=True)
+                        except:
+                            pass  # Not JSON or parsing failed, ignore
                     except Exception as e:
                         logger.debug(f"Error parsing packet for state: {e}")
 
@@ -216,8 +233,28 @@ class CivCom(Thread):
                     header +
                     utf8_encoded +
                     b'\0')
-                print(f"[DEBUG civcom] ✓ Sent packet to civserver: {net_message[:150]}", flush=True)
-        except Exception:
+
+                # Enhanced logging for /start commands and important packets
+                try:
+                    msg_json = json.loads(net_message)
+                    pid = msg_json.get('pid')
+                    message_text = msg_json.get('message', '')
+
+                    if pid == 26 and '/start' in message_text:
+                        print(f"[DEBUG civcom] 🚀 SENDING /START COMMAND to civserver port {self.civserverport}", flush=True)
+                        logger.info(f"🚀 Sent /start command to civserver on port {self.civserverport} for {self.username}")
+                    elif pid == 26:
+                        print(f"[DEBUG civcom] 💬 Sent chat message to civserver: {message_text}", flush=True)
+                    elif pid == 10:
+                        print(f"[DEBUG civcom] 🎭 Sent PACKET_NATION_SELECT_REQ (nation_no={msg_json.get('nation_no')})", flush=True)
+                    elif pid == 11:
+                        print(f"[DEBUG civcom] ✓ Sent PACKET_PLAYER_READY (player_no={msg_json.get('player_no')})", flush=True)
+                    else:
+                        print(f"[DEBUG civcom] ✓ Sent packet pid={pid} to civserver: {net_message[:150]}", flush=True)
+                except:
+                    print(f"[DEBUG civcom] ✓ Sent packet to civserver: {net_message[:150]}", flush=True)
+        except Exception as e:
+            logger.error(f"Failed to send packet to civserver port {self.civserverport}: {e}")
             self.send_error_to_client(
                 "Proxy unable to communicate with civserver on port " + str(self.civserverport))
         finally:

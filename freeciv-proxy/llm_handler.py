@@ -22,6 +22,7 @@ from security import InputSanitizer, SecurityError, SecurityLogger
 from rate_limiter import DistributedRateLimiter
 from session_manager import session_manager, SessionState
 from error_handler import error_handler, ErrorSeverity, ErrorCategory
+from game_session_manager import game_session_manager
 from typing import Dict, Any, Optional, List
 
 logger = logging.getLogger("freeciv-proxy")
@@ -238,13 +239,19 @@ class LLMWSHandler(websocket.WebSocketHandler):
             # Use port 6000 (singleplayer but we'll configure for multi) since multiplayer ports had issues
             # Ports 6001/6004 crashed, 6007 may have existing players
             civserver_port = msg_data.get('port', 6000)  # Try port 6000 (singleplayer, will set minplayers)
+
+            # Get or create game session for coordination
+            game_id = msg_data.get('data', {}).get('game_id', 'default_game')
+            logger.info(f"Agent {self.agent_id} joining game session '{game_id}' on port {civserver_port}")
+
+            # Connect to civserver
             logger.info(f"Connecting agent {self.agent_id} to civserver port {civserver_port}")
-            self._connect_to_civserver(civserver_port)
+            self._connect_to_civserver(civserver_port, game_id)
 
             # After connection, complete pregame flow: select nation and mark ready
             # Extract nation preference from message
-            nation_name = msg_data.get('nation', 'random')
-            leader_name = msg_data.get('leader_name', self.agent_id)
+            nation_name = msg_data.get('data', {}).get('nation') or msg_data.get('nation', 'random')
+            leader_name = msg_data.get('data', {}).get('leader_name') or msg_data.get('leader_name', self.agent_id)
 
             print(f"[DEBUG] Starting nation selection for {self.agent_id}: nation={nation_name}, leader={leader_name}", flush=True)
 
@@ -270,6 +277,11 @@ class LLMWSHandler(websocket.WebSocketHandler):
             print(f"[DEBUG] Packet queued successfully", flush=True)
             logger.info(f"Sent PACKET_NATION_SELECT_REQ for {nation_name} (ID {nation_id}) - Leader: {leader_name}")
 
+            # Register with game session manager that nation was selected
+            game_session = game_session_manager.get_session(game_id)
+            if game_session:
+                game_session.mark_nation_selected(self.agent_id)
+
             # Wait briefly for nation selection to process
             time.sleep(0.5)
 
@@ -281,6 +293,10 @@ class LLMWSHandler(websocket.WebSocketHandler):
             })
             self.civcom.queue_to_civserver(ready_packet)
             logger.info(f"Sent PACKET_PLAYER_READY for player {self.player_id}")
+
+            # Register with game session manager that player is ready
+            if game_session:
+                game_session.mark_player_ready(self.agent_id)
 
             # Send success response with session information
             self.write_message(json.dumps({
@@ -902,8 +918,8 @@ class LLMWSHandler(websocket.WebSocketHandler):
         logger.debug(f"Nation '{nation_name}' → ID {nation_id}")
         return nation_id
 
-    def _connect_to_civserver(self, port: int):
-        """Connect to civserver (simplified for MVP)"""
+    def _connect_to_civserver(self, port: int, game_id: str):
+        """Connect to civserver and register with game session manager"""
         try:
             # Create proper FreeCiv login packet (PACKET_SERVER_JOIN_REQ)
             # Must include pid=4 and version fields for server to parse it
@@ -927,9 +943,10 @@ class LLMWSHandler(websocket.WebSocketHandler):
 
             logger.info(f"LLM agent {self.agent_id} connected to civserver on port {port}")
 
-            # Wait a moment for connection to establish, then start the game
-            # This is needed because the FreeCiv server waits in pregame mode
-            asyncio.create_task(self._start_game_after_delay())
+            # Register player with game session manager
+            game_session = game_session_manager.get_or_create_session(game_id, port, min_players=2)
+            game_session.add_player(self.agent_id, self.player_id, self)
+            logger.info(f"Registered agent {self.agent_id} with game session {game_id}")
 
         except Exception as e:
             logger.exception(f"Failed to connect LLM agent to civserver: {e}")
@@ -939,66 +956,8 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 'message': 'Failed to connect to game server'
             }))
 
-    async def _start_game_after_delay(self):
-        """Start the FreeCiv game after a short delay to allow connections to establish"""
-        print(f"[DEBUG] _start_game_after_delay() CALLED for agent {self.agent_id}, player_id={self.player_id}", flush=True)
-        logger.info(f"_start_game_after_delay() started for agent {self.agent_id}")
-        try:
-            # Wait longer for both agents to connect AND complete nation selection
-            # Nation selection packets take ~1s per agent (2 agents = 2s)
-            # Add extra buffer for network latency
-            print(f"[DEBUG] Sleeping for 10s before starting game...", flush=True)
-            await asyncio.sleep(10.0)
-            print(f"[DEBUG] Woke up after 10s sleep, checking agent count...", flush=True)
-
-            print(f"[DEBUG] Checking civcom: {self.civcom is not None}", flush=True)
-            if self.civcom:
-                # Track connected agents globally
-                global llm_agents
-                agent_count = len(llm_agents)
-                print(f"[DEBUG] agent_count={agent_count}, player_id={self.player_id}, llm_agents={list(llm_agents.keys())}", flush=True)
-
-                # Only start the game once we have at least 2 agents connected
-                # and only the first player starts it
-                if self.player_id == 1 and agent_count >= 2:
-                    print(f"[DEBUG] Player 1 starting game with {agent_count} agents!", flush=True)
-                    print(f"[DEBUG] civcom thread status: alive={self.civcom.is_alive()}, socket={self.civcom.socket is not None}", flush=True)
-                    logger.info(f"🎮 All {agent_count} agents have selected nations and marked ready, starting game...")
-
-                    # Set game options for LLM gameplay using proper PACKET_CHAT_MSG_REQ format
-                    # Packet ID 26 = PACKET_CHAT_MSG_REQ
-                    print(f"[DEBUG] Queueing game settings...", flush=True)
-                    self.civcom.queue_to_civserver(json.dumps({"pid": 26, "message": "/set minplayers 2"}))
-                    self.civcom.queue_to_civserver(json.dumps({"pid": 26, "message": "/set aifill 0"}))
-                    self.civcom.queue_to_civserver(json.dumps({"pid": 26, "message": "/set autotoggle enabled"}))
-                    self.civcom.queue_to_civserver(json.dumps({"pid": 26, "message": "/set timeout 0"}))
-                    print(f"[DEBUG] Game settings queued successfully", flush=True)
-
-                    # Wait for settings to apply
-                    print(f"[DEBUG] Sleeping 1s for settings to apply...", flush=True)
-                    await asyncio.sleep(1.0)
-
-                    # Send the /start command to begin the game
-                    print(f"[DEBUG] Queueing /start command...", flush=True)
-                    logger.info(f"🚀 Sending /start command from agent {self.agent_id}")
-                    self.civcom.queue_to_civserver(json.dumps({"pid": 26, "message": "/start"}))
-                    print(f"[DEBUG] /start command queued!", flush=True)
-
-                    # Wait for game to initialize and send initial unit/city packets
-                    await asyncio.sleep(3.0)
-                    logger.info(f"✅ Game initialization complete - starting units should now be available")
-
-                elif self.player_id == 1 and agent_count < 2:
-                    # If we're player 1 but not enough agents yet, try again later
-                    logger.info(f"⏳ Only {agent_count} agents connected, waiting for more...")
-                    await asyncio.sleep(3.0)
-                    # Try again
-                    asyncio.create_task(self._start_game_after_delay())
-                else:
-                    logger.info(f"⏳ Player {self.player_id} waiting for game to start")
-
-        except Exception as e:
-            logger.error(f"❌ Failed to start game for {self.agent_id}: {e}")
+    # Old _start_game_after_delay() method removed - now handled by GameSessionManager
+    # The GameSessionManager coordinates game start when all players are ready
 
     def _forward_to_civcom(self, message: str):
         """Forward message to civcom"""

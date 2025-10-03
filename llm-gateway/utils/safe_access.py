@@ -14,7 +14,8 @@ logger = logging.getLogger("llm-gateway")
 
 def safe_get_nested(
     data: Dict[str, Any],
-    *keys: str,
+    keys: Union[List[str], str],
+    *additional_keys: str,
     default: Any = None,
     required: bool = False
 ) -> Any:
@@ -23,7 +24,8 @@ def safe_get_nested(
 
     Args:
         data: The dictionary to navigate
-        *keys: Sequence of keys to navigate (e.g., "config", "game_id")
+        keys: Either a list of keys or the first key (for backward compatibility)
+        *additional_keys: Additional keys if first arg was a string
         default: Default value if key path doesn't exist
         required: If True, raises ValueError instead of returning default
 
@@ -36,16 +38,24 @@ def safe_get_nested(
 
     Examples:
         >>> data = {"agents": {"agent1": {"config": {"game_id": "game123"}}}}
-        >>> safe_get_nested(data, "agents", "agent1", "config", "game_id")
+        >>> safe_get_nested(data, ["agents", "agent1", "config", "game_id"])
         "game123"
-        >>> safe_get_nested(data, "agents", "missing", "config", default="not_found")
+        >>> safe_get_nested(data, "agents", "agent1", "config", "game_id")  # Also works
+        "game123"
+        >>> safe_get_nested(data, ["agents", "missing", "config"], default="not_found")
         "not_found"
     """
+    # Handle both list and varargs forms
+    if isinstance(keys, list):
+        key_list = keys
+    else:
+        key_list = [keys] + list(additional_keys)
+
     current = data
     key_path = []
 
-    for key in keys:
-        key_path.append(key)
+    for key in key_list:
+        key_path.append(str(key))
 
         if not isinstance(current, dict):
             if required:
@@ -315,7 +325,7 @@ def get_agent_game_id(active_agents: Dict[str, Any], agent_id: str) -> Optional[
     return safe_get_nested(active_agents, agent_id, "config", "game_id")
 
 
-def get_agent_config(active_agents: Dict[str, Any], agent_id: str) -> Dict[str, Any]:
+def get_agent_config(active_agents: Dict[str, Any], agent_id: str) -> Optional[Dict[str, Any]]:
     """
     Safely get agent configuration
 
@@ -324,9 +334,18 @@ def get_agent_config(active_agents: Dict[str, Any], agent_id: str) -> Dict[str, 
         agent_id: Agent identifier
 
     Returns:
-        Agent config dictionary (empty if not found)
+        Agent config dictionary if found, None if agent doesn't exist or has no config
     """
-    return safe_get_nested(active_agents, agent_id, "config", default={})
+    # First check if agent exists
+    if agent_id not in active_agents:
+        return None
+
+    # Then check if agent has config
+    agent_data = active_agents.get(agent_id, {})
+    if "config" not in agent_data:
+        return None
+
+    return agent_data.get("config")
 
 
 def validate_agent_registration(agent_data: Dict[str, Any]) -> Dict[str, List[str]]:
