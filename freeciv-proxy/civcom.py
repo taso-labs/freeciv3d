@@ -126,9 +126,9 @@ class CivCom(Thread):
                                 packet_json = json.loads(packet_str)
                                 pid = packet_json.get('pid')
                                 if pid == PACKET_UNIT_INFO:
-                                    logger.debug(f"Received PACKET_UNIT_INFO for {self.username}")
+                                    logger.info(f"✓ Received PACKET_UNIT_INFO (pid={pid}) for {self.username}")
                                 elif pid == PACKET_CITY_INFO:
-                                    logger.debug(f"Received PACKET_CITY_INFO for {self.username}")
+                                    logger.info(f"✓ Received PACKET_CITY_INFO (pid={pid}) for {self.username}")
                                 elif pid == PACKET_GAME_INFO:
                                     logger.debug(f"Received PACKET_GAME_INFO for {self.username}")
                                 elif pid == PACKET_CHAT_MSG:
@@ -138,7 +138,7 @@ class CivCom(Thread):
                             except:
                                 pass  # Not JSON or parsing failed, ignore
                         except Exception as e:
-                            logger.debug(f"Error parsing packet for state: {e}")
+                            logger.warning(f"⚠ Error parsing packet for state storage: {e}", exc_info=True)
 
                         # Forward packet to client
                         self.send_buffer_append(self.net_buf[:-1])
@@ -373,7 +373,7 @@ class CivCom(Thread):
                     })
 
             # Unit info packet - stores units by ID for all players
-            elif packet_type == 95:  # PACKET_UNIT_INFO
+            elif packet_type == PACKET_UNIT_INFO:
                 unit_id = packet.get('id')
                 owner = packet.get('owner')
                 if unit_id is not None and owner is not None:
@@ -396,10 +396,10 @@ class CivCom(Thread):
                         self.player_units = {}
 
                     self.player_units[unit_id] = unit_data
-                    logger.debug(f"Stored unit {unit_id} for owner {owner}")
+                    logger.info(f"✓ Stored unit {unit_id} (type={unit_data.get('type')}) for owner {owner}")
 
             # City info packet - stores cities by ID for all players
-            elif packet_type == 85:  # PACKET_CITY_INFO
+            elif packet_type == PACKET_CITY_INFO:
                 city_id = packet.get('id')
                 owner = packet.get('owner')
                 if city_id is not None and owner is not None:
@@ -423,7 +423,7 @@ class CivCom(Thread):
                         self.player_cities = {}
 
                     self.player_cities[city_id] = city_data
-                    logger.debug(f"Stored city {city_id} ({city_data['name']}) for owner {owner}")
+                    logger.info(f"✓ Stored city {city_id} ({city_data['name']}, size={city_data['size']}) for owner {owner}")
 
             # Ruleset nation packet - stores nation ID to name mappings
             elif packet_type == PACKET_RULESET_NATION:
