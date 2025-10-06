@@ -14,6 +14,8 @@ from typing import Dict, Set, Optional, Any
 from dataclasses import dataclass, field
 from enum import Enum
 
+from state_extractor import civcom_registry
+
 logger = logging.getLogger("freeciv-proxy")
 
 
@@ -112,49 +114,85 @@ class GameSession:
 
     def _check_ready_to_start(self) -> None:
         """Check if all conditions are met to start the game"""
+        logger.debug(f"Game {self.game_id}: Checking ready to start (game_started={self.game_started}, phase={self.phase.value})")
+
         if self.game_started or self.phase in [GamePhase.STARTING, GamePhase.RUNNING]:
+            logger.debug(f"Game {self.game_id}: Already started or starting, skipping check")
             return
 
         # Need minimum players
         if len(self.players) < self.min_players:
+            logger.debug(f"Game {self.game_id}: Waiting for players ({len(self.players)}/{self.min_players})")
             return
 
         # All players must have selected nations
-        if self._count_nations_selected() < len(self.players):
+        nations_count = self._count_nations_selected()
+        if nations_count < len(self.players):
             logger.debug(f"Game {self.game_id}: Waiting for nation selection "
-                        f"({self._count_nations_selected()}/{len(self.players)})")
+                        f"({nations_count}/{len(self.players)})")
             return
 
         # All players must be marked ready
-        if self._count_players_ready() < len(self.players):
+        ready_count = self._count_players_ready()
+        if ready_count < len(self.players):
             logger.debug(f"Game {self.game_id}: Waiting for players to mark ready "
-                        f"({self._count_players_ready()}/{len(self.players)})")
+                        f"({ready_count}/{len(self.players)})")
             return
 
         # All conditions met - ready to start!
+        logger.debug(f"Game {self.game_id}: All conditions met for start (phase={self.phase.value})")
         if self.phase != GamePhase.READY_TO_START:
             self.phase = GamePhase.READY_TO_START
-            logger.info(f"Game {self.game_id}: ✓ All {len(self.players)} players ready! "
-                       f"Scheduling game start...")
+            logger.info(f"Game {self.game_id}: All {len(self.players)} players ready - scheduling game start")
 
             # Schedule game start after a brief delay
             if not self.start_task or self.start_task.done():
                 self.start_task = asyncio.create_task(self._initiate_game_start())
+                logger.debug(f"Game {self.game_id}: Created start task")
+            else:
+                logger.debug(f"Game {self.game_id}: Start task already exists")
 
     async def _initiate_game_start(self) -> None:
         """Initiate the game start sequence (called once when all players ready)"""
+        logger.debug(f"Game {self.game_id}: Initiating game start sequence")
         try:
             # Brief delay to ensure all packets have been processed
+            logger.debug(f"Game {self.game_id}: Waiting 2s before start for packet processing")
             await asyncio.sleep(2.0)
 
             # Double-check we're still ready
-            if self._count_players_ready() < len(self.players):
+            ready_count = self._count_players_ready()
+            logger.debug(f"Game {self.game_id}: Double-checking readiness ({ready_count}/{len(self.players)})")
+            if ready_count < len(self.players):
                 logger.warning(f"Game {self.game_id}: Players no longer ready, aborting start")
                 self.phase = GamePhase.NATIONS_SELECTING
                 return
 
             self.phase = GamePhase.STARTING
-            logger.info(f"Game {self.game_id}: 🎮 Starting game with {len(self.players)} players!")
+            logger.info(f"Game {self.game_id}: Starting game with {len(self.players)} players")
+
+            registry_civcom = civcom_registry.get_civcom(self.game_id)
+            logger.debug(f"Game {self.game_id}: Retrieved civcom from registry: {registry_civcom is not None}")
+            if not registry_civcom:
+                logger.error(f"Game {self.game_id}: No CivCom registered for game; cannot start")
+                self.phase = GamePhase.NATIONS_SELECTING
+                return
+
+            if hasattr(registry_civcom, 'is_alive') and not registry_civcom.is_alive():
+                logger.error(f"Game {self.game_id}: Registered CivCom thread is not alive")
+                self.phase = GamePhase.NATIONS_SELECTING
+                return
+
+            # Ensure all player handlers still have active civcom connections
+            inactive_players = [
+                info.agent_id for info in self.players.values()
+                if not getattr(info.handler, 'civcom', None)
+                or (hasattr(info.handler.civcom, 'is_alive') and not info.handler.civcom.is_alive())
+            ]
+            if inactive_players:
+                logger.error(f"Game {self.game_id}: CivCom missing or dead for players: {inactive_players}")
+                self.phase = GamePhase.NATIONS_SELECTING
+                return
 
             # Get first player's handler to send commands
             first_player = next(iter(self.players.values()))
@@ -170,19 +208,29 @@ class GameSession:
                 return
 
             # Send game settings
-            logger.info(f"Game {self.game_id}: Configuring game settings...")
+            logger.info(f"Game {self.game_id}: Configuring game settings")
+
+            # NOTE: We do NOT remove AI players because agents use /take to control them
+            # AI players AI*1, AI*2, etc. are taken over by the LLM agents
+            # IMPORTANT: Do NOT set aifill to 0 here - it will remove AI players that agents are trying to /take!
+
+            logger.debug(f"Game {self.game_id}: Setting game parameters")
             civcom.queue_to_civserver(json.dumps({"pid": 26, "message": f"/set minplayers {len(self.players)}"}))
-            civcom.queue_to_civserver(json.dumps({"pid": 26, "message": "/set aifill 0"}))
+            # DO NOT SET aifill 0 - removed to prevent removing AI players before /take completes
+            # civcom.queue_to_civserver(json.dumps({"pid": 26, "message": "/set aifill 0"}))
+            civcom.queue_to_civserver(json.dumps({"pid": 26, "message": f"/set maxplayers {len(self.players)}"}))
             civcom.queue_to_civserver(json.dumps({"pid": 26, "message": "/set autotoggle enabled"}))
             civcom.queue_to_civserver(json.dumps({"pid": 26, "message": "/set timeout 0"}))
 
             # Wait for settings to apply
-            await asyncio.sleep(1.5)
+            logger.debug(f"Game {self.game_id}: Waiting 2s for settings to apply")
+            await asyncio.sleep(2.0)
 
-            # Send the /start command
-            logger.info(f"Game {self.game_id}: 🚀 Sending /start command to civserver!")
-            print(f"[DEBUG GameSession] Sending /start for game {self.game_id}", flush=True)
-            civcom.queue_to_civserver(json.dumps({"pid": 26, "message": "/start"}))
+            # FIXED: Game auto-starts when all players send PACKET_PLAYER_READY (pid=11)
+            # See llm_handler.py:342-347 where PACKET_PLAYER_READY is sent
+            # FreeCiv's handle_player_ready() automatically calls start_game() when all ready
+            # No need to send /start or /mapgen - they're redundant and /mapgen doesn't exist!
+            logger.info(f"Game {self.game_id}: All {len(self.players)} players ready - waiting for auto-start")
 
             # Mark as started
             self.game_started = True
@@ -191,7 +239,7 @@ class GameSession:
             await asyncio.sleep(3.0)
 
             self.phase = GamePhase.RUNNING
-            logger.info(f"Game {self.game_id}: ✅ Game is now running!")
+            logger.info(f"Game {self.game_id}: Game is now running")
 
         except Exception as e:
             logger.exception(f"Game {self.game_id}: Error starting game: {e}")
@@ -229,11 +277,16 @@ class GameSessionManager:
     async def get_or_create_session(self, game_id: str, civserver_port: int,
                                    min_players: int = 2) -> GameSession:
         """Get existing session or create new one (thread-safe)"""
+        logger.debug(f"GameSessionManager: get_or_create_session called for {game_id}")
         async with self._lock:
+            logger.debug(f"GameSessionManager: Lock acquired for {game_id}")
             if game_id not in self.sessions:
+                logger.debug(f"GameSessionManager: Creating new session for {game_id}")
                 session = GameSession(game_id, civserver_port, min_players)
                 self.sessions[game_id] = session
                 logger.info(f"Created new game session: {game_id} on port {civserver_port}")
+            else:
+                logger.debug(f"GameSessionManager: Reusing existing session for {game_id}")
             return self.sessions[game_id]
 
     def get_session(self, game_id: str) -> Optional[GameSession]:
