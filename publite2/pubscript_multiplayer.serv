@@ -20,14 +20,26 @@ set victories spacerace
 
 set landm 50
 set minp 2
+set maxplayers 2
 set aifill 6
-set generator FAIR
+set generator ISLAND
+set landmass 30
+set separatepoles ENABLED
+
+# Starting units configuration
+set startunits cccwwwx
+set startpos DEFAULT
+set dispersion 2
+set citymindist 3
 
 set wetness 25
+set timeout 0
 set topology ""
 set wrap=
 set steepness 12
 
+# Keep AI players so LLM agents can take control of them via /take command
+# AI players will be created at startup due to aifill setting above
 
 metaconnection persistent
 metamessage New Freeciv-web Multiplayer Game

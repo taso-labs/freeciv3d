@@ -312,9 +312,16 @@ else
   mkdir -p "${basedir}/freeciv-web/src/derived/webapp"
 fi
 
-cd "${basedir}"/freeciv-web && \
-  ./build.sh -B || \
-  handle_error 7 "Failed to build freeciv-web server"
+# Skip Maven build if SKIP_MVN_BUILD is set (used in Docker build)
+# The WAR will be built later in the webapp-builder stage
+if [ "${SKIP_MVN_BUILD}" != "true" ]; then
+  cd "${basedir}"/freeciv-web && \
+    ./build.sh -B || \
+    handle_error 7 "Failed to build freeciv-web server"
+else
+  echo "Skipping Maven build (SKIP_MVN_BUILD=true)"
+  echo "WAR will be built in webapp-builder Docker stage"
+fi
 
 echo "==== Setting up nginx ===="
 stop_svc nginx

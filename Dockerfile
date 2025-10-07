@@ -39,6 +39,7 @@ COPY config /docker/config
 COPY freeciv-web /docker/freeciv-web
 COPY freeciv-proxy /docker/freeciv-proxy
 COPY publite2 /docker/publite2
+COPY LICENSE.md /docker/LICENSE.md
 
 RUN chown -R docker:docker /docker && \
     chmod +x /docker/scripts/*.sh
@@ -47,9 +48,11 @@ USER docker
 WORKDIR /docker/scripts/
 
 # Install dependencies (this layer will be cached)
+# Skip Maven build here - it will be done in webapp-builder stage with proper DB config
 RUN DEBIAN_FRONTEND=noninteractive sudo apt-get update --yes --quiet && \
     DEBIAN_FRONTEND=noninteractive DEB_NO_TOMCAT=Y \
                                    PIP_SKIP=Y \
+                                   SKIP_MVN_BUILD=true \
                                    install/install.sh --mode=TEST && \
     DEBIAN_FRONTEND=noninteractive sudo apt-get clean --yes && \
     sudo rm --recursive --force /var/lib/apt/lists/*
@@ -71,12 +74,32 @@ RUN if [ "$SKIP_FREECIV_BUILD" = "false" ] ; then \
         echo "Skipping FreeCiv build (SKIP_FREECIV_BUILD=true)" ; \
     fi
 
-# Stage 3: Final runtime image
+# Stage 3: Webapp builder - Generate all derived files and build WAR
+FROM freeciv-builder AS webapp-builder
+
+# Generate all derived webapp files (tilesets, packet handlers, help data, etc.)
+WORKDIR /docker/scripts
+RUN /docker/scripts/sync-js-hand.sh \
+    -f /docker/freeciv/freeciv \
+    -i /home/docker/freeciv \
+    -o /docker/freeciv-web/src/derived/webapp \
+    -d /var/lib/tomcat10/webapps/data
+
+# Build WAR file with all generated content
+# Skip Flyway during build (database not available) - will run at container startup
+WORKDIR /docker/freeciv-web
+RUN mvn -B package
+
+# Stage 4: Final runtime image
 FROM dependencies AS runtime
 
 # Copy FreeCiv build artifacts
 COPY --from=freeciv-builder /docker/freeciv /docker/freeciv
 COPY --from=freeciv-builder /home/docker/freeciv /home/docker/freeciv
+
+# Copy the complete WAR file with all generated content
+COPY --from=webapp-builder /docker/freeciv-web/target/freeciv-web.war /var/lib/tomcat10/webapps/freeciv-web.war
+RUN sudo chown tomcat:tomcat /var/lib/tomcat10/webapps/freeciv-web.war
 
 # Copy remaining application files (main directories already copied in dependencies stage)
 COPY .git /docker/.git

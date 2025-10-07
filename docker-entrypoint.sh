@@ -2,145 +2,53 @@
 
 echo "=== Freeciv3D Docker Container Starting ==="
 
+# Generate Tomcat context.xml with database configuration
+echo "=== Generating Tomcat Database Configuration ==="
+echo "Creating context.xml from template..."
+sudo mkdir -p /var/lib/tomcat10/conf/Catalina/localhost
+sudo sed -e "s|#DB_HOST#|${DB_HOST}|g" \
+    -e "s|#DB_USER#|${DB_USER}|g" \
+    -e "s|#DB_PASSWORD#|${DB_PASSWORD}|g" \
+    -e "s|#DB_NAME#|${DB_NAME}|g" \
+    /docker/config/web.context.tmpl | sudo tee /var/lib/tomcat10/conf/Catalina/localhost/freeciv-web.xml > /dev/null
+sudo chown tomcat:tomcat /var/lib/tomcat10/conf/Catalina/localhost/freeciv-web.xml
+echo "✓ Generated freeciv-web.xml:"
+sudo cat /var/lib/tomcat10/conf/Catalina/localhost/freeciv-web.xml
+
 # Start all Freeciv-web services first (this starts MySQL, nginx, tomcat)
 echo "Starting Freeciv-web services..."
 /docker/scripts/start-freeciv-web.sh
 
-# Fix and run database initialization
-echo "Fixing and running database initialization..."
-# Create a fixed version of the script at runtime
-cat > /tmp/docker-init-db-fixed.sh << 'SCRIPT_END'
-#!/bin/bash
-# Docker database initialization script - Fixed version
+# Database initialization using Flyway migrations
+echo "=== Initializing Database with Flyway Migrations ==="
 
-set -e
+# Note: MySQL is running as a separate container.
+# docker-compose depends_on with service_healthy ensures MySQL is ready before this starts.
 
-echo "=== Starting Database Initialization ==="
+# Generate Flyway configuration from template
+echo "Generating Flyway configuration from template..."
+sed -e "s|#DB_HOST#|${DB_HOST}|g" \
+    -e "s|#DB_USER#|${DB_USER}|g" \
+    -e "s|#DB_PASSWORD#|${DB_PASSWORD}|g" \
+    -e "s|#DB_NAME#|${DB_NAME}|g" \
+    /docker/config/flyway.tmpl > /docker/freeciv-web/flyway.properties
 
-# Configuration
-DB_HOST="127.0.0.1"
-DB_PORT="3306"
-DB_USER="docker"
-DB_PASSWORD="changeme"
-DB_NAME="freeciv_web"
+echo "✓ Generated flyway.properties:"
+cat /docker/freeciv-web/flyway.properties
 
-# Wait for MySQL to be ready
-echo "Waiting for MySQL to be ready..."
-for i in {1..60}; do
-    if mysqladmin ping -h $DB_HOST -P $DB_PORT --silent 2>/dev/null; then
-        echo "MySQL is ready!"
-        break
-    fi
-    if [ $i -eq 60 ]; then
-        echo "ERROR: MySQL failed to start within 60 seconds"
-        exit 1
-    fi
-    echo "  Waiting for MySQL... ($i/60)"
-    sleep 1
-done
-
-# Check if database exists, create if not
-echo "Ensuring database exists..."
-sudo mysql -u root << 'EOF'
-CREATE DATABASE IF NOT EXISTS freeciv_web;
-CREATE USER IF NOT EXISTS 'docker'@'localhost' IDENTIFIED BY 'changeme';
-CREATE USER IF NOT EXISTS 'docker'@'%' IDENTIFIED BY 'changeme';
-GRANT ALL PRIVILEGES ON freeciv_web.* TO 'docker'@'localhost';
-GRANT ALL PRIVILEGES ON freeciv_web.* TO 'docker'@'%';
-FLUSH PRIVILEGES;
-EOF
-
-if [ $? -ne 0 ]; then
-    echo "ERROR: Could not connect to MySQL as root"
+# Run Flyway migrations to initialize database schema
+echo "Running Flyway migrations..."
+cd /docker/freeciv-web
+if mvn -B -Dflyway.configFiles=./flyway.properties flyway:migrate 2>&1 | tee /tmp/flyway-migration.log; then
+    echo "✓ Flyway migrations completed successfully!"
+else
+    echo "✗ Flyway migration failed!"
+    echo "Last 30 lines of migration log:"
+    tail -30 /tmp/flyway-migration.log
     exit 1
 fi
 
-echo "Database and user setup complete!"
-
-# Test connection as docker user (using TCP connection instead of socket)
-echo "Testing database connection..."
-mysql -h $DB_HOST -P $DB_PORT -u $DB_USER -p$DB_PASSWORD $DB_NAME -e "SELECT 1;" >/dev/null 2>&1
-if [ $? -ne 0 ]; then
-    echo "WARNING: Cannot connect to database as $DB_USER via TCP"
-    echo "Trying socket connection..."
-    # Fallback: try socket if TCP doesn't work
-    mysql -u $DB_USER -p$DB_PASSWORD $DB_NAME -e "SELECT 1;" >/dev/null 2>&1
-    if [ $? -ne 0 ]; then
-        echo "ERROR: Cannot connect to database as $DB_USER"
-        exit 1
-    fi
-fi
-
-# Create tables if they don't exist
-echo "Creating database tables..."
-mysql -h $DB_HOST -P $DB_PORT -u $DB_USER -p$DB_PASSWORD $DB_NAME << 'EOF'
-CREATE TABLE IF NOT EXISTS servers (
-    id int(11) NOT NULL AUTO_INCREMENT,
-    host varchar(100) NOT NULL,
-    port int(11) NOT NULL,
-    version varchar(100) NOT NULL,
-    state varchar(20) NOT NULL,
-    type varchar(20) NOT NULL,
-    available tinyint(1) NOT NULL DEFAULT 1,
-    stamp timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    PRIMARY KEY (id),
-    UNIQUE KEY unique_server (host, port)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8;
-
-CREATE TABLE IF NOT EXISTS games (
-    id int(11) NOT NULL AUTO_INCREMENT,
-    host varchar(100) NOT NULL,
-    port int(11) NOT NULL,
-    type varchar(20) NOT NULL,
-    state varchar(20) NOT NULL,
-    turn int(11) NOT NULL DEFAULT 0,
-    players text,
-    created timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    PRIMARY KEY (id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8;
-EOF
-
-if [ $? -eq 0 ]; then
-    echo "Database tables created successfully!"
-else
-    echo "Warning: Some tables may already exist"
-fi
-
-# Initialize game servers in database
-echo "Registering initial game servers..."
-mysql -h $DB_HOST -P $DB_PORT -u $DB_USER -p$DB_PASSWORD $DB_NAME << 'EOF'
-INSERT INTO servers (host, port, version, state, type, available, stamp) VALUES
-('localhost', 6000, 'freeciv-web-devel', 'Pregame', 'singleplayer', 1, NOW()),
-('localhost', 6001, 'freeciv-web-devel', 'Pregame', 'multiplayer', 1, NOW()),
-('localhost', 6002, 'freeciv-web-devel', 'Pregame', 'singleplayer', 1, NOW()),
-('localhost', 6003, 'freeciv-web-devel', 'Pregame', 'singleplayer', 1, NOW()),
-('localhost', 6004, 'freeciv-web-devel', 'Pregame', 'multiplayer', 1, NOW()),
-('localhost', 6005, 'freeciv-web-devel', 'Pregame', 'singleplayer', 1, NOW()),
-('localhost', 6006, 'freeciv-web-devel', 'Pregame', 'singleplayer', 1, NOW()),
-('localhost', 6007, 'freeciv-web-devel', 'Pregame', 'multiplayer', 1, NOW()),
-('localhost', 6008, 'freeciv-web-devel', 'Pregame', 'singleplayer', 1, NOW()),
-('localhost', 6009, 'freeciv-web-devel', 'Pregame', 'singleplayer', 1, NOW())
-ON DUPLICATE KEY UPDATE available=1, stamp=NOW();
-
-SELECT 'Registered servers:' as status;
-SELECT host, port, state, type, available FROM servers WHERE available = 1 ORDER BY port;
-EOF
-
-if [ $? -eq 0 ]; then
-    echo "Game servers registered successfully!"
-else
-    echo "Warning: Server registration may have failed"
-fi
-
 echo "=== Database Initialization Complete ==="
-SCRIPT_END
-
-chmod +x /tmp/docker-init-db-fixed.sh
-/tmp/docker-init-db-fixed.sh || {
-    echo "Database initialization failed, but continuing..."
-    echo "You may need to run database initialization manually"
-}
 
 # Deploy spectator files to webapp
 echo "Deploying spectator files..."

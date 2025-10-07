@@ -44,7 +44,7 @@ class MessageValidator:
     SCHEMAS = {
         MessageType.LLM_CONNECT: {
             'required_fields': ['type', 'agent_id', 'api_token'],
-            'optional_fields': ['capabilities', 'port', 'nation', 'leader_name'],
+            'optional_fields': ['capabilities', 'port', 'nation', 'leader_name', 'game_id'],
             'field_types': {
                 'type': str,
                 'agent_id': str,
@@ -52,13 +52,15 @@ class MessageValidator:
                 'capabilities': list,
                 'port': int,
                 'nation': str,
-                'leader_name': str
+                'leader_name': str,
+                'game_id': str
             },
             'field_constraints': {
                 'agent_id': {'max_length': 50, 'pattern': r'^[a-zA-Z0-9_-]+$'},
                 'api_token': {'min_length': 10, 'max_length': 100},
                 'capabilities': {'max_length': 20},
                 'port': {'min_value': 1000, 'max_value': 65535},
+                'game_id': {'max_length': 64, 'pattern': r'^[a-zA-Z0-9_-]+$'},
                 'nation': {'max_length': 50},
                 'leader_name': {'max_length': 100}
             }

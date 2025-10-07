@@ -220,6 +220,16 @@ function webgl_preload_models()
   for (var i = 0; i < model_filenames_initial.length; i++) {
     load_model(model_filenames_initial[i]);
   }
+
+  // Initialize network connection early - don't wait for all models to load
+  // Use a short delay to allow a few critical models to load first
+  setTimeout(function() {
+    if (typeof network_init === 'function') {
+      console.log("Initializing network connection (early start, models loading in background)");
+      $.unblockUI();
+      network_init();
+    }
+  }, 2000); // 2 second delay to let some initial models load
 }
 
 /****************************************************************************

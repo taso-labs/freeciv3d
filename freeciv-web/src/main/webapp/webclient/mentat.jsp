@@ -32,4 +32,14 @@
 </div>
 
 <!--- Place script after ui to make sure ui loads first -->
-<script src="/web-llm/dist/llm_chat.5e8e8dcb.js?<%= Math.random() %>" defer=""></script>
+<script>
+  // Add error handler for web-llm to prevent it from crashing the game
+  window.addEventListener('error', function(event) {
+    if (event.filename && (event.filename.includes('llm_chat') || event.filename.includes('web-llm'))) {
+      console.warn('Web-LLM error (suppressed to prevent game crash):', event.message);
+      event.preventDefault();
+      return true;
+    }
+  });
+</script>
+<script src="/web-llm/dist/llm_chat.5e8e8dcb.js?<%= Math.random() %>" defer="" onerror="console.warn('Web-LLM failed to load (non-critical)')"></script>

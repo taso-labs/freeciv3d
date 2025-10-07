@@ -274,6 +274,18 @@ class StateCache:
                             'score': pdata.get('score', 0),
                             'gold': pdata.get('gold', 0)
                         }
+            elif isinstance(players_data, list):
+                optimized['players'] = {}
+                for i, pdata in enumerate(players_data):
+                    if i >= 4:
+                        break
+                    if isinstance(pdata, dict):
+                        pid = pdata.get('id') or pdata.get('player_id') or str(i)
+                        optimized['players'][pid] = {
+                            'name': pdata.get('name', '')[:8],
+                            'score': pdata.get('score', 0),
+                            'gold': pdata.get('gold', 0)
+                        }
 
         # Visible map tiles (highly compressed)
         if 'visible_tiles' in data and isinstance(data['visible_tiles'], list):

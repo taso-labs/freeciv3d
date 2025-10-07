@@ -85,7 +85,8 @@ class LLMConfig:
             'REDIS_HOST': 'redis.host',
             'REDIS_PORT': 'redis.port',
             'REDIS_PASSWORD': 'redis.password',
-            'REDIS_DB': 'redis.db'
+            'REDIS_DB': 'redis.db',
+            'DEFAULT_CIVSERVER_PORT': 'civserver.default_port'
         }
 
         for env_var, config_path in env_mappings.items():
@@ -213,6 +214,18 @@ class LLMConfig:
     def should_log_performance(self) -> bool:
         """Check if performance metrics should be logged"""
         return self.get('logging.log_performance', True)
+
+    def get_default_civserver_port(self) -> int:
+        """Get default civserver port for LLM agents"""
+        return self.get('civserver.default_port', 6001)
+
+    def get_multiplayer_civserver_ports(self) -> List[int]:
+        """Get list of valid multiplayer civserver ports"""
+        return self.get('civserver.multiplayer_ports', [6001, 6004, 6006, 6009])
+
+    def is_multiplayer_port(self, port: int) -> bool:
+        """Check if port is configured as multiplayer-capable"""
+        return port in self.get_multiplayer_civserver_ports()
 
     def validate_token(self, token: str) -> bool:
         """Validate API token"""

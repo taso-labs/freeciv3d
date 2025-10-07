@@ -55,10 +55,10 @@ function init_webgl_renderer()
 ****************************************************************************/
 function webgl_preload_complete()
 {
+  // Network init is now called earlier in preload.js
+  // This function just ensures UI is unblocked when all models finish loading
+  console.log("All 3D models loaded");
   $.unblockUI();
-
-  network_init();
-
 }
 
 /****************************************************************************

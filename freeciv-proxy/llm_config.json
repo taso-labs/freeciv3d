@@ -1,7 +1,17 @@
 {
     "enabled": true,
     "endpoint": "/llmsocket",
-    "max_agents": 2,
+    "max_agents": 10,
+    "allowed_origins": [
+        "http://localhost:8003",
+        "http://127.0.0.1:8003",
+        "http://localhost:8080",
+        "http://127.0.0.1:8080",
+        "https://localhost:8003",
+        "https://127.0.0.1:8003",
+        "https://localhost:8080",
+        "https://127.0.0.1:8080"
+    ],
     "cache_config": {
         "ttl": 5,
         "max_size_kb": 4,
@@ -51,5 +61,10 @@
         "log_actions": true,
         "log_state_queries": true,
         "log_performance": true
+    },
+    "civserver": {
+        "default_port": 6001,
+        "multiplayer_ports": [6001, 6004, 6006, 6009],
+        "singleplayer_ports": [6000, 6002, 6003, 6005, 6007, 6008]
     }
 }

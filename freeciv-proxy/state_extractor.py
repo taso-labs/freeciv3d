@@ -380,6 +380,59 @@ class StateExtractor:
                 cause=e
             )
 
+    def get_state(self, raw_state: Dict[str, Any], format_type: StateFormat,
+                  player_id: Optional[int] = None) -> Dict[str, Any]:
+        """
+        Format a raw game state into the specified format.
+        This method is used when you already have the raw state and just need formatting.
+
+        Args:
+            raw_state: Raw game state dictionary from civcom.get_full_state()
+            format_type: State format (FULL, DELTA, LLM_OPTIMIZED)
+            player_id: Optional player ID for perspective-based formatting
+                      If not provided, will try to extract from raw_state
+
+        Returns:
+            Dictionary containing formatted game state
+
+        Raises:
+            ValidationError: If format type is unsupported or state is invalid
+        """
+        # Extract player_id if not provided
+        if player_id is None:
+            # Try to get from raw_state
+            player_id = raw_state.get('player_id') or raw_state.get('current_player', 0)
+
+        try:
+            # Format based on requested type
+            if format_type == StateFormat.FULL:
+                state = self._format_full_state(raw_state, player_id)
+            elif format_type == StateFormat.LLM_OPTIMIZED:
+                state = self._format_llm_optimized_state(raw_state, player_id)
+            elif format_type == StateFormat.DELTA:
+                # For delta format without historical data, return full state
+                # The caller should use extract_state() for proper delta functionality
+                logger.warning("get_state() called with DELTA format - returning full state instead. Use extract_state() for delta functionality.")
+                state = self._format_full_state(raw_state, player_id)
+            else:
+                raise ValidationError(
+                    f"Unsupported format: {format_type}",
+                    parameter="format",
+                    value=format_type.value if hasattr(format_type, 'value') else str(format_type)
+                )
+
+            return state
+
+        except ValidationError:
+            raise
+        except Exception as e:
+            logger.error(f"Error formatting state: {e}", exc_info=True)
+            raise StateExtractionError(
+                f"Failed to format state: {e}",
+                player_id=player_id,
+                cause=e
+            )
+
     def get_legal_actions(self, game_id: str, player_id: int) -> List[Dict[str, Any]]:
         """
         Get top 20 legal actions for player, sorted by strategic priority

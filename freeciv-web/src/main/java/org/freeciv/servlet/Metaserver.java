@@ -226,7 +226,7 @@ public class Metaserver extends HttpServlet {
 			statement.setString(1, hostPort);
 			statement.executeUpdate();
 
-			if ((!variableNames.isEmpty()) && (!variableValues.isEmpty())) {
+			if (variableNames != null && !variableNames.isEmpty() && variableValues != null && !variableValues.isEmpty()) {
 
 				query = "INSERT INTO variables (hostport, name, value) VALUES (?, ?, ?)";
 				statement = conn.prepareStatement(query);
@@ -292,6 +292,8 @@ public class Metaserver extends HttpServlet {
 			statement.executeUpdate();
 
 		} catch (Exception err) {
+			err.printStackTrace();
+			System.err.println("Metaserver error: " + err.getMessage());
 			response.setContentType(CONTENT_TYPE);
 			response.setStatus(HttpServletResponse.SC_INTERNAL_SERVER_ERROR);
 			response.getOutputStream().print(INTERNAL_SERVER_ERROR);

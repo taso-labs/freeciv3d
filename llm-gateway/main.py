@@ -327,11 +327,14 @@ class LLMGateway:
             api_token = os.getenv("LLM_API_TOKENS", "test-token-fc3d-001").split(",")[0]
 
             # Send LLM authentication message to the LLM handler
+            # Get default civserver port from environment variable (configurable via docker-compose.yml)
+            default_port = int(os.getenv("DEFAULT_CIVSERVER_PORT", "6001"))
+
             auth_msg = {
                 "type": "llm_connect",
                 "agent_id": f"llm_player_{game_id[:8]}",
                 "api_token": api_token,
-                "port": 6001,  # Default FreeCiv server port
+                "port": default_port,
                 "capabilities": ["unit_move", "city_production", "tech_research", "unit_build_city", "unit_explore"]
             }
 

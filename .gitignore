@@ -85,6 +85,7 @@ tests/screenshot*.png
 # Claude Code generated files
 agents.md
 CLAUDE.md
+Claude.md
 Technical Spec.md
 .cursor/*
 

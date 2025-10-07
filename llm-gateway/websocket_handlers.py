@@ -276,8 +276,8 @@ class AgentWebSocketHandler:
 
         # Filter fields based on proxy's schema for each message type
         if msg_type == "llm_connect":
-            # Proxy expects: type, agent_id, api_token, capabilities (optional), port (optional), nation (optional), leader_name (optional)
-            allowed_fields = {"type", "agent_id", "api_token", "capabilities", "port", "nation", "leader_name"}
+            # Proxy expects: type, agent_id, api_token, capabilities (optional), port (optional), nation (optional), leader_name (optional), game_id (optional)
+            allowed_fields = {"type", "agent_id", "api_token", "capabilities", "port", "nation", "leader_name", "game_id"}
             transformed = {k: v for k, v in transformed.items() if k in allowed_fields}
         elif msg_type == "state_query":
             # Proxy expects: type, format (opt), include_actions (opt), player_id (opt)
