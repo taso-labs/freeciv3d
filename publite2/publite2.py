@@ -67,14 +67,24 @@ class metachecker():
       self.multi = 0;
       self.html_doc = "-";
       self.last_http_status = -1;
+      self.consecutive_failures = 0;  # Circuit breaker counter
       s = PubStatus(self)
       s.start();
+
+    def cleanup_dead_servers(self):
+      """Remove finished/dead servers from server_list to prevent memory leak"""
+      before_count = len(self.server_list)
+      self.server_list = [s for s in self.server_list if s.is_alive()]
+      after_count = len(self.server_list)
+      if before_count != after_count:
+        print(f"Cleaned up {before_count - after_count} dead server threads. Active: {after_count}")
 
     def check(self, port):
       while 1:
         try:
           time.sleep(1);
-          conn = http.client.HTTPConnection(metahost, metaport);
+          # Add timeout to prevent hanging connections
+          conn = http.client.HTTPConnection(metahost, metaport, timeout=10);
           conn.request("GET", statuspath);
           r1 = conn.getresponse();
           self.check_count += 1;
@@ -87,11 +97,21 @@ class metachecker():
               self.single = int(meta_status[2]);
               self.multi = int(meta_status[3]);
 
-              fork_bomb_preventer = (self.total == 0 and self.server_limit < len(self.server_list))
+              # Reset failure counter on success
+              self.consecutive_failures = 0;
+
+              # Clean up dead threads BEFORE spawning new ones
+              self.cleanup_dead_servers();
+
+              # Use actual server_list count after cleanup
+              active_server_count = len(self.server_list);
+
+              fork_bomb_preventer = (self.total == 0 and self.server_limit < active_server_count)
               if fork_bomb_preventer:
                 print("Error: Have tried to start more than " + str(self.server_limit)
                       + " servers (the server limit) but according to the"
                       + " metaserver it has found none.");
+                print(f"Active servers in list: {active_server_count}, Metaserver reports: {self.total}")
 
               while (self.single < self.server_capacity_single
                      and self.total <= self.server_limit
@@ -103,7 +123,7 @@ class metachecker():
                 port += 1;
                 self.total += 1;
                 self.single += 1;
- 
+
               while (self.multi < self.server_capacity_multi
                      and self.total <= self.server_limit
                      and not fork_bomb_preventer):
@@ -118,11 +138,20 @@ class metachecker():
 
           else:
             print("Error: Invalid metaserver status");
+            self.consecutive_failures += 1;
 
         except Exception as e:
-          self.html_doc = ("Error: Publite2 is unable to connect to Freeciv-web metaserver on http://" + 
+          self.consecutive_failures += 1;
+          self.html_doc = ("Error: Publite2 is unable to connect to Freeciv-web metaserver on http://" +
                           metahost + metapath + ", error" + str(e));
-          print(self.html_doc);
+          print(f"{self.html_doc} (failure #{self.consecutive_failures})");
+
+          # Circuit breaker: If too many failures, wait longer before retry
+          if self.consecutive_failures >= 5:
+            print(f"CIRCUIT BREAKER ACTIVATED: {self.consecutive_failures} consecutive failures.")
+            print("Metaserver may be down. Waiting 5 minutes before retry to prevent spawn storm...")
+            time.sleep(300);  # Wait 5 minutes
+            self.consecutive_failures = 0;  # Reset after long wait
         finally:
           conn.close();
           time.sleep(metachecker_interval);
