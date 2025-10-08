@@ -15,9 +15,35 @@ sudo chown tomcat:tomcat /var/lib/tomcat10/conf/Catalina/localhost/freeciv-web.x
 echo "✓ Generated freeciv-web.xml:"
 sudo cat /var/lib/tomcat10/conf/Catalina/localhost/freeciv-web.xml
 
-# Start all Freeciv-web services first (this starts MySQL, nginx, tomcat)
-echo "Starting Freeciv-web services..."
+# Start all Freeciv-web services (nginx, tomcat, publite2)
+echo "=== Starting Services with Enhanced Logging ==="
+mkdir -p /docker/logs/tomcat
+
+echo "Starting all services..."
 /docker/scripts/start-freeciv-web.sh
+
+# Wait for services to initialize
+sleep 10
+
+# Verify Tomcat is running
+echo "=== Verifying Tomcat Status ==="
+if pgrep -f tomcat10 > /dev/null; then
+    TOMCAT_PID=$(pgrep -f tomcat10)
+    echo "✓ Tomcat process running (PID: $TOMCAT_PID)"
+
+    # Test if Tomcat is responding
+    timeout 45 bash -c 'until curl -sf http://localhost:8080/freeciv-web/ >/dev/null 2>&1; do sleep 2; done' && \
+        echo "✓ Tomcat responding on port 8080" || \
+        echo "✗ Tomcat not responding on port 8080"
+else
+    echo "✗ Tomcat process not found!"
+fi
+
+# Set up continuous logging for Tomcat
+if [ -f /var/lib/tomcat10/logs/catalina.out ]; then
+    echo "Setting up Tomcat log monitoring..."
+    tail -f /var/lib/tomcat10/logs/catalina.out > /docker/logs/tomcat/catalina-tail.log 2>&1 &
+fi
 
 # Database initialization using Flyway migrations
 echo "=== Initializing Database with Flyway Migrations ==="
@@ -118,4 +144,12 @@ fi
 
 echo "=== Freeciv3D Container Ready ==="
 
-exec "$@"
+# Keep services running (don't exec into bash which exits)
+# Monitor key log files to keep container alive and provide visibility
+echo "=== Keeping Services Alive - Tailing Logs ==="
+tail -f /docker/logs/tomcat/catalina-tail.log \
+        /docker/logs/llm-gateway.log \
+        /docker/logs/freeciv-proxy-PORT6000.log 2>/dev/null &
+
+# Sleep infinity as fallback if logs don't exist yet
+sleep infinity

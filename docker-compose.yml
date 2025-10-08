@@ -17,7 +17,7 @@ services:
 
   mysql:
     image: mysql:8.0
-    container_name: fciv-mysql
+    container_name: fciv-mysql-db
     environment:
       - MYSQL_ROOT_PASSWORD=changeme
       - MYSQL_DATABASE=freeciv_web
@@ -84,7 +84,7 @@ services:
       - "8003:8003"
     user: docker
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/civclientlauncher", "-X", "POST", "-d", "action=new"]
+      test: ["CMD-SHELL", "pgrep -f tomcat10 && curl -sf http://localhost:8080/freeciv-web/ || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 5

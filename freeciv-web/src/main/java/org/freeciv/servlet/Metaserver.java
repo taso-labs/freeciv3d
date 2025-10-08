@@ -190,7 +190,7 @@ public class Metaserver extends HttpServlet {
 				statement.executeUpdate();
 
 				if (dropPlayers != null) {
-					query = "UPDATE servers SET available = 0, humans = -1 WHERE host = ? AND port = ?";
+					query = "UPDATE servers SET available = 1, humans = '0' WHERE host = ? AND port = ?";
 					statement = conn.prepareStatement(query);
 					statement.setString(1, sHost);
 					statement.setInt(2, port);

@@ -185,7 +185,7 @@ var webgpu = <%= webgpu %>;
 
 <% if (!app) { %>
   <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-9958178836739125"
-     crossorigin="anonymous"></script>
+     crossorigin="anonymous" onerror="console.warn('Google Ads script failed to load (non-critical)')"></script>
 <% } %>
 </head>
 
@@ -202,14 +202,18 @@ var webgpu = <%= webgpu %>;
                     <div class="col-md-8">
 
                     <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-9958178836739125"
-                         crossorigin="anonymous"></script>
+                         crossorigin="anonymous" onerror="console.warn('Google Ads script failed to load (non-critical)')"></script>
                     <!-- HORIZONAL-GOOD-SIZE -->
                     <ins class="adsbygoogle"
                          style="display:inline-block;width:728px;height:90px"
                          data-ad-client="ca-pub-9958178836739125"
                          data-ad-slot="9479544084"></ins>
                     <script>
-                         (adsbygoogle = window.adsbygoogle || []).push({});
+                         try {
+                           (adsbygoogle = window.adsbygoogle || []).push({});
+                         } catch (e) {
+                           console.warn('Google Ads failed to load (non-critical):', e.message);
+                         }
                     </script>
                     </div>
                 </div>

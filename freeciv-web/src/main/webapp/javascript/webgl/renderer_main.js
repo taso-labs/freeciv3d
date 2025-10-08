@@ -65,12 +65,15 @@ function webgl_preload_complete()
  Init the map renderer
  ****************************************************************************/
 function renderer_init() {
+  console.log("[INIT] renderer_init() called, client_state:", client_state());
   if (!Detector.webgl) {
+    console.error("[INIT] WebGL not supported!");
     swal("3D WebGL not supported by your browser or you don't have a 3D graphics card. ");
     return;
   }
 
   if (C_S_RUNNING === client_state() || C_S_OVER === client_state()) {
+    console.log("[INIT] Client state is RUNNING, initializing renderer");
     webgl_start_renderer();
     init_webgl_mapview();
     init_webgl_mapctrl();
@@ -79,6 +82,9 @@ function renderer_init() {
    keyboard_input=true;
     $.unblockUI();
     setTimeout("$('#mapcanvas').fadeIn(2500);", 300);
+    console.log("[INIT] Renderer initialization complete");
+  } else {
+    console.warn("[INIT] Client state is not RUNNING, skipping renderer init. State:", client_state());
   }
 }
 

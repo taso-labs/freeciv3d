@@ -90,7 +90,21 @@ function civclient_init()
   //initialize a seeded random number generator
   fc_seedrandom = new Math.seedrandom('freeciv-web');
 
-  init_webgl_renderer();
+  // Wait for DOM to be ready before initializing WebGL
+  setTimeout(function() {
+    if (document.getElementById('mapcanvas')) {
+      init_webgl_renderer();
+    } else {
+      console.error("mapcanvas element not found, retrying WebGL initialization...");
+      setTimeout(function() {
+        if (document.getElementById('mapcanvas')) {
+          init_webgl_renderer();
+        } else {
+          console.error("Failed to initialize WebGL: mapcanvas element not available");
+        }
+      }, 1000);
+    }
+  }, 100);
 
   game_init();
   $('#tabs').tabs({ heightStyle: "fill" });
