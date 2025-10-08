@@ -57,7 +57,38 @@ echo "Deploying spectator files..."
     echo "You may need to deploy spectator files manually"
 }
 
-echo "=== Starting FreeCiv Proxy for LLM Gateway (Port 8002) ==="
+# Fix webapp permissions permanently - this ensures Tomcat can access all files
+echo "=== Fixing Webapp Permissions ==="
+if [ -d "/var/lib/tomcat10/webapps/freeciv-web" ]; then
+    echo "Setting correct ownership for webapp files..."
+    sudo chown -R tomcat:tomcat /var/lib/tomcat10/webapps/freeciv-web/
+    echo "✓ Webapp permissions fixed"
+else
+    echo "⚠ Webapp directory not found yet, will be created during build"
+fi
+
+# Clean up any existing proxy processes to prevent leaks
+echo "=== Cleaning Up Old Proxy Processes ==="
+PROXY_COUNT=$(pgrep -f "freeciv-proxy.py" | wc -l)
+if [ $PROXY_COUNT -gt 0 ]; then
+    echo "Found $PROXY_COUNT existing proxy process(es), cleaning up..."
+    pkill -f "freeciv-proxy.py" || true
+    sleep 1
+    echo "✓ Old proxy processes cleaned up"
+else
+    echo "✓ No old proxy processes found"
+fi
+
+# Validate server registration in database
+echo "=== Validating Server Registration ==="
+REGISTERED_COUNT=$(mysql -h${DB_HOST} -u${DB_USER} -p${DB_PASSWORD} ${DB_NAME} -N -e "SELECT COUNT(*) FROM servers WHERE state='Pregame';" 2>/dev/null || echo "0")
+if [ "$REGISTERED_COUNT" -gt 0 ]; then
+    echo "✓ Found $REGISTERED_COUNT registered servers in metaserver"
+else
+    echo "⚠ No servers found in metaserver, will register on demand"
+fi
+
+echo "=== Starting FreeCiv Proxy for LLM Gateway (Port 8002) ===="
 # Start dedicated proxy for LLM Gateway on port 8002
 # This is separate from game-specific proxies (7000-7009) managed by publite2
 cd /docker/freeciv-proxy && \

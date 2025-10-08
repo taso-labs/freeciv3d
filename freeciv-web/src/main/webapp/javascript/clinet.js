@@ -83,10 +83,12 @@ function websocket_init()
     return;
   }
 
-  var proxyport = 1000 + parseFloat(civserverport);
+  // Calculate proxy port correctly: 6000 -> 7000, 6001 -> 7001, etc.
+  var proxy_port = parseFloat(civserverport) - 6000 + 7000;
   var ws_protocol = ('https:' == window.location.protocol) ? "wss://" : "ws://";
   var port = window.location.port ? (':' + window.location.port) : '';
-  var ws_url = ws_protocol + window.location.hostname + port + "/civsocket/" + proxyport;
+  // Use internal proxy port for nginx routing (7000+)
+  var ws_url = ws_protocol + window.location.hostname + port + "/civsocket/" + proxy_port;
 
   console.log("WebSocket URL:", ws_url);
   console.log("Attempting to connect to WebSocket...");
