@@ -19,7 +19,7 @@ addArgs() {
 
 echo "init-freeciv-web.sh port ${2}"
 
-addArgs --debug 1
+addArgs --debug verbose
 addArgs --port "${2}"
 addArgs --Announce none
 addArgs --exit-on-end
@@ -56,6 +56,7 @@ addArgs --saves "${savesdir}"
 
 export FREECIV_SAVE_PATH=${savesdir};
 rm -f "/var/lib/tomcat10/webapps/data/scorelogs/score-${2}.log"
+rm -f "../logs/freeciv-web-log-${2}.log"
 
 # Export LLM Gateway environment variables for freeciv-proxy
 export CACHE_HMAC_SECRET="${CACHE_HMAC_SECRET:-75d6fd1ee3fb974b9a04f64eae2d48f2d7acdbc294cda59bc75485bcfe0bf861}"
