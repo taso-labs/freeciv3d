@@ -631,7 +631,8 @@ char *mapimg_help(const char *cmdname)
     for (format = imageformat_begin(); format != imageformat_end();
          format = imageformat_next(format)) {
       if (toolkit->formats & format) {
-        astr_add(&str_format, "%s'%s'", separator, imageformat_name(format));
+        const char *nameptr = imageformat_name(format);
+        astr_add(&str_format, "%s'%s'", separator, nameptr ? nameptr : "?");
         separator = ", ";
       }
     }
