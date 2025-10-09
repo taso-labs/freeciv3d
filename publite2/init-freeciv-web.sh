@@ -19,7 +19,7 @@ addArgs() {
 
 echo "init-freeciv-web.sh port ${2}"
 
-addArgs --debug 1
+addArgs --debug verbose
 addArgs --port "${2}"
 addArgs --Announce none
 addArgs --exit-on-end
@@ -51,10 +51,11 @@ addArgs --saves "${savesdir}"
 
 export FREECIV_SAVE_PATH=${savesdir};
 rm -f "/var/lib/tomcat10/webapps/data/scorelogs/score-${2}.log"
+rm -f "../logs/freeciv-web-log-${2}.log"
 
 python3 ../freeciv-proxy/freeciv-proxy.py "${3}" > "../logs/freeciv-proxy-${3}.log" 2>&1 &
 proxy_pid=$! && 
-${HOME}/freeciv/bin/freeciv-web "${args[@]}" > /dev/null 2> "../logs/freeciv-web-stderr-${2}.log"
+${HOME}/freeciv/bin/freeciv-web "${args[@]}" > "../logs/freeciv-web-stdout-${2}.log" 2> "../logs/freeciv-web-stderr-${2}.log"
 
 rc=$?; 
 kill -9 $proxy_pid; 
