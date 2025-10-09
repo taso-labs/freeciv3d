@@ -79,12 +79,12 @@ public class CivclientLauncher extends HttpServlet {
 				// server from the metaserver DB, and use that one.
 				String lookupQuery =
 						"SELECT port "
-								+ "FROM servers "
-								+ "WHERE state = 'Pregame' "
-								+ "	AND type = ? "
-								+ "	AND humans = '0' "
-								+ "ORDER BY RAND() "
-								+ "LIMIT 1 ";
+							+ "FROM servers "
+							+ "WHERE state = 'Pregame' "
+							+ "\tAND (type = ? OR type = 'none') "
+							+ "\tAND humans = '0' "
+							+ "ORDER BY RAND() "
+							+ "LIMIT 1 ";
 
 				PreparedStatement lookupStmt = conn.prepareStatement(lookupQuery);
 				lookupStmt.setString(1, gameType);
