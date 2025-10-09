@@ -24,6 +24,7 @@ addArgs --port "${2}"
 # Removed --Announce none to allow servers to register with metaserver
 addArgs --exit-on-end
 addArgs --meta --keep --Metaserver "http://${4}"
+addArgs --identity localhost  # Required for metaserver registration
 addArgs --type "${5}"
 addArgs --read "pubscript_${6}.serv"
 addArgs --log "../logs/freeciv-web-log-${2}.log"
@@ -51,6 +52,14 @@ addArgs --saves "${savesdir}"
 
 export FREECIV_SAVE_PATH=${savesdir};
 rm -f "/var/lib/tomcat10/webapps/data/scorelogs/score-${2}.log"
+
+# Export LLM Gateway environment variables for freeciv-proxy
+export CACHE_HMAC_SECRET="${CACHE_HMAC_SECRET:-75d6fd1ee3fb974b9a04f64eae2d48f2d7acdbc294cda59bc75485bcfe0bf861}"
+export REDIS_HOST="${REDIS_HOST:-redis}"
+export REDIS_PORT="${REDIS_PORT:-6379}"
+export SESSION_TIMEOUT_SECONDS="${SESSION_TIMEOUT_SECONDS:-3600}"
+export API_KEY_SECRET="${API_KEY_SECRET:-test12345678901234567890123456789012}"
+export LLM_API_TOKENS="${LLM_API_TOKENS:-test-token-fc3d-001,test-token-fc3d-002}"
 
 python3 ../freeciv-proxy/freeciv-proxy.py "${3}" > "../logs/freeciv-proxy-${3}.log" 2>&1 &
 proxy_pid=$! && 
