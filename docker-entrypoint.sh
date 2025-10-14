@@ -42,20 +42,21 @@ if ! /docker/scripts/docker-init-db.sh; then
 fi
 echo "✓ Database initialization completed successfully"
 
-# Start LLM Gateway components if enabled
+# Start LLM Gateway automatically
 # Note: freeciv-proxy is already started by start-freeciv-web.sh, don't start it again!
-if [ "${LLM_GATEWAY_ENABLED:-false}" = "true" ] && [ -d "/docker/llm-gateway" ]; then
-    echo "=== Starting LLM Gateway Components ==="
-
-    # Start only the LLM Gateway API (port 8003)
-    # The main freeciv-proxy is already running from start-freeciv-web.sh
+echo "=== Starting LLM Gateway (Port 8003) ==="
+if [ -d "/docker/llm-gateway" ]; then
     cd /docker/llm-gateway
     nohup /home/docker/.local/bin/uvicorn main:app --host 0.0.0.0 --port 8003 --log-level info > /docker/logs/llm-gateway.log 2>&1 &
-    echo "✓ LLM Gateway API started on port 8003"
-    echo "Note: Main freeciv-proxy already running from start-freeciv-web.sh"
+    GATEWAY_PID=$!
+    sleep 2
+    if kill -0 $GATEWAY_PID 2>/dev/null; then
+        echo "✓ LLM Gateway started on port 8003 (PID: $GATEWAY_PID)"
+    else
+        echo "✗ LLM Gateway failed to start on port 8003"
+    fi
 else
-    echo "=== LLM Gateway Disabled ==="
-    echo "Set LLM_GATEWAY_ENABLED=true to enable LLM features"
+    echo "⚠️  LLM Gateway directory not found, skipping startup"
 fi
 
 echo "=== Freeciv3D Container Ready ==="

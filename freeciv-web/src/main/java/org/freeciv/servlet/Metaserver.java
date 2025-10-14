@@ -127,50 +127,27 @@ public class Metaserver extends HttpServlet {
 			}
 		}
 
-		// Data validation
-		System.out.println("=== METASERVER POST DEBUG ===");
-		System.out.println("Remote Address: " + request.getRemoteAddr());
-		System.out.println("Content-Type: " + request.getContentType());
-		System.out.println("Content-Length: " + request.getContentLength());
-		System.out.println("Method: " + request.getMethod());
-		
-		// Try to manually parse parts for debugging
-		try {
-			System.out.println("Attempting to get parts...");
-			var parts = request.getParts();
-			System.out.println("Number of parts: " + parts.size());
-			for (var part : parts) {
-				System.out.println("  Part name: " + part.getName() + ", size: " + part.getSize());
-			}
-		} catch (Exception e) {
-			System.err.println("Error getting parts: " + e.getMessage());
-			e.printStackTrace();
-		}
-		
-		System.out.println("sHost: " + sHost);
-		System.out.println("sPort: " + sPort);
-		System.out.println("serverIsStopping: " + serverIsStopping);
-		System.out.println("All parameters: " + request.getParameterMap().keySet());
+		// Data validation - Log key parameters for debugging game_arena integration
+		System.out.println("Metaserver registration: host=" + sHost + ", port=" + sPort + ", stopping=" + serverIsStopping);
 		
 		String query;
 		int port;
 		try {
 			if (sPort == null) {
-				System.err.println("ERROR: Port parameter is NULL");
+				System.err.println("Metaserver validation error: Port parameter is NULL");
 				throw new IllegalArgumentException("Port must be supplied.");
 			}
 			port = Integer.parseInt(sPort);
 			if ((port < 1024) || (port > 65535)) {
-				System.err.println("ERROR: Port out of range: " + port);
+				System.err.println("Metaserver validation error: Port out of range: " + port);
 				throw new IllegalArgumentException("Invalid port supplied. Expected a number between 1024 and 65535");
 			}
 			if (sHost == null) {
-				System.err.println("ERROR: Host parameter is NULL");
+				System.err.println("Metaserver validation error: Host parameter is NULL");
 				throw new IllegalArgumentException("Host parameter is required to perform this request.");
 			}
-			System.out.println("Validation passed: host=" + sHost + ", port=" + port);
 		} catch (IllegalArgumentException e) {
-			System.err.println("ERROR: Validation failed: " + e.getMessage());
+			System.err.println("Metaserver validation failed: " + e.getMessage());
 			response.setContentType(CONTENT_TYPE);
 			response.setStatus(HttpServletResponse.SC_BAD_REQUEST);
 			response.getOutputStream().print(BAD_REQUEST);
