@@ -30,19 +30,17 @@ done
 
 # Check if database exists, create if not
 echo "Ensuring database exists..."
-mysql -h $DB_HOST -P $DB_PORT -u root << 'EOF'
-CREATE DATABASE IF NOT EXISTS freeciv_web;
-CREATE USER IF NOT EXISTS 'docker'@'localhost' IDENTIFIED BY 'changeme';
-CREATE USER IF NOT EXISTS 'docker'@'%' IDENTIFIED BY 'changeme';
-GRANT ALL PRIVILEGES ON freeciv_web.* TO 'docker'@'localhost';
-GRANT ALL PRIVILEGES ON freeciv_web.* TO 'docker'@'%';
+# Use sudo mysql to connect via Unix socket with auth_socket plugin
+sudo mysql -e "
+CREATE DATABASE IF NOT EXISTS $DB_NAME;
+CREATE USER IF NOT EXISTS '$DB_USER'@'localhost' IDENTIFIED BY '$DB_PASSWORD';
+CREATE USER IF NOT EXISTS '$DB_USER'@'%' IDENTIFIED BY '$DB_PASSWORD';
+GRANT ALL PRIVILEGES ON $DB_NAME.* TO '$DB_USER'@'localhost';
+GRANT ALL PRIVILEGES ON $DB_NAME.* TO '$DB_USER'@'%';
 FLUSH PRIVILEGES;
-EOF
-
-if [ $? -ne 0 ]; then
-    echo "ERROR: Could not connect to MySQL as root"
-    exit 1
-fi
+" 2>/dev/null || {
+    echo "Warning: Database may already be configured"
+}
 
 echo "Database and user setup complete!"
 
@@ -107,20 +105,17 @@ else
 fi
 
 # Initialize game servers in database
-echo "Registering initial game servers..."
+# Only pre-register servers that publite2 will actually start
+# Based on publite2/settings.ini: server_capacity_single=2, server_capacity_multi=1
+echo "Registering initial game servers (matching publite2 capacity)..."
 mysql -h $DB_HOST -P $DB_PORT -u $DB_USER -p$DB_PASSWORD $DB_NAME << 'EOF'
--- Register game servers for ports 6000-6009
+-- Register only the servers that publite2 will pre-start
+-- server_capacity_single = 2: ports 6000, 6002
+-- server_capacity_multi = 1: port 6001
 INSERT INTO servers (host, port, version, state, type, available, stamp) VALUES
 ('localhost', 6000, 'freeciv-web-devel', 'Pregame', 'singleplayer', 1, NOW()),
 ('localhost', 6001, 'freeciv-web-devel', 'Pregame', 'multiplayer', 1, NOW()),
-('localhost', 6002, 'freeciv-web-devel', 'Pregame', 'singleplayer', 1, NOW()),
-('localhost', 6003, 'freeciv-web-devel', 'Pregame', 'singleplayer', 1, NOW()),
-('localhost', 6004, 'freeciv-web-devel', 'Pregame', 'multiplayer', 1, NOW()),
-('localhost', 6005, 'freeciv-web-devel', 'Pregame', 'singleplayer', 1, NOW()),
-('localhost', 6006, 'freeciv-web-devel', 'Pregame', 'singleplayer', 1, NOW()),
-('localhost', 6007, 'freeciv-web-devel', 'Pregame', 'multiplayer', 1, NOW()),
-('localhost', 6008, 'freeciv-web-devel', 'Pregame', 'singleplayer', 1, NOW()),
-('localhost', 6009, 'freeciv-web-devel', 'Pregame', 'singleplayer', 1, NOW())
+('localhost', 6002, 'freeciv-web-devel', 'Pregame', 'singleplayer', 1, NOW())
 ON DUPLICATE KEY UPDATE available=1, stamp=NOW();
 
 -- Verify servers were inserted

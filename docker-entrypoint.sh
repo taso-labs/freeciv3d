@@ -2,9 +2,14 @@
 
 echo "=== Freeciv3D Docker Container Starting ==="
 
-# Generate Tomcat context.xml with database configuration
-echo "=== Generating Tomcat Database Configuration ==="
-echo "Creating context.xml from template..."
+# Set default database configuration if not provided
+export DB_HOST="${DB_HOST:-127.0.0.1}"
+export DB_USER="${DB_USER:-docker}"
+export DB_PASSWORD="${DB_PASSWORD:-changeme}"
+export DB_NAME="${DB_NAME:-freeciv_web}"
+
+# Generate Tomcat context.xml with database configuration BEFORE starting services
+echo "Configuring Tomcat database connection..."
 sudo mkdir -p /var/lib/tomcat10/conf/Catalina/localhost
 sudo sed -e "s|#DB_HOST#|${DB_HOST}|g" \
     -e "s|#DB_USER#|${DB_USER}|g" \
@@ -12,144 +17,47 @@ sudo sed -e "s|#DB_HOST#|${DB_HOST}|g" \
     -e "s|#DB_NAME#|${DB_NAME}|g" \
     /docker/config/web.context.tmpl | sudo tee /var/lib/tomcat10/conf/Catalina/localhost/freeciv-web.xml > /dev/null
 sudo chown tomcat:tomcat /var/lib/tomcat10/conf/Catalina/localhost/freeciv-web.xml
-echo "✓ Generated freeciv-web.xml:"
-sudo cat /var/lib/tomcat10/conf/Catalina/localhost/freeciv-web.xml
+echo "✓ Tomcat database configuration ready"
 
-# Start all Freeciv-web services (nginx, tomcat, publite2)
-echo "=== Starting Services with Enhanced Logging ==="
-mkdir -p /docker/logs/tomcat
+# Start Redis if available (optional for LLM features)
+if which redis-server > /dev/null 2>&1; then
+    echo "Starting Redis for LLM features..."
+    redis-server --daemonize yes --bind 127.0.0.1 --port 6379 --dir /tmp 2>/dev/null || echo "Note: Redis failed to start, continuing without it"
+else
+    echo "Redis not installed, LLM features will use in-memory fallbacks"
+fi
 
-echo "Starting all services..."
+# Start all Freeciv-web services (this starts MySQL, nginx, tomcat, publite2)
+echo "Starting Freeciv-web services..."
 /docker/scripts/start-freeciv-web.sh
 
-# Wait for services to initialize
-sleep 10
-
-# Verify Tomcat is running
-echo "=== Verifying Tomcat Status ==="
-if pgrep -f tomcat10 > /dev/null; then
-    TOMCAT_PID=$(pgrep -f tomcat10)
-    echo "✓ Tomcat process running (PID: $TOMCAT_PID)"
-
-    # Test if Tomcat is responding
-    timeout 45 bash -c 'until curl -sf http://localhost:8080/freeciv-web/ >/dev/null 2>&1; do sleep 2; done' && \
-        echo "✓ Tomcat responding on port 8080" || \
-        echo "✗ Tomcat not responding on port 8080"
-else
-    echo "✗ Tomcat process not found!"
-fi
-
-# Set up continuous logging for Tomcat
-if [ -f /var/lib/tomcat10/logs/catalina.out ]; then
-    echo "Setting up Tomcat log monitoring..."
-    tail -f /var/lib/tomcat10/logs/catalina.out > /docker/logs/tomcat/catalina-tail.log 2>&1 &
-fi
-
-# Database initialization using Flyway migrations
-echo "=== Initializing Database with Flyway Migrations ==="
-
-# Note: MySQL is running as a separate container.
-# docker-compose depends_on with service_healthy ensures MySQL is ready before this starts.
-
-# Generate Flyway configuration from template
-echo "Generating Flyway configuration from template..."
-sed -e "s|#DB_HOST#|${DB_HOST}|g" \
-    -e "s|#DB_USER#|${DB_USER}|g" \
-    -e "s|#DB_PASSWORD#|${DB_PASSWORD}|g" \
-    -e "s|#DB_NAME#|${DB_NAME}|g" \
-    /docker/config/flyway.tmpl > /docker/freeciv-web/flyway.properties
-
-echo "✓ Generated flyway.properties:"
-cat /docker/freeciv-web/flyway.properties
-
-# Run Flyway migrations to initialize database schema
-echo "Running Flyway migrations..."
-cd /docker/freeciv-web
-if mvn -B -Dflyway.configFiles=./flyway.properties flyway:migrate 2>&1 | tee /tmp/flyway-migration.log; then
-    echo "✓ Flyway migrations completed successfully!"
-else
-    echo "✗ Flyway migration failed!"
-    echo "Last 30 lines of migration log:"
-    tail -30 /tmp/flyway-migration.log
+# Initialize database AFTER services are running
+echo "Running database initialization..."
+# Run database init with password-based authentication
+if ! /docker/scripts/docker-init-db.sh; then
+    echo "ERROR: Database initialization FAILED!"
+    echo "Game servers cannot start without database tables and server registration"
+    echo "Check MySQL logs at /var/log/mysql/error.log for details"
     exit 1
 fi
+echo "✓ Database initialization completed successfully"
 
-echo "=== Database Initialization Complete ==="
+# Start LLM Gateway components if enabled
+# Note: freeciv-proxy is already started by start-freeciv-web.sh, don't start it again!
+if [ "${LLM_GATEWAY_ENABLED:-false}" = "true" ] && [ -d "/docker/llm-gateway" ]; then
+    echo "=== Starting LLM Gateway Components ==="
 
-# Deploy spectator files to webapp
-echo "Deploying spectator files..."
-/docker/scripts/deploy-spectator-files.sh || {
-    echo "Spectator file deployment failed, but continuing..."
-    echo "You may need to deploy spectator files manually"
-}
-
-# Fix webapp permissions permanently - this ensures Tomcat can access all files
-echo "=== Fixing Webapp Permissions ==="
-if [ -d "/var/lib/tomcat10/webapps/freeciv-web" ]; then
-    echo "Setting correct ownership for webapp files..."
-    sudo chown -R tomcat:tomcat /var/lib/tomcat10/webapps/freeciv-web/
-    echo "✓ Webapp permissions fixed"
+    # Start only the LLM Gateway API (port 8003)
+    # The main freeciv-proxy is already running from start-freeciv-web.sh
+    cd /docker/llm-gateway
+    nohup /home/docker/.local/bin/uvicorn main:app --host 0.0.0.0 --port 8003 --log-level info > /docker/logs/llm-gateway.log 2>&1 &
+    echo "✓ LLM Gateway API started on port 8003"
+    echo "Note: Main freeciv-proxy already running from start-freeciv-web.sh"
 else
-    echo "⚠ Webapp directory not found yet, will be created during build"
-fi
-
-# Clean up any existing proxy processes to prevent leaks
-echo "=== Cleaning Up Old Proxy Processes ==="
-PROXY_COUNT=$(pgrep -f "freeciv-proxy.py" | wc -l)
-if [ $PROXY_COUNT -gt 0 ]; then
-    echo "Found $PROXY_COUNT existing proxy process(es), cleaning up..."
-    pkill -f "freeciv-proxy.py" || true
-    sleep 1
-    echo "✓ Old proxy processes cleaned up"
-else
-    echo "✓ No old proxy processes found"
-fi
-
-# Validate server registration in database
-echo "=== Validating Server Registration ==="
-REGISTERED_COUNT=$(mysql -h${DB_HOST} -u${DB_USER} -p${DB_PASSWORD} ${DB_NAME} -N -e "SELECT COUNT(*) FROM servers WHERE state='Pregame';" 2>/dev/null || echo "0")
-if [ "$REGISTERED_COUNT" -gt 0 ]; then
-    echo "✓ Found $REGISTERED_COUNT registered servers in metaserver"
-else
-    echo "⚠ No servers found in metaserver, will register on demand"
-fi
-
-echo "=== Starting FreeCiv Proxy for LLM Gateway (Port 8002) ===="
-# Start dedicated proxy for LLM Gateway on port 8002
-# This is separate from game-specific proxies (7000-7009) managed by publite2
-cd /docker/freeciv-proxy && \
-bash -c "cd /docker/freeciv-proxy && python3 -u freeciv-proxy.py 8002 2>&1 | tee /docker/logs/freeciv-proxy-PORT6000.log" &
-PROXY_8002_PID=$!
-
-# Wait for proxy to start
-sleep 2
-if kill -0 $PROXY_8002_PID 2>/dev/null; then
-    echo "✓ FreeCiv proxy started on port 8002 (PID: $PROXY_8002_PID)"
-else
-    echo "✗ FreeCiv proxy failed to start on port 8002"
-fi
-
-echo "=== Starting LLM Gateway (Port 8003) ==="
-cd /docker/llm-gateway && \
-nohup /home/docker/.local/bin/uvicorn main:app --host 0.0.0.0 --port 8003 --log-level info > /docker/logs/llm-gateway.log 2>&1 &
-GATEWAY_PID=$!
-
-# Wait for gateway to start
-sleep 2
-if kill -0 $GATEWAY_PID 2>/dev/null; then
-    echo "✓ LLM Gateway started on port 8003 (PID: $GATEWAY_PID)"
-else
-    echo "✗ LLM Gateway failed to start on port 8003"
+    echo "=== LLM Gateway Disabled ==="
+    echo "Set LLM_GATEWAY_ENABLED=true to enable LLM features"
 fi
 
 echo "=== Freeciv3D Container Ready ==="
 
-# Keep services running (don't exec into bash which exits)
-# Monitor key log files to keep container alive and provide visibility
-echo "=== Keeping Services Alive - Tailing Logs ==="
-tail -f /docker/logs/tomcat/catalina-tail.log \
-        /docker/logs/llm-gateway.log \
-        /docker/logs/freeciv-proxy-PORT6000.log 2>/dev/null &
-
-# Sleep infinity as fallback if logs don't exist yet
-sleep infinity
+exec "$@"

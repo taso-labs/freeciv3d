@@ -23,17 +23,34 @@ import os
 from tornado import ioloop
 
 # Import packet ID constants for type-safe packet handling
-from packet_constants import (
-    PACKET_CONN_INFO,
-    PACKET_PLAYER_INFO,
-    PACKET_MAP_INFO,
-    PACKET_GAME_INFO,
-    PACKET_UNIT_INFO,
-    PACKET_CITY_INFO,
-    PACKET_CHAT_MSG,
-    PACKET_RULESET_NATION,
-    get_packet_name
-)
+# Gracefully handle missing packet_constants module for backward compatibility
+try:
+    from packet_constants import (
+        PACKET_CONN_INFO,
+        PACKET_PLAYER_INFO,
+        PACKET_MAP_INFO,
+        PACKET_GAME_INFO,
+        PACKET_UNIT_INFO,
+        PACKET_CITY_INFO,
+        PACKET_CHAT_MSG,
+        PACKET_RULESET_NATION,
+        get_packet_name
+    )
+    PACKET_CONSTANTS_AVAILABLE = True
+    logging.getLogger("freeciv-proxy").info("packet_constants module loaded successfully - LLM state parsing enabled")
+except ImportError as e:
+    logging.getLogger("freeciv-proxy").warning(f"packet_constants not available: {e}. Falling back to simple packet forwarding (working commit behavior).")
+    PACKET_CONSTANTS_AVAILABLE = False
+    # Define dummy constants to prevent NameError when packet_constants unavailable
+    PACKET_CONN_INFO = -1
+    PACKET_PLAYER_INFO = -1
+    PACKET_MAP_INFO = -1
+    PACKET_GAME_INFO = -1
+    PACKET_UNIT_INFO = -1
+    PACKET_CITY_INFO = -1
+    PACKET_CHAT_MSG = -1
+    PACKET_RULESET_NATION = -1
+    def get_packet_name(pid): return f"packet_{pid}"
 
 HOST = '127.0.0.1'
 logger = logging.getLogger("freeciv-proxy")
@@ -75,17 +92,17 @@ class CivCom(Thread):
     def run(self):
         try:
             # setup connection to civserver
-            if (logger.isEnabledFor(logging.INFO)):
-                logger.info("Start connection to civserver for " + self.username)
+            logger.info(f"[{self.username}] Starting connection to civserver on port {self.civserverport}")
             self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.socket.setblocking(True)
             self.socket.settimeout(2)
             try:
+                logger.info(f"[{self.username}] Attempting to connect to {HOST}:{self.civserverport}")
                 self.socket.connect((HOST, self.civserverport))
                 self.socket.settimeout(0.01)
-                logger.debug(f"Connected to civserver {HOST}:{self.civserverport} for {self.username}")
+                logger.info(f"[{self.username}] Successfully connected to {HOST}:{self.civserverport}")
             except socket.error as reason:
-                logger.error(f"Failed to connect to {HOST}:{self.civserverport} for {self.username}: {reason}")
+                logger.error(f"[{self.username}] Failed to connect to {HOST}:{self.civserverport}: {reason}")
                 self.send_error_to_client(
                     "Proxy unable to connect to civserver. Error: %s" %
                     (reason))
@@ -116,31 +133,32 @@ class CivCom(Thread):
 
                     if (len(self.net_buf) == self.packet_size and self.net_buf[-1] == 0):
                         # valid packet received from freeciv server
-                        # Parse and store game state before forwarding
-                        try:
-                            packet_str = self.net_buf[:-1].decode('utf-8')
-                            self.parse_and_store_packet(packet_str)
-
-                            # Log important packet types
+                        # Parse and store game state ONLY if packet_constants module is available
+                        if PACKET_CONSTANTS_AVAILABLE:
                             try:
-                                packet_json = json.loads(packet_str)
-                                pid = packet_json.get('pid')
-                                if pid == PACKET_UNIT_INFO:
-                                    logger.info(f"✓ Received PACKET_UNIT_INFO (pid={pid}) for {self.username}")
-                                elif pid == PACKET_CITY_INFO:
-                                    logger.info(f"✓ Received PACKET_CITY_INFO (pid={pid}) for {self.username}")
-                                elif pid == PACKET_GAME_INFO:
-                                    logger.debug(f"Received PACKET_GAME_INFO for {self.username}")
-                                elif pid == PACKET_CHAT_MSG:
-                                    # Log chat messages to capture server command responses
-                                    msg_text = packet_json.get('message', '')
-                                    logger.info(f"Chat message for {self.username}: {msg_text}")
-                            except:
-                                pass  # Not JSON or parsing failed, ignore
-                        except Exception as e:
-                            logger.warning(f"⚠ Error parsing packet for state storage: {e}", exc_info=True)
+                                packet_str = self.net_buf[:-1].decode('utf-8')
+                                self.parse_and_store_packet(packet_str)
 
-                        # Forward packet to client
+                                # Log important packet types
+                                try:
+                                    packet_json = json.loads(packet_str)
+                                    pid = packet_json.get('pid')
+                                    if pid == PACKET_UNIT_INFO:
+                                        logger.info(f"✓ Received PACKET_UNIT_INFO (pid={pid}) for {self.username}")
+                                    elif pid == PACKET_CITY_INFO:
+                                        logger.info(f"✓ Received PACKET_CITY_INFO (pid={pid}) for {self.username}")
+                                    elif pid == PACKET_GAME_INFO:
+                                        logger.debug(f"Received PACKET_GAME_INFO for {self.username}")
+                                    elif pid == PACKET_CHAT_MSG:
+                                        # Log chat messages to capture server command responses
+                                        msg_text = packet_json.get('message', '')
+                                        logger.info(f"Chat message for {self.username}: {msg_text}")
+                                except:
+                                    pass  # Not JSON or parsing failed, ignore
+                            except Exception as e:
+                                logger.warning(f"⚠ Error parsing packet for state storage: {e}", exc_info=True)
+
+                        # ALWAYS forward packet to client (even if parsing disabled/failed)
                         self.send_buffer_append(self.net_buf[:-1])
                         self.packet_size = -1
                         self.net_buf = bytearray(0)
@@ -233,7 +251,7 @@ class CivCom(Thread):
         if (packet is not None and self.civwebserver is not None):
             # Calls the write_message callback on the next Tornado I/O loop iteration (thread safely).
             conn = self.civwebserver
-            ioloop.IOLoop.current().add_callback(lambda: conn.write_message(packet))
+            conn.io_loop.add_callback(lambda: conn.write_message(packet))
 
     def get_client_result_string(self):
         result = ""
@@ -301,6 +319,10 @@ class CivCom(Thread):
 
     def parse_and_store_packet(self, packet_json):
         """Parse incoming packets and store relevant game state"""
+        # Early return if packet_constants not available (should not happen if called correctly, but safety check)
+        if not PACKET_CONSTANTS_AVAILABLE:
+            return
+
         try:
             packet = json.loads(packet_json)
             packet_type = packet.get('pid')

@@ -50,6 +50,7 @@ dependencies="\
   python3-bcrypt \
   python3-redis \
   python3-yaml \
+  redis-server \
   sed \
   tar \
   unzip \

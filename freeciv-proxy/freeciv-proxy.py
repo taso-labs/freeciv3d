@@ -62,15 +62,18 @@ class StatusHandler(web.RequestHandler):
 class WSHandler(websocket.WebSocketHandler):
     logger = logging.getLogger("freeciv-proxy")
     io_loop = ioloop.IOLoop.current()
+    civcoms = civcoms  # Expose global civcoms dict so civcom.py can clean it up
 
     def open(self):
         self.id = str(uuid.uuid4())
         self.is_ready = False
         self.set_nodelay(True)
+        logger.info(f"[{self.id}] WebSocket opened")
 
     def on_message(self, message):
         if (not self.is_ready and len(civcoms) <= CONNECTION_LIMIT):
             # called the first time the user connects.
+            logger.info(f"[{self.id}] Received first message (login): {message[:200]}")
             login_message = json.loads(message)
             self.username = login_message['username']
             if (not validate_username(self.username)):
@@ -78,6 +81,7 @@ class WSHandler(websocket.WebSocketHandler):
               self.write_message("[{\"pid\":5,\"message\":\"Error: Could not authenticate user.\",\"you_can_join\":false,\"conn_id\":-1}]")
               return
             self.civserverport = login_message['port']
+            logger.info(f"[{self.id}] Login for user '{self.username}' on port {self.civserverport}")
 
             self.loginpacket = message
             self.is_ready = True
@@ -99,11 +103,14 @@ class WSHandler(websocket.WebSocketHandler):
         self.civcom.queue_to_civserver(message)
 
     def on_close(self):
+        logger.info(f"[{self.id}] WebSocket closing")
         if hasattr(self, 'civcom') and self.civcom is not None:
+            logger.info(f"[{self.id}] Cleaning up civcom for user '{self.civcom.username}'")
             self.civcom.stopped = True
             self.civcom.close_connection()
             if self.civcom.key in list(civcoms.keys()):
                 del civcoms[self.civcom.key]
+                logger.info(f"[{self.id}] Removed civcom entry for '{self.civcom.username}' from civcoms")
             del(self.civcom)
             gc.collect()
 
@@ -133,10 +140,22 @@ class WSHandler(websocket.WebSocketHandler):
 def validate_username(name):
     if (name is None or len(name) <= 2 or len(name) >= 32):
         return False
-    for civkey in civcoms.keys():
+    
+    # Clean up stopped connections for this username before validation
+    keys_to_remove = []
+    for civkey in list(civcoms.keys()):
         if name == civcoms[civkey].username:
-            logger.warn("User already connected: "  + name)
-            return False
+            if civcoms[civkey].stopped:
+                logger.info(f"Removing stopped connection for user: {name}")
+                keys_to_remove.append(civkey)
+            else:
+                logger.warn(f"User already connected: {name}")
+                return False
+    
+    # Remove stopped connections
+    for key in keys_to_remove:
+        del civcoms[key]
+        logger.info(f"Deleted stopped connection key: {key}")
 
     name = name.lower()
     return re.fullmatch('[a-z][a-z0-9]*', name) is not None

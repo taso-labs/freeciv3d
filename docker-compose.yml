@@ -1,59 +1,14 @@
 services:
 
-  redis:
-    image: redis:7-alpine
-    container_name: fciv-redis
-    ports:
-      - "6379:6379"
-    command: redis-server --appendonly yes
-    volumes:
-      - redis_data:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    restart: unless-stopped
-
-  mysql:
-    image: mysql:8.0
-    container_name: fciv-mysql-db
-    environment:
-      - MYSQL_ROOT_PASSWORD=changeme
-      - MYSQL_DATABASE=freeciv_web
-      - MYSQL_USER=docker
-      - MYSQL_PASSWORD=changeme
-    volumes:
-      - mysql_data:/var/lib/mysql
-      - ./mysql-init:/docker-entrypoint-initdb.d
-    ports:
-      - "3306:3306"
-    healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-u", "docker", "--password=changeme"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-      start_period: 60s
-    restart: unless-stopped
-
   fciv-net:
     image: freeciv/fciv-net
     build:
       context: .
-      target: runtime
-      args:
-        - SKIP_FREECIV_BUILD=${SKIP_FREECIV_BUILD:-false}
-        - BUILD_JOBS=${BUILD_JOBS:-2}
     container_name: fciv-net
-    depends_on:
-      redis:
-        condition: service_healthy
-      mysql:
-        condition: service_healthy
-    command: ["/bin/bash", "-c", "(sleep 30; /docker/freeciv-web-shared/startup-spectator.sh) & sleep infinity"]
+    command: ["sleep", "infinity"]
     environment:
-      # Database Configuration
-      - DB_HOST=mysql
+      # Database Configuration - using localhost since MySQL is internal
+      - DB_HOST=127.0.0.1
       - DB_USER=docker
       - DB_PASSWORD=changeme
       - DB_NAME=freeciv_web
@@ -68,29 +23,29 @@ services:
       - REQUESTS_PER_SECOND=${REQUESTS_PER_SECOND:-10}
       - BURST_CAPACITY=${BURST_CAPACITY:-100}
       - DEFAULT_CIVSERVER_PORT=${DEFAULT_CIVSERVER_PORT:-6001}
-      # Redis Configuration
-      - REDIS_HOST=redis
+      # Redis Configuration - using localhost since Redis is internal
+      - REDIS_HOST=127.0.0.1
       - REDIS_PORT=6379
     volumes:
       - ./freeciv-web:/docker/freeciv-web-shared
-      - .:/docker/project-root
+      - ./logs:/docker/logs
+      - mysql_data:/var/lib/mysql
+      - redis_data:/data
     ports:
-      - "8080:80"
-      - "4002:4002"
-      - "6000-6009:6000-6009"
-      - "7100-7109:7000-7009"
-      - "8888:8080"
-      - "8002:8002"
-      - "8003:8003"
+      - "8080:80"               # nginx web interface
+      - "8003:8003"             # LLM gateway API
+      - "4002:4002"             # publite2 status
+      - "6000-6009:6000-6009"   # game servers
+      - "7100-7109:7000-7009"   # websocket proxies (remapped to avoid macOS port 7000 conflict)
+      - "8002:8002"             # freeciv-proxy state extraction
     user: docker
     healthcheck:
-      test: ["CMD-SHELL", "pgrep -f tomcat10 && curl -sf http://localhost:8080/freeciv-web/ || exit 1"]
+      test: ["CMD", "bash", "-lc", "curl -sf http://localhost:8080/freeciv-web/ -o /dev/null"]
       interval: 30s
       timeout: 10s
       retries: 5
       start_period: 120s
 
 volumes:
-  data:
   mysql_data:
   redis_data:
