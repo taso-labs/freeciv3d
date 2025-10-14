@@ -156,19 +156,28 @@ http://localhost:8080/
 
 #### LLM Gateway for AI Integration
 
-FreeCiv3D includes an LLM Gateway that enables AI agents (like those in game_arena) to play FreeCiv through a WebSocket API. The gateway starts automatically with sensible defaults - no configuration needed for testing.
+FreeCiv3D includes an LLM Gateway that enables AI agents (like those in game_arena) to play FreeCiv through a WebSocket API. The complete gateway system starts automatically with sensible defaults - no configuration needed for testing.
+
+**Architecture:**
+
+The LLM Gateway consists of two components that start automatically:
+
+1. **Dedicated FreeCiv Proxy (Port 8002)** - Provides `/llmsocket/8002` endpoint for LLM agents
+2. **LLM Gateway API (Port 8003)** - Pass-through layer that connects to the proxy
 
 **Quick Start:**
 ```bash
-# Start services (LLM Gateway starts automatically)
+# Start services (both components start automatically)
 docker-compose up -d
 
 # The LLM WebSocket gateway will be available at:
 # ws://localhost:8003/ws/agent/{agent_id}
 
-# Verify gateway started
-docker logs fciv-net | grep "LLM Gateway"
-# Expected: ✓ LLM Gateway started on port 8003 (PID: XXXXX)
+# Verify both components started
+docker logs fciv-net | grep -E "(FreeCiv proxy|LLM Gateway)"
+# Expected output:
+# ✓ FreeCiv proxy started on port 8002 (PID: XXXXX)
+# ✓ LLM Gateway started on port 8003 (PID: XXXXX)
 ```
 
 **For game_arena Integration:**
