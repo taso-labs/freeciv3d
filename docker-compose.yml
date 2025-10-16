@@ -4,7 +4,7 @@ services:
     build:
       context: .
     container_name: fciv-net
-    command: ["sleep", "infinity"]
+    command: [ "sleep", "infinity" ]
     environment:
       # Database Configuration
       - DB_HOST=db
@@ -36,16 +36,16 @@ services:
       db:
         condition: service_healthy
     ports:
-      - "8080:80"               # nginx web interface
-      - "8003:8003"             # LLM gateway API
-      - "4002:4002"             # publite2 status
-      - "6000-6009:6000-6009"   # game servers
-      - "7100-7109:7000-7009"   # websocket proxies (remapped to avoid macOS port 7000 conflict)
-      - "8002:8002"             # freeciv-proxy state extraction
+      - "8080:80" # nginx web interface
+      - "8003:8003" # LLM gateway API
+      - "4002:4002" # publite2 status
+      - "6000-6009:6000-6009" # game servers
+      - "7100-7109:7000-7009" # websocket proxies (remapped to avoid macOS port 7000 conflict)
+      - "8002:8002" # freeciv-proxy state extraction
       - "8888:8080"
     user: docker
     healthcheck:
-      test: ["CMD", "curl", "-o", "/dev/null", "-sf", "http://localhost:8080/about"]
+      test: [ "CMD", "curl", "-o", "/dev/null", "-sf", "http://localhost:8080/about" ]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -63,7 +63,7 @@ services:
     volumes:
       - mysql_data:/var/lib/mysql
     healthcheck:
-      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      test: [ "CMD", "healthcheck.sh", "--connect", "--innodb_initialized" ]
       start_period: 1m
       start_interval: 10s
       interval: 1m
@@ -87,13 +87,7 @@ services:
     # explicitly set the migrations location to avoid the future deprecation
     # warning about scanning 'sql'. Increase retries and interval for slow DB
     # startups.
-    command:
-      [
-        "-connectRetries=60",
-        "-connectRetriesInterval=2",
-        "-locations=filesystem:/flyway/sql",
-        "migrate",
-      ]
+    command: [ "-connectRetries=60", "-connectRetriesInterval=2", "-locations=filesystem:/flyway/sql", "migrate" ]
     restart: "no"
 
   redis:
@@ -106,7 +100,7 @@ services:
       - redis_data:/data
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: [ "CMD", "redis-cli", "ping" ]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -118,4 +112,3 @@ services:
 volumes:
   mysql_data:
   redis_data:
-
