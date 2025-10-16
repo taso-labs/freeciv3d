@@ -71,7 +71,7 @@ services:
       retries: 3
 
   flyway:
-    image: flyway/flyway:11
+    image: flyway/flyway:11.14.1
     container_name: fciv-flyway
     depends_on:
       db:
