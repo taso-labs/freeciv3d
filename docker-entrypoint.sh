@@ -47,7 +47,7 @@ fi
 echo "=== Starting LLM Gateway API (Port 8003) ==="
 if [ -d "/docker/llm-gateway" ]; then
     cd /docker/llm-gateway
-    nohup /home/docker/.local/bin/uvicorn main:app --host 0.0.0.0 --port 8003 --log-level info > /docker/logs/llm-gateway.log 2>&1 &
+    nohup uvicorn main:app --host 0.0.0.0 --port 8003 --log-level info > /docker/logs/llm-gateway.log 2>&1 &
     GATEWAY_PID=$!
     sleep 2
     if kill -0 $GATEWAY_PID 2>/dev/null; then

@@ -73,7 +73,7 @@ WORKDIR /freeciv
 RUN --mount=type=cache,uid=1001,gid=1001,target=${CCACHE_DIR} \
     /freeciv/prepare_freeciv.sh && ninja -C build install
 
-FROM docker-base
+FROM docker-base AS tomcat-builder
 
 MAINTAINER FCIV.NET : 3.3
 
@@ -115,21 +115,37 @@ PIP_SKIP=Y SKIP_FREECIV_BUILD=true \
     install/install.sh --mode=TEST
 EOF
 
+FROM docker-base AS final
+
+COPY --from=tomcat-builder --chown=docker:docker /docker /docker
+
 # Install Python dependencies for freeciv-proxy and LLM Gateway
 WORKDIR /docker/llm-gateway
-RUN --mount=type=cache,uid=1001,gid=1001,target=/home/docker/.cache/pip \
+RUN --mount=type=cache,uid=1001,gid=1001,target=/root/.cache/pip \
     --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
     <<EOF
 set -e
-sudo apt-get update --yes --quiet
-sudo apt-get install --yes python3-dotenv
+apt-get update --yes --quiet
+apt-get install --yes \
+    curl \
+    python3-dotenv \
+    python3-pip \
+    python3-tornado \
+    sudo \
+    tomcat10 \
+    && :
+## Give server access to savegames / scenarios directory.
+## TODO: Figure out more targeted solution.
+usermod -a -G tomcat docker
 pip install --break-system-packages -r requirements.txt
 EOF
 
-## Give server access to savegames / scenarios directory.
-## TODO: Figure out more targeted solution.
-RUN sudo usermod -a -G tomcat docker
+COPY --from=tomcat-builder --chown=docker:docker /home/docker /home/docker
+COPY --from=tomcat-builder --chown=tomcat:tomcat /usr/share/tomcat10 /usr/share/tomcat10
+COPY --from=tomcat-builder --chown=tomcat:tomcat /var/lib/tomcat10 /var/lib/tomcat10
+
+USER docker
 
 COPY docker-entrypoint.sh /docker/docker-entrypoint.sh
 
