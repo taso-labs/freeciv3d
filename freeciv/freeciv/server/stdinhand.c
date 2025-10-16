@@ -22,6 +22,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <ctype.h>
 
 #ifdef FREECIV_HAVE_LIBREADLINE
 #include <readline/readline.h>
