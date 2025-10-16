@@ -108,8 +108,9 @@ COPY --from=freeciv-build --chown=docker:docker /home/docker/freeciv /home/docke
 
 # Install dependencies and build
 # Using Ubuntu's stable tomcat10 package (10.1.16-1) instead of latest Apache version
-RUN DEBIAN_FRONTEND=noninteractive sudo apt-get update --yes --quiet && \
-    DEBIAN_FRONTEND=noninteractive PIP_SKIP=Y SKIP_FREECIV_BUILD=true \
+RUN --mount=type=cache,uid=1001,gid=1001,target=/home/docker/.m2 \
+	DEBIAN_FRONTEND=noninteractive sudo apt-get update --yes --quiet && \
+	DEBIAN_FRONTEND=noninteractive PIP_SKIP=Y SKIP_FREECIV_BUILD=true \
     install/install.sh --mode=TEST && \
     DEBIAN_FRONTEND=noninteractive sudo apt-get clean --yes && \
     sudo rm --recursive --force /var/lib/apt/lists/*
