@@ -89,27 +89,19 @@ apt-get install --yes \
 EOF
 
 ## Add relevant content
-COPY .git /docker/.git
-COPY freeciv /docker/freeciv
-COPY freeciv-proxy /docker/freeciv-proxy
-COPY freeciv-web /docker/freeciv-web
-COPY publite2 /docker/publite2
-COPY llm-gateway /docker/llm-gateway
-COPY LICENSE.md /docker/LICENSE.md
-
-COPY scripts /docker/scripts
-COPY config /docker/config
-
-RUN chown -R docker:docker /docker
-
-# Make scripts executable
-RUN chmod +x /docker/scripts/*.sh
+COPY --chown=docker:docker .git /docker/.git
+COPY --chown=docker:docker freeciv /docker/freeciv
+COPY --chown=docker:docker freeciv-proxy /docker/freeciv-proxy
+COPY --chown=docker:docker freeciv-web /docker/freeciv-web
+COPY --chown=docker:docker publite2 /docker/publite2
+COPY --chown=docker:docker llm-gateway /docker/llm-gateway
+COPY --chown=docker:docker LICENSE.md /docker/LICENSE.md
+COPY --chown=docker:docker --chmod=755 scripts /docker/scripts
+COPY --chown=docker:docker config /docker/config
+COPY --from=freeciv-build --chown=docker:docker /home/docker/freeciv /home/docker/freeciv
 
 USER docker
-
 WORKDIR /docker/scripts/
-
-COPY --from=freeciv-build --chown=docker:docker /home/docker/freeciv /home/docker/freeciv
 
 # Install dependencies and build
 # Using Ubuntu's stable tomcat10 package (10.1.16-1) instead of latest Apache version
