@@ -157,8 +157,15 @@ class AgentWebSocketHandler:
             proxy_url = f"ws://{settings.freeciv_proxy_host}:{settings.freeciv_proxy_port}{settings.freeciv_proxy_ws_path}"
             logger.info(f"Connecting agent {self.agent_id} to proxy: {proxy_url}")
 
-            self.proxy_connection = await websockets.connect(proxy_url)
-            logger.info(f"Connected to proxy for agent {self.agent_id}")
+            # CRITICAL FIX: Set max_size to 100MB to handle large FreeCiv game state packets
+            # FreeCiv sends packets with map data, player info, city data that exceed the default 1MB limit
+            # This was causing "frame exceeds limit of 1048576 bytes" errors (close code 1009)
+            self.proxy_connection = await websockets.connect(
+                proxy_url,
+                max_size=100 * 1024 * 1024,  # 100MB for large game state packets
+                max_queue=64  # Increase queue size to handle multiple large frames
+            )
+            logger.info(f"Connected to proxy for agent {self.agent_id} (max_size=100MB)")
 
             # Start listening for proxy messages in background
             asyncio.create_task(self._listen_to_proxy())
@@ -188,19 +195,34 @@ class AgentWebSocketHandler:
                 try:
                     # Receive message from proxy
                     proxy_message = await self.proxy_connection.recv()
+                    logger.info(f"📥 Gateway received from proxy for agent {self.agent_id}: {proxy_message[:200]}")
 
                     # Transform proxy messages to agent format
                     try:
                         msg_data = json.loads(proxy_message)
+
+                        # Handle both single objects and arrays of packets from FreeCiv protocol
+                        if isinstance(msg_data, list):
+                            # Raw FreeCiv packet array - forward as-is (agent handles raw packets)
+                            logger.debug(f"📦 Forwarding packet array ({len(msg_data)} packets) to agent {self.agent_id}")
+                            await self.websocket.send_text(proxy_message)
+                            logger.debug(f"📤 Forwarded packet array to agent {self.agent_id}")
+                            continue
+
                         msg_type = msg_data.get("type")
 
                         # Filter out welcome message - agent doesn't expect it
                         if msg_type == "welcome":
-                            logger.debug(f"Filtered welcome message for agent {self.agent_id}")
+                            logger.debug(f"🚫 Filtered welcome message for agent {self.agent_id}")
                             continue
 
                         # Transform auth_success from proxy to agent format
                         if msg_type == "auth_success":
+                            logger.info(
+                                f"🔑 Transforming auth_success for agent {self.agent_id}:\n"
+                                f"   Player ID: {msg_data.get('player_id')}\n"
+                                f"   Status: {msg_data.get('status', 'N/A')}"
+                            )
                             # Agent expects: {type: "llm_connect", data: {type: "auth_success", ...}}
                             agent_message = {
                                 "type": "llm_connect",
@@ -209,14 +231,74 @@ class AgentWebSocketHandler:
                                 "data": {**msg_data, "success": True}
                             }
                             proxy_message = json.dumps(agent_message)
+                        # Transform error messages
+                        elif msg_type == "error":
+                            logger.error(
+                                f"❌ Error from proxy for agent {self.agent_id}:\n"
+                                f"   Code: {msg_data.get('code')}\n"
+                                f"   Message: {msg_data.get('message')}\n"
+                                f"   Details: {msg_data.get('details', {})}"
+                            )
+                            # Forward error as-is but nest in 'data' for consistency
+                            agent_message = {
+                                "type": "error",
+                                "agent_id": self.agent_id,
+                                "timestamp": time.time(),
+                                "data": msg_data
+                            }
+                            proxy_message = json.dumps(agent_message)
+                        # Transform action_rejected messages
+                        elif msg_type == "action_rejected":
+                            logger.warning(
+                                f"⚠️ Action rejected for agent {self.agent_id}:\n"
+                                f"   Error Code: {msg_data.get('error_code')}\n"
+                                f"   Error Message: {msg_data.get('error_message')}\n"
+                                f"   Action: {msg_data.get('action')}"
+                            )
+                            # Forward action_rejected with consistent format
+                            agent_message = {
+                                "type": "action_rejected",
+                                "agent_id": self.agent_id,
+                                "timestamp": time.time(),
+                                "data": msg_data
+                            }
+                            proxy_message = json.dumps(agent_message)
+                        # Transform action_accepted messages
+                        elif msg_type == "action_accepted":
+                            logger.info(
+                                f"✅ Action accepted for agent {self.agent_id}:\n"
+                                f"   Action: {msg_data.get('action')}"
+                            )
+                            # Forward action_accepted with consistent format
+                            agent_message = {
+                                "type": "action_accepted",
+                                "agent_id": self.agent_id,
+                                "timestamp": time.time(),
+                                "data": msg_data
+                            }
+                            proxy_message = json.dumps(agent_message)
                         # Transform state_response to state_update
                         elif msg_type == "state_response":
                             # Proxy sends: {type: "state_response", data: {...state...}, format: "llm_optimized", ...}
                             # Agent expects: {type: "state_update", turn: 1, players: {}, ...state data at top level...}
-                            logger.debug(f"State response from proxy: {json.dumps(msg_data, indent=2)[:500]}")
+                            state_data = msg_data.get("data", {})
+                            # Debug logging to verify game dict structure
+                            game_dict = state_data.get('game', {})
+                            logger.info(
+                                f"📊 Transforming state_response for agent {self.agent_id}:\n"
+                                f"   Turn: {state_data.get('turn', 'N/A')}\n"
+                                f"   Players: {len(state_data.get('players', []))}\n"
+                                f"   Units: {len(state_data.get('units', []))}\n"
+                                f"   Cities: {len(state_data.get('cities', []))}"
+                            )
+                            logger.debug(
+                                f"📊 Game dict for agent {self.agent_id}:\n"
+                                f"   Keys: {list(game_dict.keys())}\n"
+                                f"   has current_player: {'current_player' in game_dict}\n"
+                                f"   current_player value: {game_dict.get('current_player', 'MISSING')}"
+                            )
 
                             # Extract state data from nested 'data' field and flatten to top level
-                            state_data = msg_data.get("data", {})
                             agent_message = {
                                 "type": "state_update",
                                 **state_data,  # Flatten state data to top level
@@ -225,14 +307,14 @@ class AgentWebSocketHandler:
                                 "timestamp": msg_data.get("timestamp")
                             }
                             proxy_message = json.dumps(agent_message)
-                            logger.debug(f"Transformed to state_update: {json.dumps(agent_message, indent=2)[:500]}")
 
                     except json.JSONDecodeError:
+                        logger.warning(f"⚠️ Non-JSON message from proxy for agent {self.agent_id}")
                         pass  # Forward non-JSON messages as-is
 
                     # Forward to agent
                     await self.websocket.send_text(proxy_message)
-                    logger.debug(f"Forwarded proxy message to agent {self.agent_id}")
+                    logger.debug(f"📤 Forwarded message to agent {self.agent_id}")
 
                 except websockets.ConnectionClosed:
                     logger.info(f"Proxy connection closed for agent {self.agent_id}")
@@ -291,7 +373,52 @@ class AgentWebSocketHandler:
             # Proxy expects: type, is_ready (opt, defaults to True)
             allowed_fields = {"type", "is_ready"}
             transformed = {k: v for k, v in transformed.items() if k in allowed_fields}
-        # For other types (action, etc), pass through as-is
+        elif msg_type == "action_submit":
+            # game_arena sends action_submit, transform to "action" for proxy
+            # game_arena format: {type: "action_submit", action: "canonical_string", agent_id: "...", timestamp: ...}
+            # Proxy expects: {type: "action", action: {...action data...}, timestamp (opt)}
+
+            # Get the action field (could be string or dict)
+            action_data = message.get("action")
+
+            # If action is missing, collect from flattened fields
+            if action_data is None and "data" in message:
+                action_data = message["data"]
+
+            # Rebuild message with "action" type (not "action_submit")
+            transformed = {
+                "type": "action",
+                "action": action_data
+            }
+
+            # Preserve optional timestamp
+            if "timestamp" in message:
+                transformed["timestamp"] = message["timestamp"]
+
+        elif msg_type == "action":
+            # Proxy expects: {type: "action", action: {...action data...}, timestamp (opt)}
+            # game_arena sends: {type: "action", agent_id: "...", data: {...}}
+            # After flattening (lines 305-308), data fields are at top level
+
+            # Collect action data from either original 'data' field or flattened fields
+            if "data" in message:
+                # Original message had 'data' field - use it directly
+                action_data = message["data"]
+            else:
+                # Data was already flattened - collect all non-metadata fields
+                action_data = {k: v for k, v in transformed.items()
+                              if k not in {"type", "agent_id", "timestamp"}}
+
+            # Rebuild message with nested "action" field as proxy expects
+            transformed = {
+                "type": "action",
+                "action": action_data
+            }
+
+            # Preserve optional timestamp
+            if "timestamp" in message:
+                transformed["timestamp"] = message["timestamp"]
+        # For other types, pass through as-is
 
         return transformed
 

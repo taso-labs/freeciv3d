@@ -461,6 +461,7 @@ class LLMGateway:
             elif msg_type == "action_rejected":
                 # Action was rejected
                 logger.warning(f"Action rejected for {game_id}: {message.get('error_message')}")
+                # Note: action_rejected is automatically forwarded to agent via WebSocket pass-through
 
             elif msg_type == "error":
                 # Error from LLM handler

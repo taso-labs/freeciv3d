@@ -31,7 +31,9 @@ REDIS_CONNECTION_TIMEOUT = 5  # Redis connection timeout
 HEALTH_CHECK_INTERVAL = 30.0  # Health check interval
 
 # Message and data size limits
-MAX_MESSAGE_SIZE_BYTES = 1_000_000  # 1MB maximum message size
+# CRITICAL FIX: Increased to 100MB to handle large FreeCiv game state packets
+# FreeCiv sends map data, player info, city data that can exceed 1MB
+MAX_MESSAGE_SIZE_BYTES = 100 * 1024 * 1024  # 100MB for FreeCiv game state packets
 MAX_JSON_DEPTH = 10  # Maximum JSON nesting depth
 MAX_VALIDATION_ATTEMPTS = 5  # Maximum validation attempts per window
 VALIDATION_WINDOW_SECONDS = 300  # Validation rate limit window (5 minutes)

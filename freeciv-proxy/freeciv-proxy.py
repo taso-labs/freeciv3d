@@ -184,7 +184,18 @@ if __name__ == "__main__":
             (r"/admin/auth", AdminAuthHandler),  # Admin authentication management
             (r"/", IndexHandler),
             (r"(.*)status", StatusHandler),
-        ])
+        ],
+        # CRITICAL FIX: Increase WebSocket frame size limit for large FreeCiv packets
+        # FreeCiv sends large game state packets (map data, player data, city data)
+        # that can exceed Tornado's default 10MB limit, causing "frame exceeds limit" errors
+        # See: https://www.tornadoweb.org/en/stable/websocket.html#tornado.websocket.WebSocketHandler.max_message_size
+        websocket_max_message_size=50 * 1024 * 1024  # 50MB for large game state packets
+        )
+
+        # DEBUG: Verify websocket_max_message_size is set correctly
+        max_size = application.settings.get('websocket_max_message_size', 'NOT SET')
+        print(f'DEBUG: websocket_max_message_size = {max_size} bytes ({max_size / (1024*1024):.1f} MB)' if isinstance(max_size, int) else f'DEBUG: websocket_max_message_size = {max_size}')
+        logger.info(f"WebSocket max message size configured: {max_size} bytes")
 
         http_server = httpserver.HTTPServer(application)
         http_server.listen(PROXY_PORT)

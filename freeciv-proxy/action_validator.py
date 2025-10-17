@@ -218,19 +218,40 @@ class LLMActionValidator:
     def _validate_tech_research(self, action: Dict[str, Any], player_id: int, game_state: Optional[Dict[str, Any]]) -> ValidationResult:
         """Validate technology research action"""
         if 'tech_name' not in action:
-            return self._validation_error('E040', 'Tech research requires tech_name')
+            return self._validation_error('E040', 'Tech research requires tech_name field')
 
         tech_name = action['tech_name']
 
-        # Basic tech name validation (simplified)
+        # CHANGED: Case-insensitive tech validation with expanded tech list
+        # FreeCiv standard tech tree (common techs across rulesets)
         valid_techs = [
-            'pottery', 'animal_husbandry', 'agriculture', 'mining',
-            'bronze_working', 'the_wheel', 'writing', 'alphabet',
-            'iron_working', 'mathematics', 'construction', 'currency'
+            # Ancient techs
+            'alphabet', 'animal_husbandry', 'agriculture', 'pottery',
+            'mining', 'bronze_working', 'the_wheel', 'writing',
+            'ceremonial_burial', 'code_of_laws', 'horseback_riding',
+            'iron_working', 'mapmaking', 'masonry', 'mysticism',
+            # Classical techs
+            'mathematics', 'construction', 'currency', 'literacy',
+            'philosophy', 'republic', 'monarchy', 'seafaring',
+            'trade', 'university', 'warrior_code',
+            # Medieval techs
+            'astronomy', 'banking', 'chemistry', 'chivalry',
+            'democracy', 'economics', 'engineering', 'feudalism',
+            'gunpowder', 'invention', 'medicine', 'metallurgy',
+            'navigation', 'physics', 'theology'
         ]
 
-        if tech_name.lower() not in valid_techs:
-            return self._validation_error('E041', f'Invalid technology: {tech_name}')
+        # Case-insensitive comparison
+        tech_name_lower = str(tech_name).lower().replace(' ', '_')
+
+        if tech_name_lower not in valid_techs:
+            # More helpful error message with suggestions
+            return self._validation_error(
+                'E041',
+                f'Invalid technology: "{tech_name}". '
+                f'Try one of: {", ".join(sorted(valid_techs[:12]))}... '
+                f'(Note: tech names are case-insensitive)'
+            )
 
         return ValidationResult(True)
 

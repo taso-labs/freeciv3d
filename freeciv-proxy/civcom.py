@@ -55,6 +55,56 @@ except ImportError as e:
 HOST = '127.0.0.1'
 logger = logging.getLogger("freeciv-proxy")
 
+# Unit type ID to name mapping (FreeCiv default/classic ruleset)
+# Source: freeciv/data/classic/units.ruleset
+# Maps integer type IDs from PACKET_UNIT_INFO to human-readable unit names
+UNIT_TYPE_NAMES = {
+    0: 'settlers', 1: 'workers', 2: 'engineers',
+    3: 'warriors', 4: 'phalanx', 5: 'archers', 6: 'legion',
+    7: 'pikemen', 8: 'musketeers', 9: 'fanatics', 10: 'partisan',
+    11: 'alpine_troops', 12: 'riflemen', 13: 'marines', 14: 'paratroopers',
+    15: 'mech_inf', 16: 'horsemen', 17: 'chariot', 18: 'elephants',
+    19: 'crusaders', 20: 'knights', 21: 'dragoons', 22: 'cavalry',
+    23: 'armor', 24: 'catapult', 25: 'cannon', 26: 'artillery',
+    27: 'howitzer', 28: 'fighter', 29: 'bomber', 30: 'helicopter',
+    31: 'stealth_fighter', 32: 'stealth_bomber', 33: 'trireme',
+    34: 'caravel', 35: 'galleon', 36: 'frigate', 37: 'ironclad',
+    38: 'destroyer', 39: 'cruiser', 40: 'aegis_cruiser', 41: 'battleship',
+    42: 'submarine', 43: 'carrier', 44: 'transport', 45: 'cruise_missile',
+    46: 'nuclear', 47: 'diplomat', 48: 'spy', 49: 'caravan',
+    50: 'freight', 51: 'explorer', 52: 'barbarian_leader', 53: 'awacs',
+    # Custom rulesets may have different IDs - fallback to unit_<id>
+}
+
+def get_unit_type_name(type_id):
+    """Convert FreeCiv unit type ID to human-readable name.
+
+    This function normalizes unit types to lowercase string names for consistency
+    across the system. It handles both integer type IDs from the FreeCiv server
+    and string types that may already be normalized.
+
+    Args:
+        type_id: Integer type ID from PACKET_UNIT_INFO, or string name
+
+    Returns:
+        String type name in lowercase (e.g., 'warrior', 'settler')
+
+    Examples:
+        >>> get_unit_type_name(3)
+        'warriors'
+        >>> get_unit_type_name(0)
+        'settlers'
+        >>> get_unit_type_name('Warrior')
+        'warrior'
+        >>> get_unit_type_name(999)  # Unknown custom unit
+        'unit_999'
+    """
+    if isinstance(type_id, str):
+        return type_id.lower()  # Already a string, normalize case
+    if isinstance(type_id, int):
+        return UNIT_TYPE_NAMES.get(type_id, f'unit_{type_id}')
+    return 'unknown'
+
 # The CivCom handles communication between freeciv-proxy and the Freeciv C
 # server.
 
@@ -185,6 +235,13 @@ class CivCom(Thread):
                     self.header_buf += self.socket.recv(2 -
                                                         len(self.header_buf))
                     if (len(self.header_buf) == 0):
+                        logger.warning(
+                            f"🔴 CIVSERVER CLOSED CONNECTION (header read): {self.username}\n"
+                            f"   Port: {self.civserverport}\n"
+                            f"   Connection age: {time.time() - self.connect_time:.1f}s\n"
+                            f"   This indicates civserver initiated disconnect\n"
+                            f"   Calling close_connection()..."
+                        )
                         self.close_connection()
                         return None
                     if (len(self.header_buf) == 2):
@@ -201,6 +258,15 @@ class CivCom(Thread):
             if (self.socket is not None and self.net_buf is not None and self.packet_size > 0):
                 data = self.socket.recv(self.packet_size - len(self.net_buf))
                 if (len(data) == 0):
+                    logger.warning(
+                        f"🔴 CIVSERVER CLOSED CONNECTION (data read): {self.username}\n"
+                        f"   Port: {self.civserverport}\n"
+                        f"   Connection age: {time.time() - self.connect_time:.1f}s\n"
+                        f"   Expected packet size: {self.packet_size} bytes\n"
+                        f"   Buffer length: {len(self.net_buf)} bytes\n"
+                        f"   This indicates civserver initiated disconnect\n"
+                        f"   Calling close_connection()..."
+                    )
                     self.close_connection()
                     return None
 
@@ -213,10 +279,14 @@ class CivCom(Thread):
             return None
 
     def close_connection(self):
+        import traceback
+
         if (logger.isEnabledFor(logging.INFO)):
             logger.info(
-                "Server connection closed. Removing civcom thread for " +
-                self.username)
+                f"Server connection closed. Removing civcom thread for {self.username}\n"
+                f"   Connection age: {time.time() - self.connect_time:.1f}s\n"
+                f"   Call stack:\n{''.join(traceback.format_stack())}"
+            )
 
         # Flush buffers
         self.send_packets_to_client()
@@ -249,6 +319,16 @@ class CivCom(Thread):
     def send_packets_to_client(self):
         packet = self.get_client_result_string()
         if (packet is not None and self.civwebserver is not None):
+            # Log large packet sizes to track what's being blocked
+            packet_size = len(packet.encode('utf-8'))
+            if packet_size > 1_000_000:  # Log if >1MB
+                logger.warning(
+                    f"📦 LARGE PACKET: Sending {packet_size:,} bytes ({packet_size/(1024*1024):.2f}MB) "
+                    f"to {self.username}"
+                )
+                # Log first 200 chars to see packet type
+                logger.debug(f"   Packet preview: {packet[:200]}...")
+
             # Calls the write_message callback on the next Tornado I/O loop iteration (thread safely).
             conn = self.civwebserver
             conn.io_loop.add_callback(lambda: conn.write_message(packet))
@@ -365,10 +445,14 @@ class CivCom(Thread):
                 logger.debug(f"Received PACKET_CONN_INFO: conn_id={conn_id}, player_num={player_num}, username='{packet_username}' for {self.username}")
 
                 # Check if this is our connection by matching username
-                if packet_username == self.username and player_num is not None:
+                # CRITICAL: FreeCiv uses MAX_NUM_PLAYER_SLOTS (512) as sentinel for "no player assigned"
+                # Only accept player_num < 512 as valid player IDs
+                if packet_username == self.username and player_num is not None and player_num < 512:
                     # Store player_num as player_id - CRITICAL for game flow
                     self.player_id = player_num
                     logger.info(f"Player number {player_num} assigned to connection {self.username} via PACKET_CONN_INFO")
+                elif packet_username == self.username and player_num == 512:
+                    logger.debug(f"PACKET_CONN_INFO has player_num=512 (unassigned sentinel) - waiting for PACKET_PLAYER_INFO")
 
             # Player info packet (detailed player data sent AFTER nation selection)
             elif packet_type == PACKET_PLAYER_INFO:
@@ -399,10 +483,17 @@ class CivCom(Thread):
                 unit_id = packet.get('id')
                 owner = packet.get('owner')
                 if unit_id is not None and owner is not None:
+                    # Get raw type ID (integer from FreeCiv server)
+                    unit_type_raw = packet.get('type')
+
+                    # Convert integer type ID to human-readable string name
+                    unit_type_name = get_unit_type_name(unit_type_raw)
+
                     unit_data = {
                         'id': unit_id,
                         'owner': owner,
-                        'type': packet.get('type'),
+                        'type': unit_type_name,  # String name (e.g., 'warriors', 'settlers')
+                        'type_id': unit_type_raw,  # Preserve original integer for debugging/reference
                         'tile': packet.get('tile'),
                         'homecity': packet.get('homecity', 0),
                         'moves_left': packet.get('moves_left', 0),
@@ -418,7 +509,7 @@ class CivCom(Thread):
                         self.player_units = {}
 
                     self.player_units[unit_id] = unit_data
-                    logger.info(f"✓ Stored unit {unit_id} (type={unit_data.get('type')}) for owner {owner}")
+                    logger.info(f"✓ Stored unit {unit_id} (type={unit_type_name}, type_id={unit_type_raw}) for owner {owner}")
 
             # City info packet - stores cities by ID for all players
             elif packet_type == PACKET_CITY_INFO:
@@ -456,6 +547,14 @@ class CivCom(Thread):
                     self.nations[nation_name] = nation_id
                     logger.debug(f"Registered nation: {nation_name} -> ID {nation_id}")
 
+            # Default handler for unknown/unhandled packet types
+            # This prevents "unsupported packet type" disconnects from civserver
+            else:
+                # Log debug info for unhandled packets (helps identify missing handlers)
+                logger.debug(f"Received unhandled packet type {packet_type} for {self.username}")
+                # Don't crash - just acknowledge and continue
+                # Common unhandled types: PING (88), PONG (89), various info packets
+
         except (json.JSONDecodeError, KeyError, TypeError) as e:
             logger.debug(f"Could not parse packet for state storage: {e}")
 
@@ -476,6 +575,12 @@ class CivCom(Thread):
             'turn': getattr(self, 'game_turn', 1),
             'phase': getattr(self, 'game_phase', 'movement'),
             'player_id': player_id,
+            'game': {
+                'turn': getattr(self, 'game_turn', 1),
+                'phase': getattr(self, 'game_phase', 'movement'),
+                'is_over': False,
+                'current_player': player_id
+            },
             'strategic': self._build_strategic_view(player_id),
             'tactical': self._build_tactical_view(player_id),
             'economic': self._build_economic_view(player_id),

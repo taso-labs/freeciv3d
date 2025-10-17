@@ -48,10 +48,14 @@ class InputSanitizer:
 
     @classmethod
     def sanitize_player_id(cls, value: Any) -> int:
-        """Sanitize and validate player ID"""
+        """Sanitize and validate player ID
+
+        FreeCiv uses 0-based player IDs: player 1 = ID 0, player 2 = ID 1, etc.
+        Allow IDs 0-29 (FreeCiv maxplayers=30, ids 0-29)
+        """
         try:
             player_id = int(value)
-            if not (1 <= player_id <= 8):
+            if not (0 <= player_id <= 29):
                 raise SecurityError(f"Invalid player_id range: {player_id}")
             return player_id
         except (ValueError, TypeError):
@@ -165,14 +169,21 @@ class InputSanitizer:
 
     @classmethod
     def sanitize_action_data(cls, action: Dict[str, Any]) -> Dict[str, Any]:
-        """Sanitize action data dictionary"""
+        """Sanitize action data dictionary
+
+        DEFENSE-IN-DEPTH: Support both 'type' (normalized) and 'action_type' (game_arena format)
+        to handle cases where normalization might not have run yet.
+        """
         if not isinstance(action, dict):
             raise SecurityError("Action must be a dictionary")
 
         sanitized = {}
-        action_type = action.get('type', '')
 
-        # Validate action type
+        # Support both 'type' (normalized) and 'action_type' (game_arena format)
+        # The normalization should convert action_type → type, but this provides a fallback
+        action_type = action.get('type') or action.get('action_type', '')
+
+        # Validate action type and ensure 'type' field is always set
         if action_type:
             sanitized['type'] = cls.sanitize_string_field(action_type, 'action_type', 50)
 

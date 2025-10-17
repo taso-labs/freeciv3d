@@ -19,9 +19,9 @@ set ysize 64
 set victories spacerace
 
 set landm 50
-set minp 2
+set minplayers 2
 set maxplayers 2
-set aifill 6
+set aifill 2
 set generator ISLAND
 set landmass 30
 set separatepoles ENABLED
@@ -38,8 +38,9 @@ set topology ""
 set wrap=
 set steepness 12
 
-# Keep AI players so LLM agents can take control of them via /take command
-# AI players will be created at startup due to aifill setting above
+# LLM agents take control of AI players via /take command
+# aifill 2 creates AI*1 and AI*2 for the two LLM agents to control
+# This ensures exactly 2 player slots exist for agents to /take
 
 metaconnection persistent
 metamessage New Freeciv-web Multiplayer Game

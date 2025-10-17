@@ -229,8 +229,8 @@ To connect game_arena to FreeCiv3D:
 from game_arena.harness.freeciv_proxy_client import FreeCivProxyClient
 
 client = FreeCivProxyClient(
-    host="localhost",
-    port=8002,
+    host="localhost",  # or "fciv-net" when running inside Docker network
+    port=8003,  # LLM Gateway API port
     api_token="test-token-fc3d-001",
     agent_id="my_ai_agent",
     game_id="test_game"
@@ -241,6 +241,24 @@ await client.connect()
 state = await client.get_state()
 # ... AI logic here ...
 ```
+
+**Multiplayer LLM Games:**
+
+LLM agents can play against each other in multiplayer mode. The system automatically:
+
+- Allocates multiplayer civserver ports (6001-6009) instead of singleplayer (6000)
+- Uses `/take` command to control AI players (AI*1, AI*2)
+- Manages game sessions so both players connect to the same server
+- Prevents idle timeouts (`--quitidle` disabled for multiplayer)
+- Handles FreeCiv packet protocol (tech research uses tech IDs, not names)
+
+Example with game_arena:
+```bash
+cd /path/to/game_arena
+python3 run_freeciv_game.py --turns 10 --host localhost
+```
+
+This creates two LLM agents (Gemini vs OpenAI) that play against each other for 10 turns.
 
 Start and stop Freeciv-web with the following commands:
   start-freeciv-web.sh

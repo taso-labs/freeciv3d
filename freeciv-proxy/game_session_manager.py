@@ -171,15 +171,20 @@ class GameSession:
             self.phase = GamePhase.STARTING
             logger.info(f"Game {self.game_id}: Starting game with {len(self.players)} players")
 
-            registry_civcom = civcom_registry.get_civcom(self.game_id)
-            logger.debug(f"Game {self.game_id}: Retrieved civcom from registry: {registry_civcom is not None}")
-            if not registry_civcom:
-                logger.error(f"Game {self.game_id}: No CivCom registered for game; cannot start")
+            # Get all CivComs for this game (all players connect to same civserver)
+            all_civcoms = civcom_registry.get_all_for_game(self.game_id)
+            logger.debug(f"Game {self.game_id}: Retrieved {len(all_civcoms)} civcom(s) from registry")
+            if not all_civcoms:
+                logger.error(f"Game {self.game_id}: No CivComs registered for game; cannot start")
                 self.phase = GamePhase.NATIONS_SELECTING
                 return
 
+            # Use first available CivCom (they all connect to same civserver port)
+            registry_civcom = next(iter(all_civcoms.values()))
+            logger.debug(f"Game {self.game_id}: Using civcom from {next(iter(all_civcoms.keys()))}")
+
             if hasattr(registry_civcom, 'is_alive') and not registry_civcom.is_alive():
-                logger.error(f"Game {self.game_id}: Registered CivCom thread is not alive")
+                logger.error(f"Game {self.game_id}: Selected CivCom thread is not alive")
                 self.phase = GamePhase.NATIONS_SELECTING
                 return
 
@@ -226,11 +231,13 @@ class GameSession:
             logger.debug(f"Game {self.game_id}: Waiting 2s for settings to apply")
             await asyncio.sleep(2.0)
 
-            # FIXED: Game auto-starts when all players send PACKET_PLAYER_READY (pid=11)
-            # See llm_handler.py:342-347 where PACKET_PLAYER_READY is sent
-            # FreeCiv's handle_player_ready() automatically calls start_game() when all ready
-            # No need to send /start or /mapgen - they're redundant and /mapgen doesn't exist!
-            logger.info(f"Game {self.game_id}: All {len(self.players)} players ready - waiting for auto-start")
+            # CRITICAL FIX: Send explicit /start command to start the game
+            # Multi-player games require /start command - they don't auto-start like single-player
+            # All players have sent PACKET_PLAYER_READY, now we initiate the game
+            logger.info(f"Game {self.game_id}: All {len(self.players)} players ready - sending /start command")
+            civcom.queue_to_civserver(json.dumps({"pid": 26, "message": "/start"}))
+            civcom.send_packets_to_civserver()
+            logger.info(f"Game {self.game_id}: ✅ /start command sent to civserver")
 
             # Mark as started
             self.game_started = True
@@ -273,6 +280,46 @@ class GameSessionManager:
     def __init__(self):
         self.sessions: Dict[str, GameSession] = {}
         self._lock = asyncio.Lock()
+        self._next_multiplayer_port = 6001  # Start with first multiplayer server
+        self._port_lock = asyncio.Lock()  # Separate lock for port allocation
+
+    async def allocate_civserver_port(self, game_id: str) -> int:
+        """Allocate a civserver port for a game, reusing existing if available
+
+        Multiplayer servers run on ports 6001-6009 and use pubscript_multiplayer.serv
+        with aifill=2 (exactly 2 AI players for LLM agents to /take).
+
+        Port 6000 is for singleplayer and uses pubscript_singleplayer.serv (aifill=12).
+
+        THREAD-SAFETY: Creates placeholder session immediately to prevent race condition
+        where two players with same game_id could get different ports if allocation
+        happens before session creation.
+        """
+        async with self._port_lock:
+            # Check if game already has an allocated port (for second+ player)
+            if game_id in self.sessions:
+                port = self.sessions[game_id].civserver_port
+                logger.info(f"Game {game_id}: Reusing existing port {port}")
+                return port
+
+            # Allocate next available multiplayer port (6001-6009)
+            port = self._next_multiplayer_port
+            logger.info(f"Game {game_id}: Allocated NEW multiplayer server port {port}")
+
+            # Create placeholder session immediately to reserve this port for this game_id
+            # This prevents race condition where Player 2 could allocate different port
+            # before Player 1 creates the session via get_or_create_session()
+            session = GameSession(game_id, port, min_players=2)
+            self.sessions[game_id] = session
+            logger.debug(f"Game {game_id}: Created placeholder session to reserve port {port}")
+
+            # Increment for next game (wrap around if needed)
+            self._next_multiplayer_port += 1
+            if self._next_multiplayer_port > 6009:
+                logger.warning("Reached max civserver port 6009, wrapping to 6001")
+                self._next_multiplayer_port = 6001
+
+            return port
 
     async def get_or_create_session(self, game_id: str, civserver_port: int,
                                    min_players: int = 2) -> GameSession:
