@@ -134,6 +134,7 @@ public class CivclientLauncher extends HttpServlet {
 		int port = Integer.parseInt(civServerPort);
 		response.setHeader("port", String.valueOf(port));
 		response.setHeader("result", "success");
+		response.setContentType("text/plain");
 		response.getOutputStream().print("success");
 
 	}
