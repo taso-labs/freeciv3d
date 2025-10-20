@@ -370,7 +370,7 @@ public class Metaserver extends HttpServlet {
                 if (pd == null || pd.isEmpty()) {
                     pd = dumpRequestBody(request);
                 }
-                LOGGER.log(Level.WARNING, "BAD_REQUEST: {0} {1}", new Object[] { e, pd });
+                LOGGER.log(Level.WARNING, "BAD_REQUEST: {0} {1}", new Object[]{e, pd});
             } catch (Exception ex) {
                 // ignore logging errors
             }
@@ -427,21 +427,26 @@ public class Metaserver extends HttpServlet {
 
                     if (isSettingPlayers) {
                         // Copy lists to local non-null references to avoid static analysis warnings
-                        List<String> users = sPlUser == null ? new ArrayList<>() : sPlUser;
-                        List<String> names = sPlName == null ? new ArrayList<>() : sPlName;
-                        List<String> nations = sPlNation == null ? new ArrayList<>() : sPlNation;
-                        List<String> flags = sPlFlag == null ? new ArrayList<>() : sPlFlag;
-                        List<String> types = sPlType == null ? new ArrayList<>() : sPlType;
-                        List<String> hosts = sPlHost == null ? new ArrayList<>() : sPlHost;
-                        try (PreparedStatement st = conn.prepareStatement("INSERT INTO players (hostport, user, name, nation, flag, type, host) VALUES (?, ?, ?, ?, ?, ?, ?)") ) {
+                        assert sPlUser != null && sPlName != null && sPlNation != null && sPlFlag != null && sPlType != null && sPlHost != null;
+                        List<String> users = sPlUser;
+                        List<String> names = sPlName;
+                        List<String> nations = sPlNation;
+                        List<String> flags = sPlFlag;
+                        List<String> types = sPlType;
+                        List<String> hosts = sPlHost;
+                        try (PreparedStatement st = conn.prepareStatement("INSERT INTO players (hostport, name, user, nation, type, host, flag) VALUES (?, ?, ?, ?, ?, ?, ?)")) {
                             for (int i = 0; i < users.size(); i++) {
                                 st.setString(1, hostPort);
-                                st.setString(2, users.get(i));
-                                st.setString(3, names.get(i));
+                                st.setString(2, names.get(i));
+                                st.setString(3, users.get(i));
                                 st.setString(4, nations.get(i));
-                                st.setString(5, flags.get(i));
-                                st.setString(6, types.get(i));
-                                st.setString(7, hosts.get(i));
+                                st.setString(5, types.get(i));
+                                if (i >= hosts.size()) {
+                                    st.setString(6, "");
+                                } else {
+                                    st.setString(6, hosts.get(i));
+                                }
+                                st.setString(7, flags.get(i));
                                 st.addBatch();
                             }
                             st.executeBatch();
@@ -478,7 +483,7 @@ public class Metaserver extends HttpServlet {
                                 if (pd == null || pd.isEmpty()) {
                                     pd = dumpRequestBody(request);
                                 }
-                                LOGGER.log(Level.WARNING, "BAD_REQUEST (players): {0}", new Object[] { pd });
+                                LOGGER.log(Level.WARNING, "BAD_REQUEST (players): {0}", new Object[]{pd});
                             } catch (Exception ex) {
                                 LOGGER.log(Level.FINE, "Error logging BAD_REQUEST (players)", ex);
                             }
@@ -500,7 +505,7 @@ public class Metaserver extends HttpServlet {
                 // posted. Check for null before calling isEmpty() to avoid
                 // NullPointerException (which previously produced a 500 error).
                 if ((variableNames != null && !variableNames.isEmpty()) && (variableValues != null && !variableValues.isEmpty())) {
-                    try (PreparedStatement st = conn.prepareStatement("INSERT INTO variables (hostport, name, value) VALUES (?, ?, ?)") ) {
+                    try (PreparedStatement st = conn.prepareStatement("INSERT INTO variables (hostport, name, value) VALUES (?, ?, ?)")) {
                         for (int i = 0; i < variableNames.size(); i++) {
                             st.setString(1, hostPort);
                             st.setString(2, variableNames.get(i));
@@ -540,7 +545,7 @@ public class Metaserver extends HttpServlet {
                             if (pd == null || pd.isEmpty()) {
                                 pd = dumpRequestBody(request);
                             }
-                            LOGGER.log(Level.WARNING, "BAD_REQUEST (variables): {0}", new Object[] { pd });
+                            LOGGER.log(Level.WARNING, "BAD_REQUEST (variables): {0}", new Object[]{pd});
                         } catch (Exception ex) {
                             LOGGER.log(Level.FINE, "Error logging BAD_REQUEST (variables)", ex);
                         }
