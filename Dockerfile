@@ -89,7 +89,6 @@ apt-get install --yes \
 EOF
 
 ## Add relevant content
-COPY --chown=docker:docker .git /docker/.git
 COPY --chown=docker:docker freeciv /docker/freeciv
 COPY --chown=docker:docker freeciv-proxy /docker/freeciv-proxy
 COPY --chown=docker:docker freeciv-web /docker/freeciv-web

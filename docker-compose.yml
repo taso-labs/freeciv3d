@@ -35,6 +35,8 @@ services:
         condition: service_healthy
       db:
         condition: service_healthy
+      truncate_servers_table:
+        condition: service_completed_successfully
     user: docker
       # Check both the webapp and an example freeciv-proxy instance so the
       # container is considered healthy only after proxy endpoints are ready.
@@ -63,6 +65,22 @@ services:
       interval: 1m
       timeout: 5s
       retries: 3
+
+  truncate_servers_table:
+    image: mariadb:11.7
+    container_name: fciv-truncate-servers
+    depends_on:
+      db:
+        condition: service_healthy
+      flyway:
+        condition: service_completed_successfully
+    environment:
+      MYSQL_HOST: db
+      MYSQL_DATABASE: freeciv_web
+      MYSQL_USER: docker
+      MYSQL_PASSWORD: changeme
+    command: [ "mariadb", "-u", "${MYSQL_USER:-docker}", "--password=${MYSQL_PASSWORD:-changeme}", "-h", "${MYSQL_HOST:-db}", "-D", "${MYSQL_DATABASE:-freeciv_web}", "-e", "TRUNCATE TABLE servers;" ]
+    restart: "no"
 
   flyway:
     image: flyway/flyway:11.14.1
@@ -111,7 +129,6 @@ services:
       - "8003:8003" # LLM gateway API
       - "4002:4002" # publite2 status
       - "6000-6009:6000-6009" # game servers
-      - "7100-7109:7000-7009" # websocket proxies (remapped to avoid macOS port 7000 conflict)
       - "8002:8002" # freeciv-proxy state extraction
       - "8888:8080" # llm chat
     volumes:
