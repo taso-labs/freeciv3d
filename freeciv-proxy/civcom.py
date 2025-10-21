@@ -319,6 +319,67 @@ class CivCom(Thread):
     def send_packets_to_client(self):
         packet = self.get_client_result_string()
         if (packet is not None and self.civwebserver is not None):
+            # CRITICAL FIX: Check if handler has buffering enabled (LLM agents during auth)
+            # If buffer_enabled=True, store packets instead of sending them
+            if hasattr(self.civwebserver, 'buffer_enabled') and self.civwebserver.buffer_enabled:
+                # Buffer the packet instead of sending it
+                if hasattr(self.civwebserver, 'packet_buffer'):
+                    # CRITICAL: Check buffer size limits to prevent memory exhaustion
+                    # Import limits from llm_handler at runtime to avoid circular import
+                    try:
+                        from llm_handler import MAX_PACKET_BUFFER_SIZE, MAX_PACKET_BUFFER_BYTES
+
+                        buffer_count = len(self.civwebserver.packet_buffer)
+                        current_size = sum(len(p.encode('utf-8')) for p in self.civwebserver.packet_buffer)
+                        packet_size = len(packet.encode('utf-8'))
+
+                        # Check if adding this packet would exceed limits
+                        if buffer_count >= MAX_PACKET_BUFFER_SIZE:
+                            logger.error(
+                                f"❌ PACKET BUFFER OVERFLOW for {self.username}: "
+                                f"{buffer_count} packets exceeds limit of {MAX_PACKET_BUFFER_SIZE}. "
+                                f"Closing connection to prevent memory exhaustion."
+                            )
+                            self.civwebserver.buffer_enabled = False
+                            self.civwebserver.packet_buffer.clear()
+                            self.civwebserver.close()
+                            return
+
+                        if current_size + packet_size > MAX_PACKET_BUFFER_BYTES:
+                            logger.error(
+                                f"❌ PACKET BUFFER SIZE OVERFLOW for {self.username}: "
+                                f"{(current_size + packet_size)/(1024*1024):.2f}MB exceeds limit of "
+                                f"{MAX_PACKET_BUFFER_BYTES/(1024*1024):.0f}MB. "
+                                f"Closing connection to prevent memory exhaustion."
+                            )
+                            self.civwebserver.buffer_enabled = False
+                            self.civwebserver.packet_buffer.clear()
+                            self.civwebserver.close()
+                            return
+
+                        # Buffer is within limits - add packet
+                        self.civwebserver.packet_buffer.append(packet)
+                        buffer_count += 1
+                        logger.debug(
+                            f"🔒 BUFFERING PACKET during auth for {self.username}: "
+                            f"{packet_size:,} bytes ({packet_size/(1024*1024):.2f}MB), "
+                            f"buffer count: {buffer_count}, "
+                            f"total size: {(current_size + packet_size)/(1024*1024):.2f}MB"
+                        )
+                    except ImportError:
+                        # Fallback if llm_handler not available (shouldn't happen in production)
+                        logger.warning(f"Could not import buffer limits - buffering without size checks")
+                        self.civwebserver.packet_buffer.append(packet)
+                        packet_size = len(packet.encode('utf-8'))
+                        buffer_count = len(self.civwebserver.packet_buffer)
+                        logger.debug(
+                            f"🔒 BUFFERING PACKET during auth for {self.username}: "
+                            f"{packet_size:,} bytes ({packet_size/(1024*1024):.2f}MB), "
+                            f"buffer count: {buffer_count}"
+                        )
+                return  # Don't send, just buffer
+
+            # Normal flow: send packet immediately
             # Log large packet sizes to track what's being blocked
             packet_size = len(packet.encode('utf-8'))
             if packet_size > 1_000_000:  # Log if >1MB

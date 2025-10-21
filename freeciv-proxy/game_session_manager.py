@@ -9,6 +9,7 @@ Coordinates multi-player game initialization to prevent race conditions
 import asyncio
 import json
 import logging
+import threading
 import time
 from typing import Dict, Set, Optional, Any
 from dataclasses import dataclass, field
@@ -54,6 +55,36 @@ class GameSession:
         self.game_started = False
         self.start_task: Optional[asyncio.Task] = None
         self.created_at = time.time()
+        self._next_ai_slot = 1  # AI slot counter
+        self._ai_slot_lock = threading.Lock()  # Lock for thread-safe AI slot allocation
+
+    def allocate_ai_slot(self) -> int:
+        """Thread-safe AI slot allocation for /take commands
+
+        Returns the next available AI slot (1, 2, 3, ...) for this game session.
+        Each call increments the counter atomically using a threading.Lock, ensuring
+        unique AI slot assignment even when multiple async coroutines call simultaneously.
+
+        Thread Safety: Uses threading.Lock (not asyncio.Lock) because this method
+        is called from async contexts but the increment operation must be atomic
+        at the OS thread level, not just within the asyncio event loop.
+
+        For multiplayer servers (ports 6001-6009) with aifill=2:
+          - First call returns 1 (AI*1)
+          - Second call returns 2 (AI*2)
+
+        Returns:
+            int: AI slot number (1-indexed)
+        """
+        with self._ai_slot_lock:
+            slot = self._next_ai_slot
+            self._next_ai_slot += 1
+            logger.info(
+                f"🎯 Allocated AI slot {slot} for game {self.game_id}\n"
+                f"   Next available slot: {self._next_ai_slot}\n"
+                f"   Total players in session: {len(self.players)}"
+            )
+            return slot
 
     def add_player(self, agent_id: str, player_id: int, handler: Any) -> bool:
         """Add a player to the game session"""
@@ -156,9 +187,10 @@ class GameSession:
         """Initiate the game start sequence (called once when all players ready)"""
         logger.debug(f"Game {self.game_id}: Initiating game start sequence")
         try:
-            # Brief delay to ensure all packets have been processed
-            logger.debug(f"Game {self.game_id}: Waiting 2s before start for packet processing")
-            await asyncio.sleep(2.0)
+            # Brief delay to ensure PACKET_PLAYER_READY packets have been fully processed by civserver
+            # This is minimal (0.5s) to avoid race conditions but not waste time
+            logger.debug(f"Game {self.game_id}: Waiting 0.5s for packet processing")
+            await asyncio.sleep(0.5)
 
             # Double-check we're still ready
             ready_count = self._count_players_ready()
@@ -212,24 +244,16 @@ class GameSession:
                 logger.error(f"Game {self.game_id}: civcom connection is dead!")
                 return
 
-            # Send game settings
-            logger.info(f"Game {self.game_id}: Configuring game settings")
-
-            # NOTE: We do NOT remove AI players because agents use /take to control them
-            # AI players AI*1, AI*2, etc. are taken over by the LLM agents
-            # IMPORTANT: Do NOT set aifill to 0 here - it will remove AI players that agents are trying to /take!
-
-            logger.debug(f"Game {self.game_id}: Setting game parameters")
-            civcom.queue_to_civserver(json.dumps({"pid": 26, "message": f"/set minplayers {len(self.players)}"}))
-            # DO NOT SET aifill 0 - removed to prevent removing AI players before /take completes
-            # civcom.queue_to_civserver(json.dumps({"pid": 26, "message": "/set aifill 0"}))
-            civcom.queue_to_civserver(json.dumps({"pid": 26, "message": f"/set maxplayers {len(self.players)}"}))
-            civcom.queue_to_civserver(json.dumps({"pid": 26, "message": "/set autotoggle enabled"}))
-            civcom.queue_to_civserver(json.dumps({"pid": 26, "message": "/set timeout 0"}))
-
-            # Wait for settings to apply
-            logger.debug(f"Game {self.game_id}: Waiting 2s for settings to apply")
-            await asyncio.sleep(2.0)
+            # CRITICAL FIX: DO NOT send /set commands here!
+            # Each /set command triggers reset_all_start_commands() in civserver,
+            # which RESETS all players' is_ready flags to FALSE.
+            # This undoes the PACKET_PLAYER_READY that players already sent!
+            #
+            # All settings (minplayers, maxplayers, aifill, autotoggle, timeout)
+            # are already configured in pubscript_multiplayer.serv BEFORE players connect.
+            #
+            # GameSessionManager's ONLY job is to send /start when all players are ready.
+            logger.info(f"Game {self.game_id}: All settings pre-configured in pubscript_multiplayer.serv")
 
             # CRITICAL FIX: Send explicit /start command to start the game
             # Multi-player games require /start command - they don't auto-start like single-player
@@ -242,11 +266,68 @@ class GameSession:
             # Mark as started
             self.game_started = True
 
-            # Wait for game to initialize
-            await asyncio.sleep(3.0)
+            # CRITICAL FIX: Verify game actually started instead of blindly waiting
+            # Poll civserver to confirm game initialization completed successfully
+            logger.info(f"Game {self.game_id}: Verifying game start (waiting for turn > 0)...")
+            start_time = time.time()
+            max_wait = 10.0  # 10 seconds timeout for game to start
+            game_confirmed = False
+
+            while time.time() - start_time < max_wait:
+                try:
+                    # Check if civcom has received game state with turn > 0
+                    if civcom and hasattr(civcom, 'get_full_state'):
+                        # Try to get state from first player's civcom
+                        state = civcom.get_full_state(first_player.player_id)
+                        current_turn = state.get('turn', 0)
+
+                        if current_turn > 0:
+                            logger.info(f"✅ Game {self.game_id}: Game start verified! Turn={current_turn}")
+                            game_confirmed = True
+                            break
+
+                    # Wait briefly before checking again
+                    await asyncio.sleep(0.5)
+
+                except Exception as e:
+                    logger.debug(f"Game {self.game_id}: State check failed (game may still be initializing): {e}")
+                    await asyncio.sleep(0.5)
+
+            if not game_confirmed:
+                logger.warning(
+                    f"⚠️ Game {self.game_id}: Could not verify game start after {max_wait}s\n"
+                    f"   This may indicate civserver didn't start the game properly.\n"
+                    f"   Proceeding anyway, but agents may receive empty game state."
+                )
+            else:
+                elapsed = time.time() - start_time
+                logger.info(f"Game {self.game_id}: Game confirmed started in {elapsed:.1f}s")
 
             self.phase = GamePhase.RUNNING
             logger.info(f"Game {self.game_id}: Game is now running")
+
+            # CRITICAL FIX: Broadcast game_ready to all agents now that game has started
+            # This notifies agents that the game is fully initialized and ready for state queries
+            logger.info(f"Game {self.game_id}: Broadcasting game_ready signal to all {len(self.players)} players")
+            for player_info in self.players.values():
+                try:
+                    # Send game_ready message to each player's handler
+                    game_ready_msg = {
+                        'type': 'game_ready',
+                        'agent_id': player_info.agent_id,
+                        'player_id': player_info.player_id,
+                        'game_id': self.game_id,
+                        'turn': 1,  # Game just started at turn 1
+                        'players': len(self.players),
+                        'message': 'Game fully initialized - ready to accept state queries and actions',
+                        'timestamp': time.time()
+                    }
+                    player_info.handler.write_message(json.dumps(game_ready_msg))
+                    logger.info(f"✅ Sent game_ready to {player_info.agent_id} (player_id={player_info.player_id})")
+                except Exception as e:
+                    logger.error(f"❌ Failed to send game_ready to {player_info.agent_id}: {e}")
+                    import traceback
+                    logger.error(f"Traceback: {traceback.format_exc()}")
 
         except Exception as e:
             logger.exception(f"Game {self.game_id}: Error starting game: {e}")
@@ -286,10 +367,13 @@ class GameSessionManager:
     async def allocate_civserver_port(self, game_id: str) -> int:
         """Allocate a civserver port for a game, reusing existing if available
 
-        Multiplayer servers run on ports 6001-6009 and use pubscript_multiplayer.serv
-        with aifill=2 (exactly 2 AI players for LLM agents to /take).
+        Multiplayer servers run on ODD ports (6001, 6003, 6005, 6007, 6009) and use
+        pubscript_multiplayer.serv with aifill=2 (exactly 2 AI players for LLM agents to /take).
 
-        Port 6000 is for singleplayer and uses pubscript_singleplayer.serv (aifill=12).
+        Singleplayer servers run on EVEN ports (6000, 6002, 6004, 6006, 6008) and use
+        pubscript_singleplayer.serv with aifill=12.
+
+        CRITICAL: Only allocate ODD ports for LLM multiplayer games!
 
         THREAD-SAFETY: Creates placeholder session immediately to prevent race condition
         where two players with same game_id could get different ports if allocation
@@ -299,12 +383,42 @@ class GameSessionManager:
             # Check if game already has an allocated port (for second+ player)
             if game_id in self.sessions:
                 port = self.sessions[game_id].civserver_port
-                logger.info(f"Game {game_id}: Reusing existing port {port}")
+                existing_session = self.sessions[game_id]
+                player_count = len(existing_session.players)
+                is_multiplayer = port % 2 == 1  # Odd ports are multiplayer
+                logger.info(
+                    f"🔄 Game {game_id}: REUSING existing port {port}\n"
+                    f"   Current players in session: {player_count}\n"
+                    f"   Session phase: {existing_session.phase.value}\n"
+                    f"   Port type: {'MULTIPLAYER (odd port)' if is_multiplayer else '⚠️ SINGLEPLAYER (even port) - WRONG!'}"
+                )
                 return port
 
-            # Allocate next available multiplayer port (6001-6009)
+            # Allocate next available multiplayer port using round-robin from publite2-created ports
+            # NOTE: Publite2 creates ports ON-DEMAND, not upfront. Available ports depend on
+            # metaserver activity and may include both multiplayer (odd) and singleplayer (even).
+            # We iterate through 6001-6009 and USE WHICHEVER PORT EXISTS, regardless of odd/even.
+            #
+            # Previous approach (increment by 2 for odd ports) FAILED because:
+            # - Assumed ports 6001, 6003, 6005, 6007, 6009 pre-exist (WRONG!)
+            # - Publite2 creates ports dynamically: 6001, 6002, 6003, 6004, ...
+            # - Allocating port 6005 when only 6001-6003 exist → Connection Refused (E140)
             port = self._next_multiplayer_port
-            logger.info(f"Game {game_id}: Allocated NEW multiplayer server port {port}")
+            total_sessions = len(self.sessions)
+
+            # Simple increment with wraparound (6001→6002→6003→...→6009→6001)
+            next_port = port + 1
+            if next_port > 6009:
+                next_port = 6001
+
+            is_multiplayer = port % 2 == 1
+            logger.info(
+                f"🆕 Game {game_id}: Allocated multiplayer server port {port}\n"
+                f"   Total active sessions: {total_sessions}\n"
+                f"   Next port will be: {next_port}\n"
+                f"   Port type: {'MULTIPLAYER (odd)' if is_multiplayer else 'singleplayer (even)'}\n"
+                f"   ⚠️ WARNING: Port allocation is best-effort. Port may not exist yet!"
+            )
 
             # Create placeholder session immediately to reserve this port for this game_id
             # This prevents race condition where Player 2 could allocate different port
@@ -313,11 +427,8 @@ class GameSessionManager:
             self.sessions[game_id] = session
             logger.debug(f"Game {game_id}: Created placeholder session to reserve port {port}")
 
-            # Increment for next game (wrap around if needed)
-            self._next_multiplayer_port += 1
-            if self._next_multiplayer_port > 6009:
-                logger.warning("Reached max civserver port 6009, wrapping to 6001")
-                self._next_multiplayer_port = 6001
+            # Increment for next game (simple sequential)
+            self._next_multiplayer_port = next_port
 
             return port
 

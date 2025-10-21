@@ -49,6 +49,11 @@ except Exception as e:
 llm_agents = {}
 MAX_LLM_AGENTS = llm_config.get_max_agents()
 
+# Packet buffer limits to prevent unbounded memory growth
+# These protect against memory exhaustion if authentication hangs or fails
+MAX_PACKET_BUFFER_SIZE = 200  # Maximum number of packets to buffer (typical game sends ~150 RULESET packets)
+MAX_PACKET_BUFFER_BYTES = 5 * 1024 * 1024  # 5MB maximum buffer size (typical game ~1.2MB)
+
 # Nation ID mapping for common civilizations
 # These IDs correspond to the FreeCiv nation definitions
 NATION_MAP = {
@@ -105,6 +110,13 @@ class LLMWSHandler(websocket.WebSocketHandler):
         # Legacy fields (kept for backward compatibility)
         self.rate_limit_tokens = 100
         self.last_token_refill = time.time()
+
+        # CRITICAL FIX: Packet buffering during authentication
+        # FreeCiv sends ~1.2MB of PACKET_RULESET_NATION packets immediately upon connection
+        # These must be buffered until auth_success is sent to maintain protocol order
+        self.packet_buffer = []  # List of JSON packet strings to buffer
+        self.auth_complete = False  # Flag: has authentication completed?
+        self.buffer_enabled = False  # Flag: should CivCom buffer packets?
 
         # CRITICAL FIX: Add io_loop attribute for CivCom compatibility
         # CivCom uses conn.io_loop.add_callback() to send packets safely across threads
@@ -256,8 +268,14 @@ class LLMWSHandler(websocket.WebSocketHandler):
         CRITICAL: This handler is async and directly awaits player_id assignment.
         The handler blocks until auth_success is sent, keeping the WebSocket connection
         alive. This replaces the previous pattern of spawning a detached async task.
+
+        CRITICAL FIX: Enable packet buffering during authentication to solve protocol
+        packet ordering race condition. FreeCiv sends ~1.2MB of PACKET_RULESET_NATION
+        packets immediately when connection is established, which arrive BEFORE
+        auth_success is generated. We buffer these packets and flush after auth_success.
         """
         logger.debug(f"_handle_llm_connect called for {self.id}")
+
         try:
             # Extract agent info
             self.agent_id = msg_data.get('agent_id', f'agent-{self.id[:8]}')
@@ -314,12 +332,24 @@ class LLMWSHandler(websocket.WebSocketHandler):
             # Second player: reuses the same port (6001)
             # Multiplayer servers use pubscript_multiplayer.serv with aifill=2 (AI*1, AI*2)
             civserver_port = await game_session_manager.allocate_civserver_port(game_id)
-            logger.info(
-                f"Agent {self.agent_id} assigned to multiplayer server:\n"
-                f"   Game ID: {game_id}\n"
-                f"   Civserver Port: {civserver_port} (multiplayer, aifill=2)\n"
-                f"   This server has exactly 2 AI players (AI*1, AI*2) for /take commands"
+            port_type = (
+                "MULTIPLAYER (6001-6009, aifill=2)" if 6001 <= civserver_port <= 6009
+                else "⚠️ SINGLEPLAYER (6000, aifill=12)" if civserver_port == 6000
+                else "⚠️ UNKNOWN PORT"
             )
+            logger.info(
+                f"🎮 Agent {self.agent_id} assigned to civserver:\n"
+                f"   Game ID: {game_id}\n"
+                f"   Civserver Port: {civserver_port}\n"
+                f"   Port Type: {port_type}\n"
+                f"   Expected AI slots: {'AI*1, AI*2' if 6001 <= civserver_port <= 6009 else 'AI*1 through AI*12' if civserver_port == 6000 else 'UNKNOWN'}"
+            )
+
+            # CRITICAL FIX: Enable packet buffering IMMEDIATELY before connecting to civserver
+            # The civserver sends ~1.2MB of PACKET_RULESET_NATION packets as soon as we connect
+            # We MUST enable buffering BEFORE _connect_to_civserver() to capture these packets
+            self.buffer_enabled = True
+            logger.info(f"🔒 Packet buffering ENABLED for {self.agent_id} before civserver connection")
 
             # Connect to civserver
             logger.info(f"🔌 Connecting agent {self.agent_id} to civserver port {civserver_port} (game: {game_id})")
@@ -355,7 +385,14 @@ class LLMWSHandler(websocket.WebSocketHandler):
             try:
                 # Register with game session manager for coordination
                 game_session = await game_session_manager.get_or_create_session(game_id, civserver_port, min_players=2)
-                logger.debug(f"Got game session for {game_id}")
+                logger.info(
+                    f"📋 Got GameSession for {self.agent_id}:\n"
+                    f"   Game ID: {game_id}\n"
+                    f"   Port: {game_session.civserver_port}\n"
+                    f"   Current players: {len(game_session.players)}/{game_session.min_players}\n"
+                    f"   Phase: {game_session.phase.value}\n"
+                    f"   Game started: {game_session.game_started}"
+                )
 
                 # CRITICAL FIX: Use /take command to control AI player (proper FreeCiv protocol)
                 # This replaces self-assignment with server-validated player_id
@@ -376,40 +413,71 @@ class LLMWSHandler(websocket.WebSocketHandler):
 
                 # Step 2: Send /take command to control an AI player
                 # AI slots are AI*1, AI*2, ... created by aifill setting
-                # CRITICAL: Use a unique identifier per agent to avoid race conditions
-                # Generate ai_slot based on agent_id hash to ensure uniqueness
-                import hashlib
-                agent_hash = int(hashlib.md5(self.agent_id.encode()).hexdigest(), 16)
-                ai_slot_index = agent_hash % 2  # 0 or 1 for 2-player games
-                ai_slot = ai_slot_index + 1  # AI slots are 1-indexed: AI*1, AI*2
-
-                # Alternative: Use incrementing slot per game session
-                # Add to game_session to track next available slot
-                if not hasattr(game_session, '_next_ai_slot'):
-                    game_session._next_ai_slot = 1
-                ai_slot = game_session._next_ai_slot
-                game_session._next_ai_slot += 1
+                # CRITICAL FIX: Use thread-safe allocation from GameSession to avoid race conditions
+                # where multiple players could get the same AI slot
+                ai_slot = game_session.allocate_ai_slot()
 
                 take_command = f"/take \"AI*{ai_slot}\""  # Quote the name to avoid ambiguity
-                logger.info(f"📤 Sending {take_command} for {self.agent_id} (slot {ai_slot})")
+                logger.info(
+                    f"📤 Sending {take_command} for {self.agent_id}\n"
+                    f"   AI Slot: {ai_slot}\n"
+                    f"   Command: {take_command}\n"
+                    f"   Civserver Port: {game_session.civserver_port}"
+                )
                 self.civcom.queue_to_civserver(json.dumps({"pid": 26, "message": take_command}))
                 self.civcom.send_packets_to_civserver()
 
                 # Step 3: Wait for /take to complete and server to update player_id
                 # Server sends PACKET_CONN_INFO again with the new player_id after /take succeeds
+                # CRITICAL FIX: Increased initial wait from 1.5s to 2.5s for slower Docker environments
+                # and added retry logic to handle timing variations in AI player creation
                 logger.info(f"⏳ Waiting for /take to complete...")
-                await asyncio.sleep(1.5)  # Allow time for server to process /take and send update
+                await asyncio.sleep(2.5)  # Initial wait for server to process /take
 
-                # Step 4: Get the assigned player_id from civcom (updated after /take)
-                self.player_id = self.civcom.player_id
-                if self.player_id is None or self.player_id >= 512:
-                    logger.error(
-                        f"❌ /take failed for {self.agent_id}:\n"
-                        f"   Still observer (player_id={self.player_id})\n"
-                        f"   AI slot requested: AI*{ai_slot}\n"
-                        f"   This usually means AI player doesn't exist or is already taken"
+                # Step 4: Verify /take succeeded with retry logic
+                # AI players may not be created immediately when civserver starts,
+                # especially for Player 2 in multiplayer games (aifill creates AI*1, AI*2 lazily)
+                max_retries = 3
+                take_succeeded = False
+
+                for attempt in range(max_retries):
+                    self.player_id = self.civcom.player_id
+
+                    if self.player_id is not None and self.player_id < 512:
+                        # /take succeeded - we now control an AI player
+                        take_succeeded = True
+                        logger.info(
+                            f"✅ /take AI*{ai_slot} succeeded on attempt {attempt + 1}/{max_retries}\n"
+                            f"   Agent: {self.agent_id}\n"
+                            f"   Player ID: {self.player_id}"
+                        )
+                        break
+
+                    if attempt < max_retries - 1:
+                        # Still observer (player_id >= 512 or None) - retry after delay
+                        current_id = self.player_id if self.player_id is not None else "None"
+                        logger.warning(
+                            f"⚠️ /take AI*{ai_slot} not complete yet (attempt {attempt + 1}/{max_retries})\n"
+                            f"   Current player_id: {current_id} (expected < 512)\n"
+                            f"   Retrying in 1.5s..."
+                        )
+                        await asyncio.sleep(1.5)
+                    else:
+                        # Final attempt failed
+                        logger.error(
+                            f"❌ /take AI*{ai_slot} failed after {max_retries} attempts for {self.agent_id}:\n"
+                            f"   Final player_id: {self.player_id}\n"
+                            f"   This usually means:\n"
+                            f"   - AI player AI*{ai_slot} doesn't exist (check aifill setting)\n"
+                            f"   - AI player is already taken by another agent\n"
+                            f"   - Civserver is not responding correctly"
+                        )
+
+                # Raise error if /take ultimately failed
+                if not take_succeeded:
+                    raise RuntimeError(
+                        f"/take AI*{ai_slot} failed - player_id={self.player_id} (expected < 512)"
                     )
-                    raise RuntimeError(f"/take AI*{ai_slot} failed - player_id={self.player_id} (expected < 512)")
 
                 self.session_info.player_id = self.player_id
                 logger.info(f"✅ {self.agent_id} successfully took AI*{ai_slot} → player_id={self.player_id}")
@@ -469,23 +537,48 @@ class LLMWSHandler(websocket.WebSocketHandler):
 
                 logger.info(f"📤 PACKET_PLAYER_READY sent for {self.agent_id} (player_no={self.player_id})")
 
-                # Send auth_success immediately - don't wait for server confirmation!
-                # This restores the original working behavior
+                # Send auth_success in FLAT format (Gateway will transform to nested for agent)
+                # Game will start when all players are ready (~5-7 seconds after last player joins)
+                # Architecture: Proxy sends flat → Gateway transforms → Agent receives nested
                 self.write_message(json.dumps({
-                    'type': 'auth_success',
+                    'type': 'auth_success',  # Flat format - Gateway expects this
                     'agent_id': self.agent_id,
                     'session_id': self.session_id,
                     'player_id': self.player_id,
+                    'game_id': self.game_id,
                     'capabilities': list(capability_set),
                     'session_expires_in': int(self.session_info.expires_at - time.time()),
-                    'message': 'LLM agent authenticated successfully',
+                    'message': 'Player authenticated successfully. Waiting for all players to join.',
                     'status': 'authenticated',
-                    'game_ready': False  # Game state not yet fully initialized
+                    'game_ready': False,  # Game not started yet
+                    'waiting_for': 'game_ready',  # Signal to wait for
+                    'expected_wait_seconds': '5-7',  # Typical initialization time
+                    'instructions': 'Wait for game_ready message before querying state or submitting actions'
                 }))
                 logger.info(f"📤 Sent auth_success with player_id={self.player_id} to agent {self.agent_id}")
 
+                # CRITICAL FIX: Flush buffered packets immediately after auth_success
+                # This solves the protocol packet ordering race condition by ensuring:
+                # 1. auth_success is sent first (client expects this)
+                # 2. Buffered PACKET_RULESET_NATION packets are sent second (game state)
+                # 3. Future packets flow normally (buffer_enabled=False)
+                self.auth_complete = True
+                self.buffer_enabled = False
+                buffer_count = len(self.packet_buffer)
+                logger.info(f"🔓 Packet buffering DISABLED for {self.agent_id} - flushing {buffer_count} packets")
+                self._flush_packet_buffer()
+                self.packet_buffer.clear()  # Ensure buffer is empty after flush
+
             except Exception as e:
                 logger.exception(f"Error in player registration and nation selection: {e}")
+
+                # CRITICAL: Disable buffering on error to prevent packet accumulation
+                # Also clear buffer to prevent memory leak
+                self.buffer_enabled = False
+                buffer_count = len(self.packet_buffer)
+                self.packet_buffer.clear()
+                logger.warning(f"🔓 Packet buffering DISABLED due to error for {self.agent_id} - cleared {buffer_count} buffered packets")
+
                 self.write_message(json.dumps({
                     'type': 'error',
                     'code': 'E142',
@@ -512,6 +605,13 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 logger.error(f"Error logging WebSocket state: {log_err}")
 
         except Exception as e:
+            # CRITICAL: Disable buffering on any authentication error
+            # Also clear buffer to prevent memory leak
+            self.buffer_enabled = False
+            buffer_count = len(self.packet_buffer)
+            self.packet_buffer.clear()
+            logger.warning(f"🔓 Packet buffering DISABLED due to exception for {self.agent_id} - cleared {buffer_count} buffered packets")
+
             error_response = error_handler.handle_system_error(
                 "authentication", e, self.agent_id, self.session_id
             )
@@ -1137,30 +1237,8 @@ class LLMWSHandler(websocket.WebSocketHandler):
         # Normalise players to list form for downstream processing
         state['players'] = self._normalize_players_list(state.get('players', []))
 
-        # NEW: Send game_ready signal after first successful state with turn > 0
-        # This indicates the game is fully initialized and ready to accept actions
-        if not hasattr(self, '_game_ready_sent'):
-            current_turn = state.get('turn', 0)
-            players_count = len(state.get('players', []))
-
-            # Check if game has meaningful state (not just initialization)
-            if current_turn > 0 and players_count > 0:
-                self._game_ready_sent = True
-                self.write_message(json.dumps({
-                    'type': 'game_ready',
-                    'agent_id': self.agent_id,
-                    'player_id': self.player_id,
-                    'turn': current_turn,
-                    'players': players_count,
-                    'message': 'Game fully initialized - ready to accept actions',
-                    'timestamp': time.time()
-                }))
-                logger.info(
-                    f"🎮 GAME_READY signal sent for agent {self.agent_id}:\n"
-                    f"   Turn: {current_turn}\n"
-                    f"   Players: {players_count}\n"
-                    f"   Game is now ready for actions"
-                )
+        # NOTE: game_ready signal is now sent by GameSessionManager when game actually starts
+        # Removed duplicate logic that sent game_ready during state query (chicken-and-egg problem fixed)
 
         # For llm_optimized format, add AI analysis layers
         if format_type == 'llm_optimized':
@@ -1799,6 +1877,53 @@ class LLMWSHandler(websocket.WebSocketHandler):
 
     # Old _start_game_after_delay() method removed - now handled by GameSessionManager
     # The GameSessionManager coordinates game start when all players are ready
+
+    def _flush_packet_buffer(self):
+        """Flush buffered packets to client after authentication completes.
+
+        CRITICAL FIX: This solves the protocol packet ordering race condition.
+        FreeCiv sends ~1.2MB of PACKET_RULESET_NATION packets immediately when
+        connection is established, BEFORE auth_success can be generated.
+
+        Solution: Buffer all incoming packets during authentication, send auth_success
+        first, then flush buffered packets to maintain protocol order.
+
+        Flow:
+        1. LLM agent connects → buffer_enabled=True
+        2. CivCom receives packets → stores in packet_buffer instead of sending
+        3. Authentication completes → send auth_success
+        4. Call _flush_packet_buffer() → send all buffered packets
+        5. Set buffer_enabled=False → resume normal packet flow
+        """
+        if not self.packet_buffer:
+            logger.debug(f"No packets to flush for {self.agent_id}")
+            return
+
+        buffer_count = len(self.packet_buffer)
+        total_size = sum(len(p.encode('utf-8')) for p in self.packet_buffer)
+        logger.info(
+            f"🚀 FLUSHING {buffer_count} buffered packets for {self.agent_id}: "
+            f"{total_size:,} bytes ({total_size/(1024*1024):.2f}MB)"
+        )
+
+        # Send each buffered packet in order
+        flushed = 0
+        for packet in self.packet_buffer:
+            try:
+                self.write_message(packet)
+                flushed += 1
+            except Exception as e:
+                logger.error(
+                    f"❌ Failed to flush packet {flushed+1}/{buffer_count} for {self.agent_id}: {e}"
+                )
+                # Continue flushing remaining packets despite error
+
+        logger.info(
+            f"✅ Flushed {flushed}/{buffer_count} packets for {self.agent_id}"
+        )
+
+        # Clear the buffer
+        self.packet_buffer.clear()
 
     def _forward_to_civcom(self, message: str):
         """Forward message to civcom"""
