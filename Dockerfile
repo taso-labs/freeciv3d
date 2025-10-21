@@ -26,7 +26,7 @@ apt-get update
 apt-get install -y --no-install-recommends locales openssl
 useradd -m docker -G sudo -p $(openssl passwd -6 docker)
 locale-gen en_US.UTF-8
-localedef -i en_US -c -f UTF-8 -A /usr/share/locale/locale.alias en_US.UTF
+localedef -i en_US -c -f UTF-8 -A /usr/share/locale/locale.alias en_US.UTF-8
 EOF
 
 FROM docker-base AS freeciv-build
@@ -44,7 +44,10 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 set -e
 apt-get update
 apt-get install -y --no-install-recommends \
+    binutils \
+    build-essential \
     ca-certificates \
+    ccache \
     libbz2-dev \
     libcurl4-openssl-dev \
     libicu-dev \
@@ -58,10 +61,8 @@ apt-get install -y --no-install-recommends \
     pkgconf \
     python3 \
     zlib1g-dev \
-    build-essential \
-    ccache \
-    && : \
-ln -s ../../bin/ccache /usr/lib/ccache/cc && \
+    && :
+ln -s ../../bin/ccache /usr/lib/ccache/cc
 ln -s ../../bin/ccache /usr/lib/ccache/c++
 EOF
 
@@ -70,8 +71,15 @@ USER docker
 COPY --chown=docker:docker freeciv /freeciv
 WORKDIR /freeciv
 
+# Build and install freeciv, then clean up build artifacts
 RUN --mount=type=cache,uid=1001,gid=1001,target=${CCACHE_DIR} \
-    /freeciv/prepare_freeciv.sh && ninja -C build install
+    <<EOF
+set -e
+/freeciv/prepare_freeciv.sh
+ninja -C build install
+strip --strip-unneeded /home/docker/freeciv/bin/*
+rm -rf /freeciv/build
+EOF
 
 FROM docker-base AS tomcat-builder
 
@@ -97,10 +105,15 @@ COPY --chown=docker:docker llm-gateway /docker/llm-gateway
 COPY --chown=docker:docker LICENSE.md /docker/LICENSE.md
 COPY --chown=docker:docker --chmod=755 scripts /docker/scripts
 COPY --chown=docker:docker config /docker/config
-COPY --from=freeciv-build --chown=docker:docker /home/docker/freeciv /home/docker/freeciv
+COPY --from=freeciv-build --chown=docker:docker /home/docker/freeciv/bin /home/docker/freeciv/bin
+COPY --from=freeciv-build --chown=docker:docker /home/docker/freeciv/etc /home/docker/freeciv/etc
+COPY --from=freeciv-build --chown=docker:docker /home/docker/freeciv/share/freeciv /home/docker/freeciv/share/freeciv
+COPY --from=freeciv-build --chown=docker:docker /home/docker/freeciv/share/icons /home/docker/freeciv/share/icons
 
 USER docker
 WORKDIR /docker/scripts/
+
+ENV SKIP_FREECIV_BUILD=true
 
 # Install dependencies and build
 # Using Ubuntu's stable tomcat10 package (10.1.16-1) instead of latest Apache version
@@ -110,8 +123,9 @@ RUN --mount=type=cache,uid=1001,gid=1001,target=/home/docker/.m2 \
     <<EOF
 set -e
 sudo apt-get update --yes --quiet
-PIP_SKIP=Y SKIP_FREECIV_BUILD=true \
-    install/install.sh --mode=TEST
+install/install.sh --mode=TEST
+# Clean up build artifacts after Maven build
+sudo rm -rf /var/lib/tomcat10/webapps/{docs,examples,host-manager,manager}
 EOF
 
 FROM docker-base AS final
