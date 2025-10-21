@@ -124,13 +124,18 @@ RUN --mount=type=cache,uid=1001,gid=1001,target=/home/docker/.m2 \
 set -e
 sudo apt-get update --yes --quiet
 install/install.sh --mode=TEST
-# Clean up build artifacts after Maven build
+# Clean up build artifacts after Maven build and other files
 sudo rm -rf /var/lib/tomcat10/webapps/{docs,examples,host-manager,manager}
+rm -rf /docker/freeciv-web/target /docker/freeciv-web/src install.log /docker/*/tests /docker/*/test
 EOF
 
 FROM docker-base AS final
 
-COPY --from=tomcat-builder --chown=docker:docker /docker /docker
+COPY --from=tomcat-builder --chown=docker:docker \
+    --exclude=freeciv/ \
+    --exclude=freeciv-web/src \
+    --exclude=freeciv-web/pom.xml \
+    /docker /docker
 
 # Install Python dependencies for freeciv-proxy and LLM Gateway
 WORKDIR /docker/llm-gateway
@@ -140,8 +145,10 @@ RUN --mount=type=cache,uid=1001,gid=1001,target=/root/.cache/pip \
     <<EOF
 set -e
 apt-get update --yes --quiet
-apt-get install --yes \
+apt-get install -y --no-install-recommends \
     curl \
+    libicu74 \
+    libjansson4 \
     python3-dotenv \
     python3-pip \
     python3-tornado \
@@ -152,6 +159,8 @@ apt-get install --yes \
 ## TODO: Figure out more targeted solution.
 usermod -a -G tomcat docker
 pip install --break-system-packages -r requirements.txt
+# Remove documentation, saves 1691975 bytes
+rm -rf /usr/share/doc/* /usr/share/man/* /usr/share/locale/*
 EOF
 
 COPY --from=tomcat-builder --chown=docker:docker /home/docker /home/docker
