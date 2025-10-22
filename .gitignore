@@ -81,6 +81,7 @@ tests/screenshot*.png
 .freeciv_index
 .idea
 *.iml
+.vscode/
 
 # Claude Code generated files
 agents.md
@@ -92,3 +93,4 @@ Technical Spec.md
 
 # macOS system files
 .DS_Store
+

@@ -19,12 +19,14 @@ try:
     from .utils.origin_validator import validate_websocket_origin, get_websocket_origin_info, create_origin_rejection_response
     from .utils.rate_limiter import comprehensive_rate_limiter
     from .utils.constants import MAX_MESSAGE_SIZE_BYTES, ERROR_CODE_VALIDATION
+    from .spectator_broadcast import spectator_broadcaster, ViewMode
 except ImportError:
     from connection_manager import connection_manager
     from config import settings
     from utils.origin_validator import validate_websocket_origin, get_websocket_origin_info, create_origin_rejection_response
     from utils.rate_limiter import comprehensive_rate_limiter
     from utils.constants import MAX_MESSAGE_SIZE_BYTES, ERROR_CODE_VALIDATION
+    from spectator_broadcast import spectator_broadcaster, ViewMode
 
 # Gateway will be injected by main.py to avoid circular imports
 gateway = None
@@ -200,6 +202,9 @@ class AgentWebSocketHandler:
                     # Transform proxy messages to agent format
                     try:
                         msg_data = json.loads(proxy_message)
+                        # SPECTATOR FIX: Store original message for spectator broadcast
+                        # before any transformation happens
+                        original_msg_data = msg_data.copy() if isinstance(msg_data, dict) else msg_data
 
                         # Handle both single objects and arrays of packets from FreeCiv protocol
                         if isinstance(msg_data, list):
@@ -207,6 +212,21 @@ class AgentWebSocketHandler:
                             logger.debug(f"📦 Forwarding packet array ({len(msg_data)} packets) to agent {self.agent_id}")
                             await self.websocket.send_text(proxy_message)
                             logger.debug(f"📤 Forwarded packet array to agent {self.agent_id}")
+
+                            # SPECTATOR BROADCAST: Forward FreeCiv packet array to spectators
+                            if self.game_id and self.player_id is not None:
+                                logger.info(f"📡 Broadcasting {len(msg_data)} packets to spectators of game {self.game_id}")
+                                for packet in msg_data:
+                                    if isinstance(packet, dict):
+                                        asyncio.create_task(
+                                            spectator_broadcaster.forward_packet(
+                                                self.game_id,
+                                                packet,
+                                                self.player_id
+                                            )
+                                        )
+                            else:
+                                logger.debug(f"Skipping spectator broadcast - game_id:{self.game_id}, player_id:{self.player_id}")
                             continue
 
                         msg_type = msg_data.get("type")
@@ -218,9 +238,12 @@ class AgentWebSocketHandler:
 
                         # Transform auth_success from proxy to agent format
                         if msg_type == "auth_success":
+                            # SPECTATOR BROADCAST FIX: Extract player_id for packet routing
+                            self.player_id = msg_data.get('player_id')
+
                             logger.info(
                                 f"🔑 Transforming auth_success for agent {self.agent_id}:\n"
-                                f"   Player ID: {msg_data.get('player_id')}\n"
+                                f"   Player ID: {self.player_id}\n"
                                 f"   Status: {msg_data.get('status', 'N/A')}"
                             )
                             # Agent expects: {type: "llm_connect", data: {type: "auth_success", ...}}
@@ -315,6 +338,34 @@ class AgentWebSocketHandler:
                     # Forward to agent
                     await self.websocket.send_text(proxy_message)
                     logger.debug(f"📤 Forwarded message to agent {self.agent_id}")
+
+                    # SPECTATOR BROADCAST: Forward ORIGINAL packet to spectators (async, non-blocking)
+                    # CRITICAL: Use original_msg_data (from proxy) NOT transformed proxy_message
+                    # Spectators need raw FreeCiv protocol packets, not agent-formatted messages
+                    # Use create_task() for fire-and-forget - zero latency impact on agent
+                    if self.game_id and self.player_id is not None and isinstance(original_msg_data, dict):
+                        try:
+                            # Only forward FreeCiv protocol packets (have 'pid' field) or important game messages
+                            msg_type = original_msg_data.get("type")
+                            has_pid = "pid" in original_msg_data
+
+                            # Forward FreeCiv packets or game state messages
+                            # SPECTATOR FIX: Include state_response to broadcast full game state (map, tiles, units)
+                            if has_pid or msg_type in ["game_ready", "turn_done", "end_turn", "state_response"]:
+                                # Broadcast asynchronously (don't await - fire and forget)
+                                # Uses spectator_broadcaster imported at module level (line 22/29)
+                                asyncio.create_task(
+                                    spectator_broadcaster.forward_packet(
+                                        self.game_id,
+                                        original_msg_data,  # Use ORIGINAL, not transformed
+                                        self.player_id
+                                    )
+                                )
+                                if has_pid:
+                                    logger.debug(f"📡 Broadcast packet PID {original_msg_data.get('pid')} to spectators of game {self.game_id}")
+                        except Exception as e:
+                            # Don't let spectator broadcast errors affect agent
+                            logger.debug(f"Spectator broadcast error (non-critical): {e}")
 
                 except websockets.ConnectionClosed:
                     logger.info(f"Proxy connection closed for agent {self.agent_id}")
@@ -524,6 +575,14 @@ class SpectatorWebSocketHandler:
                 self.websocket, "spectator", self.game_id
             )
 
+            # SPECTATOR BROADCAST: Register with broadcaster
+            view_mode = ViewMode.PLAYER_1  # MVP: always player 1 view
+            self.spec_conn = await spectator_broadcaster.register_spectator(
+                self.game_id,
+                self.websocket,
+                view_mode
+            )
+
             # Send welcome message
             await self._send_welcome()
 
@@ -569,7 +628,14 @@ class SpectatorWebSocketHandler:
             logger.error(f"Error in spectator connection for game {self.game_id}: {e}")
 
         finally:
-            # Cleanup
+            # Cleanup spectator from broadcaster
+            try:
+                if hasattr(self, 'spec_conn'):
+                    spectator_broadcaster.unregister_spectator(self.game_id, self.spec_conn)
+            except Exception as e:
+                logger.warning(f"Error unregistering spectator: {e}")
+
+            # Cleanup connection manager
             if self.connection_id:
                 await connection_manager.handle_disconnect(self.connection_id)
 
@@ -608,39 +674,39 @@ class SpectatorWebSocketHandler:
         await self.websocket.send_text(json.dumps(response))
 
     async def _send_initial_game_state(self):
-        """Send initial game state to spectator"""
+        """Send initial game state to spectator using cached packets"""
         try:
-            if hasattr(gateway, 'get_spectator_game_state'):
-                game_state = await gateway.get_spectator_game_state(self.game_id)
-            elif hasattr(gateway, 'game_sessions') and self.game_id in gateway.game_sessions:
-                # Get basic game info from session
-                session = gateway.game_sessions[self.game_id]
-                game_state = {
-                    "turn": getattr(session, 'current_turn', 1),
-                    "players": getattr(session, 'players', {}),
-                    "game_info": {
-                        "status": getattr(session, 'status', 'running'),
-                        "turn": getattr(session, 'current_turn', 1)
-                    }
-                }
-            else:
-                # Fallback state
+            # Use spectator broadcaster's packet cache for initial state
+            # This replays the last N packets to sync the spectator
+            view_mode = ViewMode.PLAYER_1  # MVP: always player 1 view
+
+            await spectator_broadcaster.send_initial_state(
+                self.game_id,
+                self.websocket,
+                view_mode
+            )
+
+            logger.info(f"Sent cached packets to spectator for game {self.game_id}")
+        except Exception as e:
+            logger.error(f"Error sending initial game state to spectator: {e}")
+
+            # Fallback: send basic state message
+            try:
                 game_state = {
                     "turn": 1,
                     "players": {},
                     "game_info": {"status": "running", "turn": 1}
                 }
 
-            state_message = {
-                "type": "game_state",
-                "game_id": self.game_id,
-                "data": game_state,
-                "timestamp": time.time()
-            }
-            await self.websocket.send_text(json.dumps(state_message))
-
-        except Exception as e:
-            logger.error(f"Error sending initial game state to spectator: {e}")
+                state_message = {
+                    "type": "game_state",
+                    "game_id": self.game_id,
+                    "data": game_state,
+                    "timestamp": time.time()
+                }
+                await self.websocket.send_text(json.dumps(state_message))
+            except Exception as fallback_error:
+                logger.error(f"Error sending fallback state to spectator: {fallback_error}")
 
     async def send_game_update(self, update_data: Dict[str, Any]):
         """Send game update to spectator (called by game session)"""

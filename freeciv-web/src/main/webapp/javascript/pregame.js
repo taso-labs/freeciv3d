@@ -17,7 +17,10 @@
 
 ***********************************************************************/
 
-var observing = false;
+// SPECTATOR FIX: Don't overwrite observing if already set by spectator.jsp
+if (typeof observing === 'undefined') {
+  var observing = false;
+}
 var chosen_nation = -1;
 var chosen_style = -1;
 var choosing_player = -1;

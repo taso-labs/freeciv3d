@@ -228,6 +228,14 @@ function webgl_preload_models()
   // Initialize network connection early - don't wait for all models to load
   // Use a short delay to allow a few critical models to load first
   setTimeout(function() {
+    // SPECTATOR FIX: Don't initialize network for spectator mode
+    // Spectators connect via WebSocket broadcast, not direct game connection
+    if (window.isSpectator === true) {
+      console.log("[INIT] Spectator mode detected - skipping network_init()");
+      $.unblockUI();
+      return;
+    }
+
     if (typeof network_init === 'function') {
       console.log("[INIT] Initializing network connection (early start, models loading in background)");
       $.unblockUI();

@@ -59,6 +59,17 @@ function webgl_preload_complete()
   // This function just ensures UI is unblocked when all models finish loading
   console.log("All 3D models loaded");
   $.unblockUI();
+
+  // SPECTATOR FIX: If this is spectator mode, trigger connection now that models are ready
+  // This ensures packets don't arrive and trigger rendering before 3D models finish loading
+  if (typeof window.isSpectator !== 'undefined' && window.isSpectator === true) {
+    console.log("[SPECTATOR] Models ready, triggering WebSocket connection");
+    if (typeof spectator_models_ready === 'function') {
+      spectator_models_ready();
+    } else {
+      console.error("[SPECTATOR] spectator_models_ready() function not found!");
+    }
+  }
 }
 
 /****************************************************************************

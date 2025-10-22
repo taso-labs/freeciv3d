@@ -317,6 +317,7 @@ class GameSession:
                         'agent_id': player_info.agent_id,
                         'player_id': player_info.player_id,
                         'game_id': self.game_id,
+                        'civserver_port': self.civserver_port,  # SPECTATOR FIX: Port for spectator URL generation
                         'turn': 1,  # Game just started at turn 1
                         'players': len(self.players),
                         'message': 'Game fully initialized - ready to accept state queries and actions',

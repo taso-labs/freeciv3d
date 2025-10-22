@@ -366,12 +366,22 @@ async def get_spectator_url(
 
         game_session = gw.game_sessions[game_id]
 
-        # Get the game port
-        game_port = game_session.get("port", 6000)
+        # Get the game port - MUST be set (no default to 6000)
+        # LLM games always use multiplayer ports (6001-6009), never 6000
+        game_port = game_session.get("port")
 
-        # Generate spectator URL - assuming FreeCiv3D web interface is on port 8080
+        if game_port is None or game_port == 6000:
+            # This shouldn't happen - indicates authentication bug or timing issue
+            logger.warning(f"Game {game_id} has no port or invalid port {game_port}. Session data: {game_session}")
+            raise HTTPException(
+                status_code=409,  # Conflict
+                detail="Game port not assigned. Agents may still be connecting/authenticating. Wait a few seconds and try again."
+            )
+
+        # Generate spectator URL
         base_url = "http://localhost:8080"  # Could be made configurable
         spectator_url = f"{base_url}/webclient/spectator.jsp?game_id={game_id}&port={game_port}&mode=full"
+        logger.info(f"Generated spectator URL for game {game_id}: port={game_port}")
 
         return {
             "success": True,

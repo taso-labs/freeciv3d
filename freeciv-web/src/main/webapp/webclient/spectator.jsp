@@ -18,23 +18,19 @@ if (spectatorMode == null) spectatorMode = "full";
 // Detect LLM games - multiple detection criteria
 boolean isLlmGame = false;
 
-// Check if explicitly LLM game (game_id starts with "llm_")
-if (gameId != null && gameId.startsWith("llm_")) {
+// Check if explicitly LLM game (game_id starts with "llm_" or "game_")
+if (gameId != null && (gameId.startsWith("llm_") || gameId.startsWith("game_"))) {
     isLlmGame = true;
 }
 // Check if game_id is "default" (common for LLM gateway games)
 else if ("default".equals(gameId)) {
     isLlmGame = true;
 }
-// Check if port is 8003 (LLM gateway port)
-else if ("8003".equals(gamePort)) {
-    isLlmGame = true;
-}
 
-// For LLM games, always use port 8003 regardless of URL parameter
-if (isLlmGame) {
-    gamePort = "8003";
-}
+// SPECTATOR FIX: DO NOT override port for LLM games!
+// The port parameter from URL (6001, 6002, 6003, etc.) is the correct civserver port.
+// Previously, this code forced port=8003 (LLM Gateway API port), which was wrong.
+// Now we trust the port from the URL, which comes from the LLM Gateway's spectator URL generation.
 
 // Configuration loading
 String gaTrackingId = null;
@@ -76,14 +72,20 @@ try {
 <meta name="description" content="FreeCiv3D Spectator - Watch LLM agents play FreeCiv">
 
 <script type="text/javascript">
+// CRITICAL: Set spectator flags BEFORE loading any game client scripts
+// This prevents civclient_init() from running (see civclient.js:63-66)
+window.isSpectator = true;
+window.observing = true;
+
+// Spectator configuration
 var ts="${initParam.buildTimeStamp}";
-var fcwDebug=<%= fcwDebug %>;
+var fcwDebug = true;  // SPECTATOR FIX: Force debug mode to see packet logs
 var webgpu = <%= webgpu %>;
 var spectatorGameId = "<%= gameId %>";
 var spectatorGamePort = <%= gamePort %>;
 var spectatorMode = "<%= spectatorMode %>";
-var isSpectator = true;
-var observing = true;
+var isSpectator = true;  // Keep for backwards compatibility
+var observing = true;    // Keep for backwards compatibility
 var isLlmGame = <%= isLlmGame %>;
 </script>
 
@@ -118,6 +120,9 @@ var isLlmGame = <%= isLlmGame %>;
   import { WebGPURenderer } from '${pageContext.request.contextPath}/javascript/webgpu/libs/webgpu-renderer.module.min.js?ts=${initParam.buildTimeStamp}';
   window.WebGPURenderer = WebGPURenderer;
 <% } %>
+
+  import { DRACOLoader } from '${pageContext.request.contextPath}/javascript/webgl/libs/DRACOLoader.js?ts=${initParam.buildTimeStamp}';
+  window.DRACOLoader = DRACOLoader;
 
   import { GLTFLoader } from '${pageContext.request.contextPath}/javascript/webgl/libs/GLTFLoader.js?ts=${initParam.buildTimeStamp}';
   window.GLTFLoader = GLTFLoader;
@@ -274,9 +279,10 @@ $(document).ready(function() {
 
   // Wait for all required FreeCiv components to be ready
   function waitForFreeCivReady() {
+    // Note: Removed 'websocket_connect' - spectator uses its own connection function
+    // Note: Removed 'init_mapcanvas_2d' - doesn't exist in 3D version, uses WebGL only
     var requiredFunctions = [
-      'init_webgl_renderer', 'game_init', 'control_init',
-      'init_mapcanvas_2d', 'websocket_connect'
+      'init_webgl_renderer', 'game_init', 'control_init'
     ];
 
     var allReady = requiredFunctions.every(function(funcName) {
@@ -315,4 +321,4 @@ $(document).ready(function() {
 </script>
 
 </body>
-</html>
+</html><\!-- force rebuild -->

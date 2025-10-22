@@ -546,6 +546,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                     'session_id': self.session_id,
                     'player_id': self.player_id,
                     'game_id': self.game_id,
+                    'civserver_port': game_session.civserver_port,  # SPECTATOR FIX: Port for spectator URL generation
                     'capabilities': list(capability_set),
                     'session_expires_in': int(self.session_info.expires_at - time.time()),
                     'message': 'Player authenticated successfully. Waiting for all players to join.',

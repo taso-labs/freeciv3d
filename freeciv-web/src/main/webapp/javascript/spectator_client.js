@@ -57,12 +57,24 @@ function init_spectator_client() {
   window.observing = true;
   window.isSpectator = true;
 
-  console.log(`Connecting to spectator game: ${spectator_game_id} on port ${spectator_game_port}`);
+  console.log(`Preparing spectator for game: ${spectator_game_id} on port ${spectator_game_port}`);
 
-  // Initialize game components
+  // Initialize game components (loads sprites and 3D models)
   init_spectator_game();
 
-  // Connect to the game server
+  // SPECTATOR FIX: Don't connect WebSocket yet!
+  // Wait for 3D models to finish loading to avoid race condition.
+  // Connection will be triggered by spectator_models_ready() when models finish.
+  console.log("[SPECTATOR] Waiting for 3D models to load before connecting WebSocket...");
+}
+
+/**
+ * Called when 3D models finish loading - safe to connect WebSocket now
+ */
+function spectator_models_ready() {
+  console.log("[SPECTATOR] ✅ 3D models loaded, connecting to game server...");
+
+  // Now it's safe to connect - models are ready for rendering
   connect_to_spectator_game();
 }
 
@@ -73,12 +85,26 @@ function init_spectator_game() {
   console.log("Initializing spectator game components...");
 
   try {
-    // Initialize WebGL renderer (reuse existing function)
-    if (typeof init_webgl_renderer === 'function') {
-      console.log("Initializing WebGL renderer...");
-      init_webgl_renderer();
+    // SPECTATOR FIX: Verify mapcanvas element exists before initializing WebGL
+    var mapcanvas = document.getElementById('mapcanvas');
+    if (!mapcanvas) {
+      console.error("mapcanvas element not found - cannot initialize WebGL");
+      show_spectator_error("Map canvas element not found. Please reload the page.");
+      return;
+    }
+
+    console.log("mapcanvas element found, proceeding with initialization");
+
+    // SPECTATOR FIX: Load tilesets before initializing WebGL
+    // init_sprites() loads tileset images, then calls webgl_preload() automatically
+    if (typeof init_sprites === 'function') {
+      console.log("Loading tilesets for spectator mode...");
+      init_sprites();  // Shows "Loading graphics..." → loads tiles → inits WebGL with textures
     } else {
-      console.warn("init_webgl_renderer not available");
+      console.warn("init_sprites not available - falling back to direct WebGL init");
+      if (typeof init_webgl_renderer === 'function') {
+        init_webgl_renderer();
+      }
     }
 
     // Initialize game state (reuse existing function)
@@ -97,13 +123,7 @@ function init_spectator_game() {
       console.warn("control_init not available");
     }
 
-    // Initialize map canvas for spectator mode
-    if (typeof init_mapcanvas_2d === 'function') {
-      console.log("Initializing map canvas...");
-      init_mapcanvas_2d();
-    } else {
-      console.warn("init_mapcanvas_2d not available");
-    }
+    // Note: FreeCiv3D uses WebGL rendering only, no 2D canvas initialization needed
 
     // Set up UI for spectator mode
     setup_spectator_ui();
@@ -138,27 +158,31 @@ function setup_spectator_ui() {
 function connect_to_spectator_game() {
   console.log(`Connecting to game server on port ${spectator_game_port}...`);
 
-  // Determine the WebSocket URL based on the port and game type
+  // Determine the WebSocket URL based on the game type
   var ws_url;
 
-  // Check if this is an LLM Gateway game
-  var isLlmGame = spectator_game_port == 8003 ||
+  // Check if this is an LLM Gateway game (detect by game_id pattern)
+  // LLM games have game_id starting with "game_" or "llm_"
+  var isLlmGame = spectator_game_id.startsWith('game_') ||
                   spectator_game_id.startsWith('llm_') ||
                   spectator_game_id === 'default';
 
+  var host = window.location.hostname;
+
   if (isLlmGame) {
-    // Connect to FreeCiv proxy as observer to get actual map data
-    // LLM games run on port 6001, connect as observer to see the map
-    var host = window.location.hostname;
-    var port = 8002; // FreeCiv proxy port
-    ws_url = `ws://${host}:${port}/civsocket/6001`;
-    console.log("Connecting to FreeCiv proxy as observer for LLM game:", ws_url);
+    // LLM GAMES: Connect to LLM Gateway spectator broadcast endpoint
+    // This receives FreeCiv protocol packets relayed from agent connections
+    var gateway_port = 8003;  // LLM Gateway port
+    ws_url = `ws://${host}:${gateway_port}/ws/spectator/${spectator_game_id}`;
+    console.log("Connecting to LLM Gateway spectator broadcast:", spectator_game_id);
+    console.log(`  WebSocket URL: ${ws_url}`);
+    console.log(`  View: Player 1 perspective (MVP)`);
   } else {
-    // Traditional FreeCiv proxy WebSocket
-    var host = window.location.hostname;
-    var port = 8002; // FreeCiv proxy port
-    ws_url = `ws://${host}:${port}/civsocket/${spectator_game_port}`;
-    console.log("Connecting to FreeCiv proxy:", ws_url);
+    // TRADITIONAL GAMES: Connect via FreeCiv proxy
+    var proxy_port = 8002;  // FreeCiv proxy port
+    ws_url = `ws://${host}:${proxy_port}/civsocket/${spectator_game_port}`;
+    console.log("Connecting to FreeCiv proxy as observer for traditional game");
+    console.log(`  WebSocket URL: ${ws_url}`);
   }
 
   try {
@@ -262,8 +286,12 @@ function handle_spectator_message(data) {
   try {
     var message = JSON.parse(data);
 
-    // Log message for debugging
-    if (typeof fcwDebug !== 'undefined' && fcwDebug) {
+    // Filter console logs to reduce noise - only log important packets
+    // PIDs of interest: 126 (START_PHASE), 140 (RULESET_UNIT), 16 (GAME_INFO), 17 (MAP_INFO)
+    var important_pids = [16, 17, 126, 140];
+    var should_log = !message.pid || important_pids.indexOf(message.pid) !== -1 || message.type === 'freeciv_update';
+
+    if (should_log) {
       console.log("Spectator received:", message);
     }
 
@@ -271,14 +299,27 @@ function handle_spectator_message(data) {
     // LLM games now connect to FreeCiv proxy, so use standard protocol
     if (message.pid !== undefined) {
       // Standard FreeCiv protocol message
-      handle_spectator_freeciv_message(message);
+      try {
+        handle_spectator_freeciv_message(message);
+      } catch (handlerError) {
+        console.error("Error handling FreeCiv packet (PID " + message.pid + "):", handlerError);
+        console.error("Problematic packet:", message);
+        // Don't let one packet error kill the whole connection - keep going
+      }
     } else if (message.type !== undefined) {
       // Custom message format
-      handle_spectator_custom_message(message);
+      try {
+        handle_spectator_custom_message(message);
+      } catch (handlerError) {
+        console.error("Error handling custom message (type " + message.type + "):", handlerError);
+        console.error("Problematic message:", message);
+        // Don't let one message error kill the whole connection - keep going
+      }
     }
 
   } catch (error) {
     console.error("Failed to parse spectator message:", error, data);
+    // Don't throw - keep connection alive even if one message fails
   }
 }
 
@@ -287,19 +328,21 @@ function handle_spectator_message(data) {
  */
 function handle_spectator_freeciv_message(message) {
   // Reuse existing packet handlers where possible
+  // PIDs from freeciv/common/networking/packets.def
   switch (message.pid) {
     case 5: // PACKET_SERVER_JOIN_REPLY
       handle_spectator_join_reply(message);
       break;
 
-    case 15: // PACKET_GAME_INFO
+    case 16: // PACKET_GAME_INFO (was incorrectly 15)
       if (typeof handle_game_info === 'function') {
         handle_game_info(message);
       }
       break;
 
-    case 25: // PACKET_MAP_INFO
+    case 17: // PACKET_MAP_INFO (was incorrectly 25) - CRITICAL for map rendering
       if (typeof handle_map_info === 'function') {
+        console.log("[SPECTATOR] Processing PACKET_MAP_INFO (PID 17) - map data received");
         handle_map_info(message);
         // Ensure map canvas is visible for spectator
         $("#mapcanvas").show();
@@ -311,10 +354,11 @@ function handle_spectator_freeciv_message(message) {
         if (typeof init_mapcanvas_2d === 'function') {
           init_mapcanvas_2d();
         }
+        console.log("[SPECTATOR] Map info processed, map object:", typeof map !== 'undefined' ? "set" : "undefined");
       }
       break;
 
-    case 55: // PACKET_TILE_INFO
+    case 15: // PACKET_TILE_INFO (was incorrectly 55)
       if (typeof handle_tile_info === 'function') {
         handle_tile_info(message);
 
@@ -325,19 +369,19 @@ function handle_spectator_freeciv_message(message) {
       }
       break;
 
-    case 75: // PACKET_PLAYER_INFO
+    case 51: // PACKET_PLAYER_INFO (was incorrectly 75)
       if (typeof handle_player_info === 'function') {
         handle_player_info(message);
       }
       break;
 
-    case 85: // PACKET_CITY_INFO
+    case 31: // PACKET_CITY_INFO (was incorrectly 85)
       if (typeof handle_city_info === 'function') {
         handle_city_info(message);
       }
       break;
 
-    case 95: // PACKET_UNIT_INFO
+    case 63: // PACKET_UNIT_INFO (was incorrectly 95)
       if (typeof handle_unit_info === 'function') {
         handle_unit_info(message);
       }
@@ -358,8 +402,67 @@ function handle_spectator_freeciv_message(message) {
 function handle_llm_spectator_message(message) {
   switch (message.type) {
     case 'spectator_joined':
-      console.log("Successfully joined LLM game as spectator");
+      console.log("✅ Successfully joined LLM game as spectator");
       update_connection_status("Observing LLM Game", "green");
+
+      // SPECTATOR FIX: Mark connection as established so packet handlers work correctly
+      if (client && client.conn) {
+        client.conn.established = true;
+        console.log("[SPECTATOR] Connection marked as established");
+      }
+
+      // SPECTATOR FIX: The Gateway sends cached packets automatically after spectator_joined
+      // These packets include PACKET_START_PHASE which should trigger renderer_init()
+      // If renderer doesn't initialize within 2 seconds, force initialization
+      console.log("[SPECTATOR] Cached packets will arrive shortly, waiting for PACKET_START_PHASE...");
+
+      setTimeout(function() {
+        // Check if renderer was initialized by PACKET_START_PHASE
+        if (typeof scene === 'undefined' || scene === null) {
+          console.warn("[SPECTATOR] Renderer not initialized after 2s, forcing initialization...");
+          console.log("[SPECTATOR] Current client_state:", typeof client_state === 'function' ? client_state() : 'undefined');
+
+          // Force renderer initialization
+          if (typeof renderer_init === 'function') {
+            renderer_init();
+          } else {
+            console.error("[SPECTATOR] renderer_init() not available!");
+          }
+        } else {
+          console.log("[SPECTATOR] ✅ Renderer already initialized by packet handler");
+        }
+      }, 2000);
+      break;
+
+    case 'state_response':
+      // Game state message from LLM Gateway/agent
+      console.log("📦 Received state_response message");
+
+      // state_response can have different formats:
+      // 1. Message with nested packets array: {type: "state_response", state: {packets: [...]}}
+      // 2. Message with data field: {type: "state_response", data: {...}}
+      // 3. Simple acknowledgment: {type: "state_response", success: true}
+
+      if (message.state && message.state.packets) {
+        // Format 1: Nested packets array
+        console.log(`Processing ${message.state.packets.length} FreeCiv packets from state_response`);
+        message.state.packets.forEach(function(packet, index) {
+          try {
+            if (packet.pid !== undefined) {
+              handle_spectator_freeciv_message(packet);
+            }
+          } catch (error) {
+            console.error(`Error processing packet ${index} (pid: ${packet.pid}):`, error);
+          }
+        });
+      } else if (message.data) {
+        // Format 2: Data field - treat as game state update
+        console.log("Processing state data:", message.data);
+        handle_llm_game_state_update({type: 'game_state', data: message.data});
+      } else {
+        // Format 3: Simple acknowledgment or unknown format
+        console.log("state_response acknowledged (no packet data):", message);
+      }
       break;
 
     case 'game_state':
@@ -392,6 +495,19 @@ function handle_llm_spectator_message(message) {
  * Handle custom message types
  */
 function handle_spectator_custom_message(message) {
+  // Route LLM Gateway messages to the appropriate handler
+  if (message.type === 'spectator_joined' ||
+      message.type === 'state_response' ||
+      message.type === 'game_state' ||
+      message.type === 'turn_update' ||
+      message.type === 'player_action' ||
+      message.type === 'game_ended') {
+    // These are LLM Gateway broadcast messages
+    handle_llm_spectator_message(message);
+    return;
+  }
+
+  // Handle other custom message types
   switch (message.type) {
     case 'game_update':
       handle_spectator_game_update(message);

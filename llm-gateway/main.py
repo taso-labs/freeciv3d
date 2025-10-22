@@ -107,10 +107,12 @@ class LLMGateway:
     def __init__(self):
         # Minimal state - just track active agents for connection management
         self.active_agents: Dict[str, Dict[str, Any]] = {}
+        self.game_sessions: Dict[str, Dict[str, Any]] = {}  # CRITICAL FIX: Referenced by health endpoint and API
         self._running = False
 
         # Note: Complex state management removed - gateway acts as pure pass-through
         # The proxy's LLM handler manages game state, authentication, and actions
+        # game_sessions is kept for health monitoring and basic session tracking
 
     async def start(self):
         """Start the gateway"""
@@ -354,8 +356,17 @@ class LLMGateway:
                 self.game_sessions[game_id]["player_id"] = response_data.get("player_id")
                 self.game_sessions[game_id]["session_id"] = response_data.get("session_id")
                 self.game_sessions[game_id]["agent_id"] = response_data.get("agent_id")
+                civserver_port = response_data.get("civserver_port", 6000)
+                self.game_sessions[game_id]["port"] = civserver_port
 
-                logger.info(f"Successfully authenticated LLM agent for game {game_id}: player_id={response_data.get('player_id')}")
+                logger.info(
+                    f"Successfully authenticated LLM agent for game {game_id}: "
+                    f"player_id={response_data.get('player_id')}, port={civserver_port}"
+                )
+
+                # Warn if port is 6000 (single-player) - LLM games should use 6001-6009
+                if civserver_port == 6000:
+                    logger.warning(f"⚠️ Game {game_id} assigned single-player port 6000 - expected multiplayer port (6001-6009)")
                 return {"success": True, "player_id": response_data.get("player_id")}
             else:
                 error_msg = response_data.get("message", "Authentication failed")
@@ -476,21 +487,16 @@ class LLMGateway:
                 # Check if it's a FreeCiv protocol message (has pid field)
                 msg_pid = message.get("pid")
                 if msg_pid:
-                    # Forward FreeCiv protocol messages to spectators
-                    # pid 15: PACKET_GAME_INFO
-                    # pid 25: PACKET_MAP_INFO
-                    # pid 55: PACKET_TILE_INFO
-                    # pid 75: PACKET_PLAYER_INFO
-                    # pid 85: PACKET_CITY_INFO
-                    # pid 95: PACKET_UNIT_INFO
-                    if msg_pid in [15, 25, 55, 75, 85, 95]:
-                        await connection_manager.broadcast_to_spectators(game_id, {
-                            "type": "freeciv_update",
-                            "game_id": game_id,
-                            "packet_id": msg_pid,
-                            "data": message,
-                            "timestamp": time.time()
-                        })
+                    # Forward ALL FreeCiv protocol packets to spectators
+                    # Spectator will use packet_handlers[] table to route them (just like normal clients)
+                    # This matches how multiplayer observer mode works - no packet filtering
+                    await connection_manager.broadcast_to_spectators(game_id, {
+                        "type": "freeciv_update",
+                        "game_id": game_id,
+                        "packet_id": msg_pid,
+                        "data": message,
+                        "timestamp": time.time()
+                    })
 
         except Exception as e:
             logger.error(f"Error handling FreeCiv message for {game_id}: {e}")
