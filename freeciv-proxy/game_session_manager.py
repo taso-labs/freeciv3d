@@ -396,21 +396,22 @@ class GameSessionManager:
                 return port
 
             # Allocate next available multiplayer port using round-robin from publite2-created ports
-            # NOTE: Publite2 creates ports ON-DEMAND, not upfront. Available ports depend on
-            # metaserver activity and may include both multiplayer (odd) and singleplayer (even).
-            # We iterate through 6001-6009 and USE WHICHEVER PORT EXISTS, regardless of odd/even.
+            # IMPORTANT: ONLY allocate ODD ports (6001, 6003, 6005, 6007, 6009)
+            # - ODD ports = multiplayer servers with aifill=2 (AI*1, AI*2 for LLM agents)
+            # - EVEN ports = singleplayer servers with aifill=12 (wrong for LLM multiplayer!)
             #
-            # Previous approach (increment by 2 for odd ports) FAILED because:
-            # - Assumed ports 6001, 6003, 6005, 6007, 6009 pre-exist (WRONG!)
-            # - Publite2 creates ports dynamically: 6001, 6002, 6003, 6004, ...
-            # - Allocating port 6005 when only 6001-6003 exist → Connection Refused (E140)
+            # Publite2 creates ports dynamically on-demand based on metaserver capacity
+            # If allocated port doesn't exist yet, connection will fail with E140
+            # This is acceptable - the port will be created by publite2 on next metaserver check
             port = self._next_multiplayer_port
             total_sessions = len(self.sessions)
 
-            # Simple increment with wraparound (6001→6002→6003→...→6009→6001)
-            next_port = port + 1
+            # Increment by 2 to skip singleplayer ports and only use multiplayer ports
+            # Multiplayer ports are ODD (6001, 6003, 6005, 6007, 6009) with aifill=2
+            # Singleplayer ports are EVEN (6000, 6002, 6004, 6006, 6008) with aifill=12
+            next_port = port + 2
             if next_port > 6009:
-                next_port = 6001
+                next_port = 6001  # Wrap to first multiplayer port
 
             is_multiplayer = port % 2 == 1
             logger.info(
