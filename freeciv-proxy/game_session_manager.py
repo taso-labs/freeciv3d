@@ -244,7 +244,7 @@ class GameSession:
                 logger.error(f"Game {self.game_id}: civcom connection is dead!")
                 return
 
-            # CRITICAL FIX: DO NOT send /set commands here!
+            # DO NOT send /set commands here!
             # Each /set command triggers reset_all_start_commands() in civserver,
             # which RESETS all players' is_ready flags to FALSE.
             # This undoes the PACKET_PLAYER_READY that players already sent!
@@ -255,7 +255,7 @@ class GameSession:
             # GameSessionManager's ONLY job is to send /start when all players are ready.
             logger.info(f"Game {self.game_id}: All settings pre-configured in pubscript_multiplayer.serv")
 
-            # CRITICAL FIX: Send explicit /start command to start the game
+            # Send explicit /start command to start the game
             # Multi-player games require /start command - they don't auto-start like single-player
             # All players have sent PACKET_PLAYER_READY, now we initiate the game
             logger.info(f"Game {self.game_id}: All {len(self.players)} players ready - sending /start command")
@@ -266,7 +266,7 @@ class GameSession:
             # Mark as started
             self.game_started = True
 
-            # CRITICAL FIX: Verify game actually started instead of blindly waiting
+            # Verify game actually started instead of blindly waiting
             # Poll civserver to confirm game initialization completed successfully
             logger.info(f"Game {self.game_id}: Verifying game start (waiting for turn > 0)...")
             start_time = time.time()
@@ -306,7 +306,7 @@ class GameSession:
             self.phase = GamePhase.RUNNING
             logger.info(f"Game {self.game_id}: Game is now running")
 
-            # CRITICAL FIX: Broadcast game_ready to all agents now that game has started
+            # Broadcast game_ready to all agents now that game has started
             # This notifies agents that the game is fully initialized and ready for state queries
             logger.info(f"Game {self.game_id}: Broadcasting game_ready signal to all {len(self.players)} players")
             for player_info in self.players.values():

@@ -111,14 +111,14 @@ class LLMWSHandler(websocket.WebSocketHandler):
         self.rate_limit_tokens = 100
         self.last_token_refill = time.time()
 
-        # CRITICAL FIX: Packet buffering during authentication
+        # Packet buffering during authentication
         # FreeCiv sends ~1.2MB of PACKET_RULESET_NATION packets immediately upon connection
         # These must be buffered until auth_success is sent to maintain protocol order
         self.packet_buffer = []  # List of JSON packet strings to buffer
         self.auth_complete = False  # Flag: has authentication completed?
         self.buffer_enabled = False  # Flag: should CivCom buffer packets?
 
-        # CRITICAL FIX: Add io_loop attribute for CivCom compatibility
+        # Add io_loop attribute for CivCom compatibility
         # CivCom uses conn.io_loop.add_callback() to send packets safely across threads
         # This must be the IOLoop instance that's handling this connection
         from tornado import ioloop
@@ -136,7 +136,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
         logger.info(f"LLM agent connection opened: {self.id}")
         self.set_nodelay(True)
 
-        # CRITICAL FIX: Configure IOStream buffer sizes for large FreeCiv packets
+        # Configure IOStream buffer sizes for large FreeCiv packets
         # Must be done in open() where ws_connection exists, NOT in __init__
         # FreeCiv sends large game state packets (>1MB) that need both:
         # 1. max_buffer_size - for READING incoming frames
@@ -269,10 +269,10 @@ class LLMWSHandler(websocket.WebSocketHandler):
         The handler blocks until auth_success is sent, keeping the WebSocket connection
         alive. This replaces the previous pattern of spawning a detached async task.
 
-        CRITICAL FIX: Enable packet buffering during authentication to solve protocol
-        packet ordering race condition. FreeCiv sends ~1.2MB of PACKET_RULESET_NATION
-        packets immediately when connection is established, which arrive BEFORE
-        auth_success is generated. We buffer these packets and flush after auth_success.
+        Enable packet buffering during authentication to solve protocol packet ordering
+        race condition. FreeCiv sends ~1.2MB of PACKET_RULESET_NATION packets immediately
+        when connection is established, which arrive BEFORE auth_success is generated.
+        We buffer these packets and flush after auth_success.
         """
         logger.debug(f"_handle_llm_connect called for {self.id}")
 
@@ -321,7 +321,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
             llm_agents[self.agent_id] = self
             self.is_llm_agent = True
 
-            # CRITICAL FIX: Get game_id FIRST, then allocate/lookup civserver port
+            # Get game_id FIRST, then allocate/lookup civserver port
             # This ensures both players in the same game connect to the SAME multiplayer server
             # LLM Gateway flattens nested 'data' field to top level before sending to proxy
             game_id = msg_data.get('game_id', f'game_{uuid.uuid4().hex[:8]}')
@@ -345,7 +345,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 f"   Expected AI slots: {'AI*1, AI*2' if 6001 <= civserver_port <= 6009 else 'AI*1 through AI*12' if civserver_port == 6000 else 'UNKNOWN'}"
             )
 
-            # CRITICAL FIX: Enable packet buffering IMMEDIATELY before connecting to civserver
+            # Enable packet buffering IMMEDIATELY before connecting to civserver
             # The civserver sends ~1.2MB of PACKET_RULESET_NATION packets as soon as we connect
             # We MUST enable buffering BEFORE _connect_to_civserver() to capture these packets
             self.buffer_enabled = True
@@ -371,7 +371,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 self.is_llm_agent = False
                 return
 
-            # CRITICAL FIX: Self-assign player_id (restores pre-GameSessionManager behavior)
+            # Self-assign player_id (restores pre-GameSessionManager behavior)
             # The original working implementation assigned player_id client-side
             # and told civserver "I am player X" via nation selection packet
             # This avoids the timeout issue with waiting for server-side assignment
@@ -394,7 +394,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                     f"   Game started: {game_session.game_started}"
                 )
 
-                # CRITICAL FIX: Use /take command to control AI player (proper FreeCiv protocol)
+                # Use /take command to control AI player (proper FreeCiv protocol)
                 # This replaces self-assignment with server-validated player_id
                 # Step 1: Wait for PACKET_CONN_INFO from server (assigns observer status player_num=512)
                 logger.info(f"⏳ Waiting for PACKET_CONN_INFO for {self.agent_id}...")
@@ -418,7 +418,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
 
                 # Step 2: Send /take command to control an AI player
                 # AI slots are AI*1, AI*2, ... created by aifill setting
-                # CRITICAL FIX: Use thread-safe allocation from GameSession to avoid race conditions
+                # Use thread-safe allocation from GameSession to avoid race conditions
                 # where multiple players could get the same AI slot
                 ai_slot = game_session.allocate_ai_slot()
 
@@ -434,7 +434,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
 
                 # Step 3: Wait for /take to complete and server to update player_id
                 # Server sends PACKET_CONN_INFO again with the new player_id after /take succeeds
-                # CRITICAL FIX: Increased initial wait from 1.5s to 2.5s for slower Docker environments
+                # Increased initial wait from 1.5s to 2.5s for slower Docker environments
                 # and added retry logic to handle timing variations in AI player creation
                 logger.info(f"⏳ {self.agent_id}: Waiting for /take AI*{ai_slot} to complete...")
                 await asyncio.sleep(2.5)  # Initial wait for server to process /take
@@ -563,7 +563,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 }))
                 logger.info(f"📤 Sent auth_success with player_id={self.player_id} to agent {self.agent_id}")
 
-                # CRITICAL FIX: Flush buffered packets immediately after auth_success
+                # Flush buffered packets immediately after auth_success
                 # This solves the protocol packet ordering race condition by ensuring:
                 # 1. auth_success is sent first (client expects this)
                 # 2. Buffered PACKET_RULESET_NATION packets are sent second (game state)
@@ -1887,7 +1887,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
     def _flush_packet_buffer(self):
         """Flush buffered packets to client after authentication completes.
 
-        CRITICAL FIX: This solves the protocol packet ordering race condition.
+        This solves the protocol packet ordering race condition.
         FreeCiv sends ~1.2MB of PACKET_RULESET_NATION packets immediately when
         connection is established, BEFORE auth_success can be generated.
 

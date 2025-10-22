@@ -93,3 +93,6 @@ Technical Spec.md
 
 # macOS system files
 .DS_Store
+
+# Local development config files (contain credentials)
+freeciv-web/flyway.properties

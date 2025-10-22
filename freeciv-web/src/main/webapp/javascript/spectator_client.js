@@ -428,7 +428,7 @@ function handle_spectator_freeciv_message(message) {
 
     default:
       // Try to route to existing packet handlers
-      // CRITICAL FIX: Use packet_hand_table (not packet_handlers) - the actual handler table name
+      // Use packet_hand_table (not packet_handlers) - the actual handler table name
       if (typeof packet_hand_table !== 'undefined' && packet_hand_table[message.pid]) {
         packet_hand_table[message.pid](message);
       }

@@ -306,7 +306,7 @@ if __name__ == "__main__":
             (r"/", IndexHandler),
             (r"(.*)status", StatusHandler),
         ],
-        # CRITICAL FIX: Increase WebSocket frame size limit for large FreeCiv packets
+        # Increase WebSocket frame size limit for large FreeCiv packets
         # FreeCiv sends large game state packets (map data, player data, city data)
         # that can exceed Tornado's default 10MB limit, causing "frame exceeds limit" errors
         # See: https://www.tornadoweb.org/en/stable/websocket.html#tornado.websocket.WebSocketHandler.max_message_size

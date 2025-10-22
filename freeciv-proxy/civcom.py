@@ -329,12 +329,12 @@ class CivCom(Thread):
     def send_packets_to_client(self):
         packet = self.get_client_result_string()
         if (packet is not None and self.civwebserver is not None):
-            # CRITICAL FIX: Check if handler has buffering enabled (LLM agents during auth)
-            # If buffer_enabled=True, store packets instead of sending them
+            # Check if handler has buffering enabled (LLM agents buffer during auth)
+            # If buffer_enabled=True, store packets instead of sending them immediately
             if hasattr(self.civwebserver, 'buffer_enabled') and self.civwebserver.buffer_enabled:
                 # Buffer the packet instead of sending it
                 if hasattr(self.civwebserver, 'packet_buffer'):
-                    # CRITICAL: Check buffer size limits to prevent memory exhaustion
+                    # Check buffer size limits to prevent memory exhaustion
                     # Import limits from llm_handler at runtime to avoid circular import
                     try:
                         from llm_handler import MAX_PACKET_BUFFER_SIZE, MAX_PACKET_BUFFER_BYTES

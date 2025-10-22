@@ -159,9 +159,9 @@ class AgentWebSocketHandler:
             proxy_url = f"ws://{settings.freeciv_proxy_host}:{settings.freeciv_proxy_port}{settings.freeciv_proxy_ws_path}"
             logger.info(f"Connecting agent {self.agent_id} to proxy: {proxy_url}")
 
-            # CRITICAL FIX: Set max_size to 100MB to handle large FreeCiv game state packets
+            # Set max_size to 100MB to handle large FreeCiv game state packets
             # FreeCiv sends packets with map data, player info, city data that exceed the default 1MB limit
-            # This was causing "frame exceeds limit of 1048576 bytes" errors (close code 1009)
+            # This prevents "frame exceeds limit of 1048576 bytes" errors (close code 1009)
             self.proxy_connection = await websockets.connect(
                 proxy_url,
                 max_size=100 * 1024 * 1024,  # 100MB for large game state packets

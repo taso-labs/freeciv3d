@@ -107,7 +107,9 @@ class LLMGateway:
     def __init__(self):
         # Minimal state - just track active agents for connection management
         self.active_agents: Dict[str, Dict[str, Any]] = {}
-        self.game_sessions: Dict[str, Dict[str, Any]] = {}  # CRITICAL FIX: Referenced by health endpoint and API
+        # Keep game_sessions for health monitoring and API compatibility
+        # Referenced by health endpoint and session status queries
+        self.game_sessions: Dict[str, Dict[str, Any]] = {}
         self._running = False
 
         # Note: Complex state management removed - gateway acts as pure pass-through

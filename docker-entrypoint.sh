@@ -47,7 +47,8 @@ fi
 echo "=== Starting LLM Gateway API (Port 8003) ==="
 if [ -d "/docker/llm-gateway" ]; then
     cd /docker/llm-gateway
-    # CRITICAL FIX: Set Redis URL to use Docker service name instead of localhost
+    # Set Redis URL to use Docker service name instead of localhost
+    # Docker internal networking requires using service names not localhost
     export GATEWAY_REDIS_URL="redis://fciv-redis:6379"
     nohup uvicorn main:app --host 0.0.0.0 --port 8003 --log-level info > /docker/logs/llm-gateway.log 2>&1 &
     GATEWAY_PID=$!
