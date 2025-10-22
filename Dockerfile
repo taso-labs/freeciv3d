@@ -131,13 +131,13 @@ EOF
 
 FROM docker-base AS final
 
-# Copy required directories from tomcat-builder (build artifacts already deployed to Tomcat)
-COPY --from=tomcat-builder --chown=docker:docker /docker/freeciv-proxy /docker/freeciv-proxy
-COPY --from=tomcat-builder --chown=docker:docker /docker/publite2 /docker/publite2
-COPY --from=tomcat-builder --chown=docker:docker /docker/llm-gateway /docker/llm-gateway
-COPY --from=tomcat-builder --chown=docker:docker /docker/scripts /docker/scripts
 COPY --from=tomcat-builder --chown=docker:docker /docker/config /docker/config
+COPY --from=tomcat-builder --chown=docker:docker /docker/freeciv-proxy /docker/freeciv-proxy
+COPY --from=tomcat-builder --chown=docker:docker /docker/freeciv-web/*.sh /docker/freeciv-web/
 COPY --from=tomcat-builder --chown=docker:docker /docker/LICENSE.md /docker/LICENSE.md
+COPY --from=tomcat-builder --chown=docker:docker /docker/llm-gateway /docker/llm-gateway
+COPY --from=tomcat-builder --chown=docker:docker /docker/publite2 /docker/publite2
+COPY --from=tomcat-builder --chown=docker:docker /docker/scripts /docker/scripts
 
 # Install Python dependencies for freeciv-proxy and LLM Gateway
 WORKDIR /docker/llm-gateway
