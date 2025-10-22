@@ -17,12 +17,17 @@ Architecture:
 import json
 import logging
 import time
+import aiohttp
 from collections import deque
 from enum import Enum
 from typing import Dict, List, Any, Optional, Set
 from fastapi import WebSocket
 
 logger = logging.getLogger("llm-gateway")
+
+# FreeCiv proxy configuration
+FREECIV_PROXY_HOST = "localhost"
+FREECIV_PROXY_PORT = 8002
 
 
 class ViewMode(Enum):
@@ -97,13 +102,61 @@ class SpectatorBroadcaster:
 
         logger.info("SpectatorBroadcaster initialized")
 
+    async def _fetch_ruleset_packets(self, game_id: str) -> Optional[List[str]]:
+        """
+        Fetch cached RULESET packets from freeciv-proxy.
+
+        These packets define game constants like EXTRA_MINE, unit_types[], terrain types, etc.
+        Spectators need these to initialize their client state properly.
+
+        Args:
+            game_id: Game identifier
+
+        Returns:
+            List of JSON packet strings, or None if not available
+        """
+        url = f"http://{FREECIV_PROXY_HOST}:{FREECIV_PROXY_PORT}/api/rulesets/{game_id}"
+
+        try:
+            timeout = aiohttp.ClientTimeout(total=5)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.get(url) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        if data.get('success'):
+                            packets = data.get('packets', [])
+                            packet_count = data.get('packet_count', 0)
+                            logger.info(f"✓ Fetched {packet_count} RULESET packets for game {game_id}")
+                            return packets
+                        else:
+                            logger.warning(f"RULESET fetch failed for game {game_id}: {data.get('error')}")
+                            return None
+                    elif response.status == 404:
+                        logger.warning(f"No RULESET cache found for game {game_id} (may be early in game initialization)")
+                        return None
+                    else:
+                        logger.error(f"RULESET fetch error for game {game_id}: HTTP {response.status}")
+                        return None
+
+        except aiohttp.ClientError as e:
+            logger.error(f"Network error fetching RULESET packets for game {game_id}: {e}")
+            return None
+        except Exception as e:
+            logger.exception(f"Unexpected error fetching RULESET packets for game {game_id}: {e}")
+            return None
+
     async def register_spectator(
         self,
         game_id: str,
         websocket: WebSocket,
         view_mode: ViewMode = ViewMode.PLAYER_1
     ) -> SpectatorConnection:
-        """Register new spectator connection"""
+        """
+        Register new spectator connection.
+
+        CRITICAL: Sends RULESET packets FIRST to initialize client constants
+        (EXTRA_MINE, unit_types[], etc.) before sending game state packets.
+        """
 
         # Create spectator connection
         spec_conn = SpectatorConnection(websocket, view_mode)
@@ -124,6 +177,28 @@ class SpectatorBroadcaster:
             f"Spectator registered for game {game_id} "
             f"(view: {view_mode.value}, total spectators: {len(self.spectators[game_id])})"
         )
+
+        # SPECTATOR FIX: Send RULESET packets FIRST to initialize client
+        # Without these, client has undefined EXTRA_MINE, unit_types[], etc.
+        try:
+            ruleset_packets = await self._fetch_ruleset_packets(game_id)
+            if ruleset_packets:
+                logger.info(f"📤 Sending {len(ruleset_packets)} RULESET packets to spectator...")
+                for packet_json in ruleset_packets:
+                    try:
+                        # Parse and send each packet
+                        packet = json.loads(packet_json)
+                        await spec_conn.send_packet(packet)
+                    except json.JSONDecodeError as e:
+                        logger.error(f"Invalid JSON in cached RULESET packet: {e}")
+                    except Exception as e:
+                        logger.error(f"Error sending RULESET packet: {e}")
+
+                logger.info(f"✓ RULESET packets sent to spectator for game {game_id}")
+            else:
+                logger.warning(f"⚠️ No RULESET packets available for game {game_id} - spectator may not render correctly")
+        except Exception as e:
+            logger.exception(f"Error sending RULESET packets to spectator: {e}")
 
         return spec_conn
 

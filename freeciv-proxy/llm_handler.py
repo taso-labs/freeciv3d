@@ -399,14 +399,19 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 # Step 1: Wait for PACKET_CONN_INFO from server (assigns observer status player_num=512)
                 logger.info(f"⏳ Waiting for PACKET_CONN_INFO for {self.agent_id}...")
                 waited = 0.0
-                max_wait = 3.0
+                max_wait = 5.0  # Increased from 3.0s to 5.0s - Player 2 was timing out at 3.35s
                 while (not hasattr(self.civcom, 'player_id') or self.civcom.player_id is None) and waited < max_wait:
                     await asyncio.sleep(0.2)
                     waited += 0.2
-                    logger.debug(f"   Waited {waited:.1f}s for PACKET_CONN_INFO...")
+                    if waited % 1.0 < 0.3:  # Log every ~1 second
+                        logger.info(f"   {self.agent_id}: Still waiting for PACKET_CONN_INFO... ({waited:.1f}s/{max_wait}s)")
 
                 if not hasattr(self.civcom, 'player_id') or self.civcom.player_id is None:
-                    logger.error(f"❌ Failed to receive PACKET_CONN_INFO from server after {max_wait}s")
+                    logger.error(
+                        f"❌ {self.agent_id}: Failed to receive PACKET_CONN_INFO after {max_wait}s\n"
+                        f"   This usually means civserver is not responding or is overloaded\n"
+                        f"   Check civserver logs at /docker/logs/freeciv-web-log-{game_session.civserver_port}.log"
+                    )
                     raise RuntimeError(f"Failed to receive PACKET_CONN_INFO - civserver not responding")
 
                 logger.info(f"✅ Received PACKET_CONN_INFO: {self.agent_id} → player_num={self.civcom.player_id}")
@@ -431,7 +436,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 # Server sends PACKET_CONN_INFO again with the new player_id after /take succeeds
                 # CRITICAL FIX: Increased initial wait from 1.5s to 2.5s for slower Docker environments
                 # and added retry logic to handle timing variations in AI player creation
-                logger.info(f"⏳ Waiting for /take to complete...")
+                logger.info(f"⏳ {self.agent_id}: Waiting for /take AI*{ai_slot} to complete...")
                 await asyncio.sleep(2.5)  # Initial wait for server to process /take
 
                 # Step 4: Verify /take succeeded with retry logic

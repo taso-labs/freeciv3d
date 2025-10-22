@@ -52,6 +52,16 @@ except ImportError as e:
     PACKET_RULESET_NATION = -1
     def get_packet_name(pid): return f"packet_{pid}"
 
+# Import RULESET packet cache for spectator mode support
+try:
+    from ruleset_cache import ruleset_cache
+    RULESET_CACHE_AVAILABLE = True
+    logging.getLogger("freeciv-proxy").info("ruleset_cache module loaded - spectator RULESET caching enabled")
+except ImportError as e:
+    logging.getLogger("freeciv-proxy").warning(f"ruleset_cache not available: {e}. Spectator mode may not work correctly.")
+    RULESET_CACHE_AVAILABLE = False
+    ruleset_cache = None
+
 HOST = '127.0.0.1'
 logger = logging.getLogger("freeciv-proxy")
 
@@ -467,6 +477,22 @@ class CivCom(Thread):
         try:
             packet = json.loads(packet_json)
             packet_type = packet.get('pid')
+
+            # SPECTATOR SUPPORT: Cache RULESET packets for spectators
+            # These packets define game rules, unit types, terrain, extras (EXTRA_MINE, etc.)
+            # Spectators need these to initialize client-side constants
+            if RULESET_CACHE_AVAILABLE and ruleset_cache.is_ruleset_packet(packet_type):
+                # Get game_id from the handler (civwebserver is the LLMWebSocketHandler)
+                game_id = getattr(self.civwebserver, 'game_id', None)
+                if game_id:
+                    ruleset_cache.add_packet(game_id, packet_json)
+                    if not hasattr(self, '_ruleset_packets_cached'):
+                        self._ruleset_packets_cached = 0
+                    self._ruleset_packets_cached += 1
+                    # Log first few RULESET packets for verification
+                    if self._ruleset_packets_cached <= 5:
+                        logger.info(f"🎯 Cached RULESET packet (#{self._ruleset_packets_cached}): "
+                                   f"pid={packet_type}, game={game_id}")
 
             # Configurable packet logging for debugging (set CIVCOM_PACKET_LOG_LIMIT env var)
             if not hasattr(self, '_packet_type_log_count'):

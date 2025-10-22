@@ -57,6 +57,18 @@ function init_spectator_client() {
   window.observing = true;
   window.isSpectator = true;
 
+  // SPECTATOR FIX: Initialize server_settings with safe defaults early
+  // The renderer needs server_settings.borders.is_visible to be defined before initialization
+  // This must happen before init_spectator_game() calls the renderer
+  if (typeof server_settings === 'undefined' || !server_settings) {
+    console.log("[SPECTATOR] Initializing server_settings with defaults...");
+    window.server_settings = {
+      borders: { is_visible: true }
+    };
+  } else if (!server_settings.borders) {
+    server_settings.borders = { is_visible: true };
+  }
+
   console.log(`Preparing spectator for game: ${spectator_game_id} on port ${spectator_game_port}`);
 
   // Initialize game components (loads sprites and 3D models)
@@ -287,8 +299,8 @@ function handle_spectator_message(data) {
     var message = JSON.parse(data);
 
     // Filter console logs to reduce noise - only log important packets
-    // PIDs of interest: 126 (START_PHASE), 140 (RULESET_UNIT), 16 (GAME_INFO), 17 (MAP_INFO)
-    var important_pids = [16, 17, 126, 140];
+    // PIDs of interest: 126 (START_PHASE), 140 (RULESET_UNIT), 232 (RULESET_EXTRA), 16 (GAME_INFO), 17 (MAP_INFO)
+    var important_pids = [16, 17, 126, 140, 232];
     var should_log = !message.pid || important_pids.indexOf(message.pid) !== -1 || message.type === 'freeciv_update';
 
     if (should_log) {
@@ -301,6 +313,33 @@ function handle_spectator_message(data) {
       // Standard FreeCiv protocol message
       try {
         handle_spectator_freeciv_message(message);
+
+        // VERIFICATION: Log when critical RULESET packets are processed
+        if (message.pid === 232) {  // PACKET_RULESET_EXTRA
+          // Verify EXTRA_MINE is defined after this packet
+          console.log("🎯 PACKET_RULESET_EXTRA received - checking EXTRA_MINE initialization...");
+          if (typeof window.EXTRA_MINE !== 'undefined') {
+            console.log("✅ EXTRA_MINE is now defined:", window.EXTRA_MINE);
+          } else {
+            console.warn("⚠️ EXTRA_MINE still undefined after PACKET_RULESET_EXTRA");
+          }
+        } else if (message.pid === 140) {  // PACKET_RULESET_UNIT
+          // Verify unit_types is populated
+          console.log("🎯 PACKET_RULESET_UNIT received - checking unit_types initialization...");
+          if (typeof unit_types !== 'undefined' && unit_types[message.id]) {
+            console.log("✅ unit_types[" + message.id + "] is now defined:", unit_types[message.id].name);
+          } else {
+            console.warn("⚠️ unit_types[" + message.id + "] still undefined after PACKET_RULESET_UNIT");
+          }
+        } else if (message.pid === 126) {  // PACKET_START_PHASE
+          // Verify client state and initialization before rendering starts
+          console.log("🎯 PACKET_START_PHASE received - verifying client initialization...");
+          console.log("  client_state():", typeof client_state === 'function' ? client_state() : 'N/A');
+          console.log("  EXTRA_MINE defined:", typeof window.EXTRA_MINE !== 'undefined');
+          console.log("  unit_types defined:", typeof unit_types !== 'undefined');
+          console.log("  unit_types count:", typeof unit_types !== 'undefined' ? Object.keys(unit_types).length : 0);
+        }
+
       } catch (handlerError) {
         console.error("Error handling FreeCiv packet (PID " + message.pid + "):", handlerError);
         console.error("Problematic packet:", message);
@@ -389,8 +428,9 @@ function handle_spectator_freeciv_message(message) {
 
     default:
       // Try to route to existing packet handlers
-      if (typeof packet_handlers !== 'undefined' && packet_handlers[message.pid]) {
-        packet_handlers[message.pid](message);
+      // CRITICAL FIX: Use packet_hand_table (not packet_handlers) - the actual handler table name
+      if (typeof packet_hand_table !== 'undefined' && packet_hand_table[message.pid]) {
+        packet_hand_table[message.pid](message);
       }
       break;
   }
@@ -405,33 +445,8 @@ function handle_llm_spectator_message(message) {
       console.log("✅ Successfully joined LLM game as spectator");
       update_connection_status("Observing LLM Game", "green");
 
-      // SPECTATOR FIX: Mark connection as established so packet handlers work correctly
-      if (client && client.conn) {
-        client.conn.established = true;
-        console.log("[SPECTATOR] Connection marked as established");
-      }
-
-      // SPECTATOR FIX: The Gateway sends cached packets automatically after spectator_joined
-      // These packets include PACKET_START_PHASE which should trigger renderer_init()
-      // If renderer doesn't initialize within 2 seconds, force initialization
-      console.log("[SPECTATOR] Cached packets will arrive shortly, waiting for PACKET_START_PHASE...");
-
-      setTimeout(function() {
-        // Check if renderer was initialized by PACKET_START_PHASE
-        if (typeof scene === 'undefined' || scene === null) {
-          console.warn("[SPECTATOR] Renderer not initialized after 2s, forcing initialization...");
-          console.log("[SPECTATOR] Current client_state:", typeof client_state === 'function' ? client_state() : 'undefined');
-
-          // Force renderer initialization
-          if (typeof renderer_init === 'function') {
-            renderer_init();
-          } else {
-            console.error("[SPECTATOR] renderer_init() not available!");
-          }
-        } else {
-          console.log("[SPECTATOR] ✅ Renderer already initialized by packet handler");
-        }
-      }, 2000);
+      // Note: Renderer initialization now happens in initialize_spectator_map_display()
+      // which is called from the WebSocket onopen handler (common path for all games)
       break;
 
     case 'state_response':
@@ -669,13 +684,46 @@ function show_spectator_message(message) {
 function initialize_spectator_map_display() {
   console.log("Initializing spectator map display...");
 
-  // Replace the placeholder with actual map canvas
-  $("#tabs-map").html('<jsp:include page="canvas.jsp" flush="false"/>');
+  // SPECTATOR FIX: canvas.jsp is already included in spectator.jsp via server-side JSP include
+  // DO NOT replace the content with a JSP tag string - that destroys the rendered DOM elements!
+  // The mapcanvas element already exists from the server-rendered canvas.jsp content.
 
   // Show the map canvas
   $("#mapcanvas").show();
 
-  // Initialize map rendering if functions are available
+  // SPECTATOR FIX: Mark connection as established for packet handlers
+  if (client && client.conn) {
+    client.conn.established = true;
+    console.log("[SPECTATOR] Connection marked as established");
+  }
+
+  // SPECTATOR FIX: Wait for cached packets, then initialize renderer
+  // The timeout gives cached packets time to arrive and populate game data
+  setTimeout(function() {
+    console.log("[SPECTATOR] Initializing renderer after packet delay...");
+
+    // Set client state to RUNNING - this triggers renderer_init() automatically
+    if (typeof set_client_state === 'function' && typeof C_S_RUNNING !== 'undefined') {
+      set_client_state(C_S_RUNNING);
+      console.log("[SPECTATOR] Client state set to C_S_RUNNING");
+    }
+
+    // Defensive check - verify renderer initialized successfully
+    setTimeout(function() {
+      if (typeof scene === 'undefined' || scene === null) {
+        console.error("[SPECTATOR] ❌ Renderer failed to initialize!");
+        console.error("[SPECTATOR] Debugging info:");
+        console.error("  - client_state:", typeof client_state === 'function' ? client_state() : 'undefined');
+        console.error("  - server_settings:", server_settings);
+        console.error("  - map:", typeof map !== 'undefined' ? map : 'undefined');
+        console.error("  - mapcanvas exists:", document.getElementById('mapcanvas') !== null);
+      } else {
+        console.log("[SPECTATOR] ✅ Renderer successfully initialized, scene exists");
+      }
+    }, 1000);
+  }, 500);
+
+  // Initialize map rendering if functions are available (legacy support)
   if (typeof init_mapcanvas_2d === 'function') {
     try {
       init_mapcanvas_2d();
