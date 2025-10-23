@@ -446,7 +446,9 @@ function handle_player_info(packet)
 
   players[packet['playerno']] = $.extend(players[packet['playerno']], packet);
 
-  if (C_S_PREPARING == client_state()) {
+  // SPECTATOR FIX: Don't call pregame UI updates in spectator mode
+  // Spectator doesn't have pregame UI elements, would cause contextMenu errors
+  if (C_S_PREPARING == client_state() && !window.isSpectator && !window.observing) {
     update_player_info_pregame();
   }
 }

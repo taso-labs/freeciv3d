@@ -343,26 +343,37 @@ class AgentWebSocketHandler:
                     # CRITICAL: Use original_msg_data (from proxy) NOT transformed proxy_message
                     # Spectators need raw FreeCiv protocol packets, not agent-formatted messages
                     # Use create_task() for fire-and-forget - zero latency impact on agent
-                    if self.game_id and self.player_id is not None and isinstance(original_msg_data, dict):
+                    if self.game_id and self.player_id is not None:
                         try:
-                            # Only forward FreeCiv protocol packets (have 'pid' field) or important game messages
-                            msg_type = original_msg_data.get("type")
-                            has_pid = "pid" in original_msg_data
+                            # SPECTATOR FIX: Handle both single packets (dict) and batches (list)
+                            # FreeCiv proxy sends large batches like [{"pid":15},{"pid":15},...] for tile data
+                            # These batches were being skipped because isinstance(list, dict) == False
+                            packets_to_forward = []
 
-                            # Forward FreeCiv packets or game state messages
-                            # SPECTATOR FIX: Include state_response to broadcast full game state (map, tiles, units)
-                            if has_pid or msg_type in ["game_ready", "turn_done", "end_turn", "state_response"]:
-                                # Broadcast asynchronously (don't await - fire and forget)
-                                # Uses spectator_broadcaster imported at module level (line 22/29)
+                            if isinstance(original_msg_data, list):
+                                # Batch of packets - forward each one
+                                packets_to_forward = original_msg_data
+                                logger.info(f"📡 Broadcasting {len(packets_to_forward)} packets to spectators of game {self.game_id}")
+                            elif isinstance(original_msg_data, dict):
+                                # Single packet or message
+                                msg_type = original_msg_data.get("type")
+                                has_pid = "pid" in original_msg_data
+
+                                # Only forward FreeCiv protocol packets or important game messages
+                                if has_pid or msg_type in ["game_ready", "turn_done", "end_turn", "state_response"]:
+                                    packets_to_forward = [original_msg_data]
+                                    if has_pid:
+                                        logger.info(f"📡 Broadcast packet PID {original_msg_data.get('pid')} to spectators of game {self.game_id}")
+
+                            # Forward all collected packets
+                            for packet in packets_to_forward:
                                 asyncio.create_task(
                                     spectator_broadcaster.forward_packet(
                                         self.game_id,
-                                        original_msg_data,  # Use ORIGINAL, not transformed
+                                        packet,
                                         self.player_id
                                     )
                                 )
-                                if has_pid:
-                                    logger.debug(f"📡 Broadcast packet PID {original_msg_data.get('pid')} to spectators of game {self.game_id}")
                         except Exception as e:
                             # Don't let spectator broadcast errors affect agent
                             logger.debug(f"Spectator broadcast error (non-critical): {e}")

@@ -60,7 +60,11 @@ class SpectatorConnection:
 class PacketCache:
     """Cached packets for mid-game spectator joins"""
 
-    def __init__(self, maxlen: int = 1000):
+    def __init__(self, maxlen: int = 10000):
+        # SPECTATOR FIX: Increased cache from 1000 to 10000 packets
+        # Map generation sends ~4096 PACKET_TILE_INFO (one per tile on 64x64 map)
+        # Plus RULESET, UNIT_INFO, CITY_INFO, PLAYER_INFO, etc.
+        # Need larger cache to retain tile data for late-joining spectators
         self.packets_p1 = deque(maxlen=maxlen)  # Player 1's packets
         self.packets_p2 = deque(maxlen=maxlen)  # Player 2's packets
         self.maxlen = maxlen

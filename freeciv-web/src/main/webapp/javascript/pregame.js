@@ -115,6 +115,13 @@ function update_game_info_pregame()
 ****************************************************************************/
 function update_player_info_pregame()
 {
+  // SPECTATOR FIX: Skip pregame UI updates in spectator mode
+  // Spectator doesn't have pregame lobby UI elements (#pregame_player_list, etc.)
+  // Prevents contextMenu errors when PACKET_PLAYER_INFO arrives before client state is set
+  if (window.isSpectator || window.observing) {
+    return;
+  }
+
   var id;
   if (C_S_PREPARING == client_state()) {
     var player_html = "";
