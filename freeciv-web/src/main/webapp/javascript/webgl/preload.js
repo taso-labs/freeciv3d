@@ -224,24 +224,8 @@ function webgl_preload_models()
   for (var i = 0; i < model_filenames_initial.length; i++) {
     load_model(model_filenames_initial[i]);
   }
-
-  // Initialize network connection early - don't wait for all models to load
-  // Use a short delay to allow a few critical models to load first
-  setTimeout(function() {
-    // SPECTATOR FIX: Don't initialize network for spectator mode
-    // Spectators connect via WebSocket broadcast, not direct game connection
-    if (window.isSpectator === true) {
-      console.log("[INIT] Spectator mode detected - skipping network_init()");
-      $.unblockUI();
-      return;
-    }
-
-    if (typeof network_init === 'function') {
-      console.log("[INIT] Initializing network connection (early start, models loading in background)");
-      $.unblockUI();
-      network_init();
-    }
-  }, 2000); // 2 second delay to let some initial models load
+  // NOTE: network_init() is called from webgl_preload_complete() after all models load
+  // This ensures the renderer is fully initialized before packets arrive
 }
 
 /****************************************************************************

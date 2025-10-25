@@ -55,20 +55,33 @@ function init_webgl_renderer()
 ****************************************************************************/
 function webgl_preload_complete()
 {
-  // Network init is now called earlier in preload.js
-  // This function just ensures UI is unblocked when all models finish loading
   console.log("All 3D models loaded");
   $.unblockUI();
 
-  // SPECTATOR FIX: If this is spectator mode, trigger connection now that models are ready
-  // This ensures packets don't arrive and trigger rendering before 3D models finish loading
+  // SPECTATOR FIX: Spectator mode connects separately via spectator_models_ready()
+  // Regular game mode: Initialize network connection now that renderer is ready
   if (typeof window.isSpectator !== 'undefined' && window.isSpectator === true) {
     console.log("[SPECTATOR] Models ready, triggering WebSocket connection");
     if (typeof spectator_models_ready === 'function') {
-      spectator_models_ready();
+      try {
+        spectator_models_ready();
+      } catch (error) {
+        console.error("[SPECTATOR] Error in spectator_models_ready():", error);
+        // Fallback to regular network_init() if spectator fails
+        console.log("[SPECTATOR] Falling back to regular network_init()");
+        network_init();
+      }
     } else {
       console.error("[SPECTATOR] spectator_models_ready() function not found!");
+      // Fallback to regular network_init()
+      console.log("[SPECTATOR] Falling back to regular network_init()");
+      network_init();
     }
+  } else {
+    // Regular game mode: Initialize network after all models load
+    // This ensures renderer is fully ready before PACKET_TILE_INFO arrives
+    console.log("[INIT] Models loaded, initializing network connection");
+    network_init();
   }
 }
 

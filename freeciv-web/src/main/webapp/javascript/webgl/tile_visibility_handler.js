@@ -25,13 +25,20 @@ var map_geometry_dirty = true;
 **************************************************************************/
 function webgl_update_tile_known(old_tile, new_tile)
 {
-  if (new_tile == null || old_tile == null || landGeometry == null) return;
+  if (new_tile == null || old_tile == null) {
+    return;
+  }
 
+  // Even if landGeometry doesn't exist yet, we need to track changes
+  // so that when it IS created, we can update with the correct data
   if (new_tile['height'] != old_tile['height']) {
     map_geometry_dirty = true;
   }
 
-  if (tile_get_known(new_tile) != tile_get_known(old_tile)) {
+  var old_known = tile_get_known(old_tile);
+  var new_known = tile_get_known(new_tile);
+
+  if (new_known != old_known) {
     map_known_dirty = true;
   }
 
@@ -44,6 +51,10 @@ function webgl_update_tile_known(old_tile, new_tile)
 **************************************************************************/
 function update_tiles_known_vertex_colors()
 {
+  if (landGeometry == null) {
+    return;
+  }
+
   const colors = [];
 
   for ( let iy = 0; iy < gridY1; iy ++ ) {
@@ -60,11 +71,15 @@ function update_tiles_known_vertex_colors()
     }
   }
 
-  landGeometry.setAttribute( 'vertColor', new THREE.Float32BufferAttribute( colors, 3) );
-
-  landGeometry.colorsNeedUpdate = true;
-  //console.log("updated vertex colours (tiles known, irrigation).");
-
+  // Reuse existing attribute to avoid GPU memory leaks
+  const existingAttribute = landGeometry.getAttribute('vertColor');
+  if (existingAttribute && existingAttribute.array.length === colors.length) {
+    existingAttribute.array.set(colors);
+    existingAttribute.needsUpdate = true;
+  } else {
+    const vertColorAttribute = new THREE.Float32BufferAttribute(colors, 3);
+    landGeometry.setAttribute('vertColor', vertColorAttribute);
+  }
 }
 
 

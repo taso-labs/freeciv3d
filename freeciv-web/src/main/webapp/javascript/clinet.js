@@ -106,7 +106,8 @@ function websocket_init()
 
   ws.onmessage = function (event) {
      if (typeof client_handle_packet !== 'undefined') {
-       client_handle_packet(JSON.parse(event.data));
+       var parsed_data = JSON.parse(event.data);
+       client_handle_packet(parsed_data);
      } else {
        console.error("Error, freeciv-web not compiled correctly. Please "
              + "run sync.sh in freeciv-proxy correctly.");

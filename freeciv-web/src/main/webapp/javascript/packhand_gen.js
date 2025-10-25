@@ -128,19 +128,19 @@ var packet_hand_table = {
   259:      handle_web_player_info_addition,
   260:      handle_web_ruleset_unit_addition,
   288:      handle_web_goto_path,
-  290:      handle_web_info_text_message, 
+  290:      handle_web_info_text_message,
 };
 
 function client_handle_packet(p)
 {
  if (p == null) return;
+
   for (var i = 0; i < p.length; i++) {
     if (p[i] == null) continue;
     var packet_type = p[i]['pid'];
-
     packet_hand_table[packet_type](p[i]);
   }
- 
+
   if (p.length > 0) {
     if (debug_active) clinet_debug_collect();
   }
