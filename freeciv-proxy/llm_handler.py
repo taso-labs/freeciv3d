@@ -83,6 +83,13 @@ class LLMWSHandler(websocket.WebSocketHandler):
     WebSocket handler for LLM agents
     Bypasses browser authentication and provides optimized game state access
 
+    This is the PRODUCTION WebSocket handler for LLM agents.
+    Endpoint: /llmsocket/8002
+    Architecture: game_arena → llm-gateway (port 8003) → LLMWSHandler → GameSession
+
+    Player ID assignment uses GameSession.allocate_ai_slot() for sequential, thread-safe
+    allocation (see game_session_manager.py). This integrates with civserver via /take commands.
+
     NOTE: WebSocket max message size is configured at the Application level in freeciv-proxy.py
     (websocket_max_message_size=50MB) to handle large FreeCiv game state packets.
     """
