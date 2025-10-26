@@ -55,49 +55,21 @@ function init_webgl_renderer()
 ****************************************************************************/
 function webgl_preload_complete()
 {
-  console.log("All 3D models loaded");
   $.unblockUI();
 
-  // SPECTATOR FIX: Spectator mode connects separately via spectator_models_ready()
-  // Regular game mode: Initialize network connection now that renderer is ready
-  if (typeof window.isSpectator !== 'undefined' && window.isSpectator === true) {
-    console.log("[SPECTATOR] Models ready, triggering WebSocket connection");
-    if (typeof spectator_models_ready === 'function') {
-      try {
-        spectator_models_ready();
-      } catch (error) {
-        console.error("[SPECTATOR] Error in spectator_models_ready():", error);
-        // Fallback to regular network_init() if spectator fails
-        console.log("[SPECTATOR] Falling back to regular network_init()");
-        network_init();
-      }
-    } else {
-      console.error("[SPECTATOR] spectator_models_ready() function not found!");
-      // Fallback to regular network_init()
-      console.log("[SPECTATOR] Falling back to regular network_init()");
-      network_init();
-    }
-  } else {
-    // Regular game mode: Initialize network after all models load
-    // This ensures renderer is fully ready before PACKET_TILE_INFO arrives
-    console.log("[INIT] Models loaded, initializing network connection");
-    network_init();
-  }
+  network_init();
 }
 
 /****************************************************************************
  Init the map renderer
  ****************************************************************************/
 function renderer_init() {
-  console.log("[INIT] renderer_init() called, client_state:", client_state());
   if (!Detector.webgl) {
-    console.error("[INIT] WebGL not supported!");
     swal("3D WebGL not supported by your browser or you don't have a 3D graphics card. ");
     return;
   }
 
   if (C_S_RUNNING === client_state() || C_S_OVER === client_state()) {
-    console.log("[INIT] Client state is RUNNING, initializing renderer");
     webgl_start_renderer();
     init_webgl_mapview();
     init_webgl_mapctrl();
@@ -106,9 +78,5 @@ function renderer_init() {
    keyboard_input=true;
     $.unblockUI();
     setTimeout("$('#mapcanvas').fadeIn(2500);", 300);
-    console.log("[INIT] Renderer initialization complete");
-  } else {
-    console.warn("[INIT] Client state is not RUNNING, skipping renderer init. State:", client_state());
   }
 }
-

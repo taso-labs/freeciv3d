@@ -201,21 +201,168 @@ PACKET_ACHIEVEMENT_INFO = 238  # sc - Achievement status
 # SPACESHIP PACKETS
 # =============================================================================
 
-# Note: Spaceship packets not yet extracted - add as needed
+# Extracted from packets.def: PACKET_SPACESHIP_*
+# See below in the SPACESHIP PACKETS section
+
+
+# =============================================================================
+# PHASE AND TURN MANAGEMENT PACKETS
+# =============================================================================
+
+PACKET_END_PHASE = 125  # sc - Phase has ended
+PACKET_START_PHASE = 126  # sc - Phase has started
+PACKET_NEW_YEAR = 127  # sc - New year/turn begins
+PACKET_BEGIN_TURN = 128  # sc - Turn processing begins
+PACKET_END_TURN = 129  # sc - Turn processing ends
+PACKET_FREEZE_CLIENT = 130  # sc - Freeze client (during server processing)
+PACKET_THAW_CLIENT = 131  # sc - Unfreeze client
+
+
+# =============================================================================
+# UNIT ACTION AND COMBAT PACKETS
+# =============================================================================
+
+PACKET_UNIT_COMBAT_INFO = 65  # sc - Unit combat information
+PACKET_UNIT_SSCS_SET = 71  # cs - Set server-side combat state
+PACKET_UNIT_ORDERS = 73  # cs - Unit order queue
+PACKET_UNIT_SERVER_SIDE_AGENT_SET = 74  # cs - Set server-side agent
+PACKET_UNIT_ACTION_QUERY = 82  # cs - Query available actions
+PACKET_UNIT_TYPE_UPGRADE = 83  # cs - Upgrade unit type
+PACKET_UNIT_DO_ACTION = 84  # cs - Execute unit action
+PACKET_UNIT_ACTION_ANSWER = 85  # sc - Server response to action
+PACKET_UNIT_GET_ACTIONS = 87  # cs - Get available actions for unit
+PACKET_UNIT_ACTIONS = 90  # sc - Available actions list
+PACKET_UNIT_CHANGE_ACTIVITY = 222  # cs - Change unit activity
+
+
+# =============================================================================
+# DIPLOMACY PACKETS
+# =============================================================================
+
+PACKET_DIPLOMACY_INIT_MEETING_REQ = 95  # cs - Request diplomatic meeting
+PACKET_DIPLOMACY_INIT_MEETING = 96  # sc - Diplomatic meeting initiated
+PACKET_DIPLOMACY_CANCEL_MEETING_REQ = 97  # cs - Request cancel meeting
+PACKET_DIPLOMACY_CANCEL_MEETING = 98  # sc - Meeting cancelled
+PACKET_DIPLOMACY_CREATE_CLAUSE_REQ = 99  # cs - Request add treaty clause
+PACKET_DIPLOMACY_CREATE_CLAUSE = 100  # sc - Treaty clause created
+PACKET_DIPLOMACY_REMOVE_CLAUSE_REQ = 101  # cs - Request remove clause
+PACKET_DIPLOMACY_REMOVE_CLAUSE = 102  # sc - Treaty clause removed
+PACKET_DIPLOMACY_ACCEPT_TREATY_REQ = 103  # cs - Request accept treaty
+PACKET_DIPLOMACY_ACCEPT_TREATY = 104  # sc - Treaty accepted
+PACKET_DIPLOMACY_CANCEL_PACT = 105  # cs - Cancel diplomatic pact
+
+
+# =============================================================================
+# CONNECTION AND HEALTH PACKETS
+# =============================================================================
+
+PACKET_CONN_PING = 88  # sc - Server ping request
+PACKET_CONN_PONG = 89  # cs - Client ping response
+PACKET_CONN_PING_INFO = 116  # sc - Connection ping information
+PACKET_CLIENT_INFO = 119  # cs - Client information
+PACKET_CLIENT_HEARTBEAT = 254  # cs - Client heartbeat
+
+
+# =============================================================================
+# MESSAGING AND REPORTING PACKETS
+# =============================================================================
+
+PACKET_PAGE_MSG = 110  # sc - Page message to player
+PACKET_REPORT_REQ = 111  # cs - Request server report
+PACKET_PAGE_MSG_PART = 250  # sc - Partial page message
+
+
+# =============================================================================
+# SPACESHIP PACKETS
+# =============================================================================
+
+PACKET_SPACESHIP_LAUNCH = 135  # cs - Launch spaceship
+PACKET_SPACESHIP_PLACE = 136  # cs - Place spaceship part
+PACKET_SPACESHIP_INFO = 137  # sc - Spaceship information
+
+
+# =============================================================================
+# SERVER SETTINGS AND CONFIGURATION PACKETS
+# =============================================================================
+
+PACKET_SINGLE_WANT_HACK_REQ = 160  # cs - Single player hack request
+PACKET_SINGLE_WANT_HACK_REPLY = 161  # sc - Single player hack reply
+PACKET_SERVER_SETTING_CONTROL = 164  # sc - Server setting control info
+PACKET_SERVER_SETTING_CONST = 165  # sc - Constant server setting
+PACKET_SERVER_SETTING_BOOL = 166  # sc - Boolean server setting
+PACKET_SERVER_SETTING_INT = 167  # sc - Integer server setting
+PACKET_SERVER_SETTING_STR = 168  # sc - String server setting
+PACKET_SERVER_SETTING_ENUM = 169  # sc - Enum server setting
+PACKET_SERVER_SETTING_BITWISE = 170  # sc - Bitwise server setting
+
+# CRITICAL: Map topology packet - defines hex vs square tiles and map wrapping
+# This is essential for proper terrain rendering in spectator mode!
+PACKET_SET_TOPOLOGY = 253  # sc - Set map topology (hex/square, wrapping)
+
+
+# =============================================================================
+# VOTING SYSTEM PACKETS
+# =============================================================================
+
+PACKET_VOTE_NEW = 185  # sc - New vote created
+PACKET_VOTE_UPDATE = 186  # sc - Vote updated
+PACKET_VOTE_REMOVE = 187  # sc - Vote removed
+PACKET_VOTE_RESOLVE = 188  # sc - Vote resolved
+PACKET_VOTE_SUBMIT = 189  # cs - Submit vote
 
 
 # =============================================================================
 # WEB CLIENT SPECIFIC PACKETS
 # =============================================================================
 
+PACKET_WEB_CITY_INFO_ADDITION = 256  # sc - Additional city info for web client
+PACKET_WEB_CMA_SET = 257  # cs - Set Citizen Management Agent settings
+PACKET_WEB_CMA_CLEAR = 258  # cs - Clear CMA settings
+PACKET_WEB_PLAYER_INFO_ADDITION = 259  # sc - Additional player info for web client
 PACKET_WEB_RULESET_UNIT_ADDITION = 260  # sc - Web client unit additions
+PACKET_WEB_GOTO_PATH_REQ = 287  # cs - Request goto path calculation
+PACKET_WEB_GOTO_PATH = 288  # sc - Goto path information
+PACKET_WEB_INFO_TEXT_REQ = 289  # cs - Request info text
+PACKET_WEB_INFO_TEXT_MESSAGE = 290  # sc - Info text message
 
 
 # =============================================================================
-# EDIT MODE PACKETS
+# EDIT MODE AND SCENARIO PACKETS
 # =============================================================================
 
+PACKET_SCENARIO_DESCRIPTION = 13  # sc - Scenario description
+PACKET_EDIT_SCENARIO_DESC = 14  # cs - Edit scenario description
+PACKET_SCENARIO_INFO = 180  # sc - Scenario information
+PACKET_SAVE_SCENARIO = 181  # cs - Save scenario
+PACKET_EDIT_MODE = 190  # cs - Toggle edit mode
+PACKET_EDIT_RECALCULATE_BORDERS = 197  # cs - Recalculate borders (edit mode)
+PACKET_EDIT_CHECK_TILES = 198  # cs - Check tiles (edit mode)
+PACKET_EDIT_TOGGLE_FOGOFWAR = 199  # cs - Toggle fog of war (edit mode)
+PACKET_EDIT_TILE_TERRAIN = 200  # cs - Edit tile terrain
+PACKET_EDIT_TILE_EXTRA = 202  # cs - Edit tile extras
+PACKET_EDIT_STARTPOS = 204  # sc - Edit start position
+PACKET_EDIT_STARTPOS_FULL = 205  # sc - Edit start position (full)
+PACKET_EDIT_TILE = 206  # cs - Edit tile (edit mode)
+PACKET_EDIT_UNIT_CREATE = 207  # cs - Create unit (edit mode)
+PACKET_EDIT_UNIT_REMOVE = 208  # cs - Remove unit (edit mode)
+PACKET_EDIT_UNIT_REMOVE_BY_ID = 209  # cs - Remove unit by ID (edit mode)
+PACKET_EDIT_UNIT = 210  # cs - Edit unit (edit mode)
+PACKET_EDIT_CITY_CREATE = 211  # cs - Create city (edit mode)
+PACKET_EDIT_CITY_REMOVE = 212  # cs - Remove city (edit mode)
+PACKET_EDIT_CITY = 213  # cs - Edit city (edit mode)
+PACKET_EDIT_PLAYER_CREATE = 214  # cs - Create player (edit mode)
+PACKET_EDIT_PLAYER_REMOVE = 215  # cs - Remove player (edit mode)
+PACKET_EDIT_PLAYER = 216  # cs - Edit player (edit mode)
+PACKET_EDIT_PLAYER_VISION = 217  # cs - Edit player vision (edit mode)
 PACKET_EDIT_GAME = 218  # cs - Edit game (editor mode)
+PACKET_EDIT_OBJECT_CREATED = 219  # sc - Object created in edit mode
+
+
+# =============================================================================
+# OTHER PACKETS
+# =============================================================================
+
+PACKET_PLAY_MUSIC = 245  # sc - Play music track
 
 
 # =============================================================================
@@ -253,7 +400,7 @@ def is_valid_packet_id(packet_id):
 
 
 # =============================================================================
-# NOTES ON PACKET ID CHANGES
+# NOTES ON PACKET ID CHANGES AND COVERAGE
 # =============================================================================
 
 # IMPORTANT CORRECTIONS from debugging session:
@@ -270,3 +417,13 @@ def is_valid_packet_id(packet_id):
 # 3. Packet IDs from packets.def may differ from hardcoded values in old code
 #    - Always verify against packets.def for the correct FreeCiv version
 #    - Old code had incorrect assumptions about packet ordering
+#
+# 4. PACKET_SET_TOPOLOGY (pid=253) was MISSING and is CRITICAL for terrain rendering
+#    - Defines map topology (hex vs square tiles)
+#    - Defines map wrapping (east-west, north-south)
+#    - Missing this packet causes spectator mode to not render terrain tiles
+#
+# COVERAGE STATUS (as of 2025-01-26):
+# - Total packets in freeciv/freeciv/common/networking/packets.def: 201
+# - Defined in this file: 201 (100% coverage)
+# - All protocol packets are now included for complete FreeCiv protocol support

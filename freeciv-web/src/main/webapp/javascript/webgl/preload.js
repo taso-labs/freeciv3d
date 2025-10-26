@@ -34,7 +34,6 @@ var loader;
 ****************************************************************************/
 function webgl_preload()
 {
-  console.log("[INIT] webgl_preload() started");
   $.blockUI({ message: "<h2>Downloading 3D models <span id='download_progress'></span></h2>" });
 
   loader = new GLTFLoader();
@@ -45,12 +44,10 @@ function webgl_preload()
 
   var loadingManager = new THREE.LoadingManager();
   loadingManager.onLoad = function () {
-    console.log("[INIT] All textures loaded, calling webgl_preload_models()");
     webgl_preload_models();
   };
 
   var textureLoader = new THREE.ImageLoader( loadingManager );
-  console.log("[INIT] Loading textures...");
 
   var disorder_sprite = new THREE.Texture();
   webgl_textures["city_disorder"] = disorder_sprite;
@@ -219,13 +216,10 @@ function handle_new_texture(url, terrain_name)
 ****************************************************************************/
 function webgl_preload_models()
 {
-  console.log("[INIT] webgl_preload_models() started, loading " + model_filenames_initial.length + " 3D models");
   total_model_count = model_filenames_initial.length;
   for (var i = 0; i < model_filenames_initial.length; i++) {
     load_model(model_filenames_initial[i]);
   }
-  // NOTE: network_init() is called from webgl_preload_complete() after all models load
-  // This ensures the renderer is fully initialized before packets arrive
 }
 
 /****************************************************************************
