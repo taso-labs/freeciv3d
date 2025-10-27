@@ -576,19 +576,33 @@ class CivCom(Thread):
                     # Convert integer type ID to human-readable string name
                     unit_type_name = get_unit_type_name(unit_type_raw)
 
+                    def get_coords_from_tile_index(tile_idx):
+                        # tile['index'] = x + y * map['xsize'];
+                        # tile['x'] = x;
+                        # tile['y'] = y;
+                        xsize = self.map_info.get('width', 1)
+                        x = tile_idx % xsize
+                        y = tile_idx // xsize
+                        return x, y
+
+                    tile_idx = packet.get("tile")
+                    x, y = get_coords_from_tile_index(tile_idx)
+
                     unit_data = {
                         'id': unit_id,
                         'owner': owner,
                         'type': unit_type_name,  # String name (e.g., 'warriors', 'settlers')
                         'type_id': unit_type_raw,  # Preserve original integer for debugging/reference
-                        'tile': packet.get('tile'),
+                        'tile': tile_idx,
                         'homecity': packet.get('homecity', 0),
                         'moves_left': packet.get('moves_left', 0),
                         'hp': packet.get('hp', 0),
                         'veteran': packet.get('veteran', 0),
                         'transported': packet.get('transported', False),
                         'done_moving': packet.get('done_moving', False),
-                        'activity': packet.get('activity', 'idle')
+                        'activity': packet.get('activity', 'idle'),
+                        'x': x,
+                        'y': y
                     }
 
                     # Convert player_units to dict if it's still a list
