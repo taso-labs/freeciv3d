@@ -7,7 +7,7 @@ Provides comprehensive validation for all LLM Gateway inputs
 """
 
 from typing import Dict, Any, List, Optional, Union
-from pydantic import BaseModel, Field, validator, constr, conint, root_validator
+from pydantic import BaseModel, Field, validator, constr, conint, model_validator
 import re
 import time
 
@@ -20,7 +20,7 @@ except ImportError:
 
 class AgentIdValidator(BaseModel):
     """Validates agent IDs"""
-    agent_id: constr(min_length=1, max_length=64, regex=r'^[a-zA-Z0-9\-_]+$') = Field(
+    agent_id: constr(min_length=1, max_length=64, pattern=r'^[a-zA-Z0-9\-_]+$') = Field(
         ...,
         description="Agent identifier (alphanumeric, hyphens, underscores only)"
     )
@@ -28,7 +28,7 @@ class AgentIdValidator(BaseModel):
 
 class GameIdValidator(BaseModel):
     """Validates game IDs"""
-    game_id: constr(min_length=1, max_length=64, regex=r'^[a-zA-Z0-9\-_]+$') = Field(
+    game_id: constr(min_length=1, max_length=64, pattern=r'^[a-zA-Z0-9\-_]+$') = Field(
         ...,
         description="Game identifier (alphanumeric, hyphens, underscores only)"
     )
@@ -60,15 +60,15 @@ class CoordinateValidator(BaseModel):
     y: int = Field(..., ge=0, description="Y coordinate")
     map_size: Optional[str] = Field(None, description="Map size (tiny/small/medium/large/huge)")
 
-    @root_validator
-    def validate_coordinates_against_map_size(cls, values):
+    @model_validator(mode='after')
+    def validate_coordinates_against_map_size(self):
         """Validate coordinates are within map bounds"""
-        x = values.get('x')
-        y = values.get('y')
-        map_size = values.get('map_size')
+        x = self.x
+        y = self.y
+        map_size = self.map_size
 
         if x is None or y is None:
-            return values
+            return self
 
         # Determine max bounds based on map size
         if map_size and map_size.lower() in MAP_SIZE_DIMENSIONS:
@@ -85,14 +85,14 @@ class CoordinateValidator(BaseModel):
             if y > DEFAULT_MAX_COORDINATE:
                 raise ValueError(f'Y coordinate {y} exceeds maximum {DEFAULT_MAX_COORDINATE}')
 
-        return values
+        return self
 
 
 class LLMConnectData(BaseModel):
     """Validation for LLM_CONNECT message data"""
     api_token: str = Field(..., min_length=16, max_length=256)
     model: constr(min_length=1, max_length=50) = Field(..., description="LLM model name")
-    game_id: constr(min_length=1, max_length=64, regex=r'^[a-zA-Z0-9\-_]+$') = Field(
+    game_id: constr(min_length=1, max_length=64, pattern=r'^[a-zA-Z0-9\-_]+$') = Field(
         ..., description="Game identifier"
     )
     capabilities: Optional[List[str]] = Field(
@@ -130,7 +130,7 @@ class LLMConnectData(BaseModel):
 
 class StateQueryData(BaseModel):
     """Validation for STATE_QUERY message data"""
-    format: str = Field("llm_optimized", regex=r'^(full|delta|llm_optimized)$')
+    format: str = Field("llm_optimized", pattern=r'^(full|delta|llm_optimized)$')
     include_legal_actions: bool = Field(True, description="Include legal actions in response")
     since_turn: Optional[conint(ge=0)] = Field(None, description="Get changes since turn number")
     player_perspective: Optional[conint(ge=1, le=8)] = Field(
@@ -147,7 +147,7 @@ class StateQueryData(BaseModel):
 
 class ActionData(BaseModel):
     """Validation for ACTION message data"""
-    action_type: str = Field(..., regex=r'^[a-z_]+$')
+    action_type: str = Field(..., pattern=r'^[a-z_]+$')
     actor_id: Optional[conint(ge=0)] = Field(None, description="ID of acting unit/city")
     target: Optional[Union[CoordinateValidator, int, str]] = Field(
         None, description="Action target (coordinates, ID, or name)"
@@ -186,8 +186,8 @@ class ActionData(BaseModel):
 
 class LLMMessage(BaseModel):
     """Complete LLM message validation"""
-    type: str = Field(..., regex=r'^[a-z_]+$')
-    agent_id: constr(min_length=1, max_length=64, regex=r'^[a-zA-Z0-9\-_]+$')
+    type: str = Field(..., pattern=r'^[a-z_]+$')
+    agent_id: constr(min_length=1, max_length=64, pattern=r'^[a-zA-Z0-9\-_]+$')
     timestamp: float = Field(..., ge=0)
     data: Dict[str, Any] = Field(..., description="Message payload")
     correlation_id: Optional[constr(max_length=128)] = Field(None)
@@ -228,9 +228,9 @@ class LLMMessage(BaseModel):
 
 class GameCreationRequest(BaseModel):
     """Validation for game creation requests"""
-    ruleset: str = Field("classic", regex=r'^[a-zA-Z0-9_]+$')
-    map_size: str = Field("small", regex=r'^(tiny|small|medium|large|huge)$')
-    difficulty: str = Field("normal", regex=r'^(easy|normal|hard|expert)$')
+    ruleset: str = Field("classic", pattern=r'^[a-zA-Z0-9_]+$')
+    map_size: str = Field("small", pattern=r'^(tiny|small|medium|large|huge)$')
+    difficulty: str = Field("normal", pattern=r'^(easy|normal|hard|expert)$')
     max_players: conint(ge=2, le=8) = Field(4, description="Maximum number of players")
     time_limit: Optional[conint(ge=30, le=3600)] = Field(
         300, description="Turn time limit in seconds"
@@ -248,7 +248,7 @@ class GameCreationRequest(BaseModel):
 
 class FreeCivActionRequest(BaseModel):
     """Validation for FreeCiv action requests"""
-    action_type: str = Field(..., regex=r'^[a-z_]+$')
+    action_type: str = Field(..., pattern=r'^[a-z_]+$')
     player_id: conint(ge=1, le=8) = Field(..., description="Player ID")
     actor_id: Optional[conint(ge=0)] = Field(None, description="Acting unit/city ID")
     target: Optional[Union[Dict[str, int], int, str]] = Field(None)
