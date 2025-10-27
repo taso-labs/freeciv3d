@@ -58,6 +58,9 @@ function set_client_state(newstate)
       if (observing || $.getUrlVar('action') == "multi" || game_loaded) {
         center_on_any_city();
         advance_unit_focus();
+        if (observing) {
+          center_tile_mapcanvas(map_pos_to_tile(map['xsize'] / 2, map['ysize'] / 2));
+        }
       }
       $("#fciv-intro").remove();
       $("#game_text_input").blur();

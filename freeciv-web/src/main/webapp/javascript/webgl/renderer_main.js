@@ -58,7 +58,6 @@ function webgl_preload_complete()
   $.unblockUI();
 
   network_init();
-
 }
 
 /****************************************************************************
@@ -81,4 +80,3 @@ function renderer_init() {
     setTimeout("$('#mapcanvas').fadeIn(2500);", 300);
   }
 }
-

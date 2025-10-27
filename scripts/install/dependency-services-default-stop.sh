@@ -6,12 +6,7 @@
 # your set up? Create a script that stops them and put it in
 # scripts/dependency-services-stop.sh.
 
-# 1. nginx
-if [ "$(pidof nginx)" ] ; then
-  sudo nginx -s reload
-fi
-
-# 2. Tomcat
+# Tomcat
 if [ "${TOMCATMANAGER}" != "Y" ]; then
   if service --status-all | grep -Fq 'tomcat10'; then
     sudo service tomcat10 stop || echo "unable to stop tomcat10 service"

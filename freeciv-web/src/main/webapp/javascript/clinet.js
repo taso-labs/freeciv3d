@@ -41,17 +41,22 @@ function network_init()
   if ($.getUrlVar('action') == null && $.getUrlVar('civserverport') != null) civclient_request_url += "?";
   if ($.getUrlVar('civserverport') != null) civclient_request_url += "&civserverport=" + $.getUrlVar('civserverport');
 
+  freelog(LOG_DEBUG, "network_init: Making request to " + civclient_request_url);
+
   $.ajax({
    type: 'POST',
    url: civclient_request_url,
    success: function(data, textStatus, request){
        civserverport = request.getResponseHeader('port');
        var connect_result = request.getResponseHeader('result');
+       freelog(LOG_DEBUG, "civclientlauncher response - port: " + civserverport + ", result: " + connect_result);
+
        if (civserverport != null && connect_result == "success") {
          websocket_init();
          load_game_check();
 
        } else {
+         freelog(LOG_ERROR, "civclientlauncher failed - port: " + civserverport + ", result: " + connect_result);
          show_dialog_message("Network error", "Invalid server port. Error: " + connect_result);
        }
    },
@@ -68,29 +73,53 @@ function network_init()
 function websocket_init()
 {
   $.blockUI({ message: "<h2>Please wait while connecting to the server.</h2>" });
-  var proxyport = 1000 + parseFloat(civserverport);
+
+  // Debug logging
+  freelog(LOG_DEBUG, "websocket_init: civserverport = " + civserverport);
+
+  if (!civserverport) {
+    freelog(LOG_ERROR, "ERROR: civserverport is null or undefined!");
+    show_dialog_message("Network error", "Server port was not properly assigned. Please try again.");
+    return;
+  }
+
+  // Calculate proxy port correctly: 6000 -> 7000, 6001 -> 7001, etc.
+  var proxy_port = parseFloat(civserverport) - 6000 + 7000;
   var ws_protocol = ('https:' == window.location.protocol) ? "wss://" : "ws://";
   var port = window.location.port ? (':' + window.location.port) : '';
-  ws = new WebSocket(ws_protocol + window.location.hostname + port + "/civsocket/" + proxyport);
+  // Use internal proxy port for nginx routing (7000+)
+  var ws_url = ws_protocol + window.location.hostname + port + "/civsocket/" + proxy_port;
 
-  ws.onopen = check_websocket_ready;
+  freelog(LOG_DEBUG, "WebSocket URL: " + ws_url);
+  freelog(LOG_DEBUG, "Attempting to connect to WebSocket...");
+
+  ws = new WebSocket(ws_url);
+
+  ws.onopen = function() {
+    freelog(LOG_DEBUG, "WebSocket opened successfully!");
+    check_websocket_ready();
+  };
+
+  ws.onerror = function(error) {
+    freelog(LOG_ERROR, "WebSocket error: " + error);
+  };
 
   ws.onmessage = function (event) {
      if (typeof client_handle_packet !== 'undefined') {
-       client_handle_packet(JSON.parse(event.data));
+       var parsed_data = JSON.parse(event.data);
+       client_handle_packet(parsed_data);
      } else {
-       console.error("Error, freeciv-web not compiled correctly. Please "
-             + "run sync.sh in freeciv-proxy correctly.");
+       freelog(LOG_ERROR, "Error, freeciv-web not compiled correctly. Please run sync.sh in freeciv-proxy correctly.");
      }
   };
 
   ws.onclose = function (event) {
+   freelog(LOG_ERROR, "WebSocket closed - code: " + event.code + ", reason: " + event.reason + ", wasClean: " + event.wasClean);
    swal("Network Error", "Connection to server is closed. Please reload the page to restart. Sorry!", "error");
    message_log.update({
      event: E_LOG_ERROR,
      message: "Error: connection to server is closed. Please reload the page to restart. Sorry!"
    });
-   console.info("WebSocket connection closed, code+reason: " + event.code + ", " + event.reason);
    $("#turn_done_button").button( "option", "disabled", true);
    $("#save_button").button( "option", "disabled", true);
 
@@ -105,8 +134,7 @@ function websocket_init()
   ws.onerror = function (evt) {
    show_dialog_message("Network error", "A problem occured with the "
                        + document.location.protocol + " WebSocket connection to the server: " + ws.url);
-   console.error("WebSocket error: Unable to communicate with server using "
-                 + document.location.protocol + " WebSockets. Error: " + evt);
+   freelog(LOG_ERROR, "WebSocket error: Unable to communicate with server using " + document.location.protocol + " WebSockets. Error: " + evt);
   };
 }
 
@@ -175,8 +203,7 @@ function ping_check()
 {
   var time_since_last_ping = new Date().getTime() - ping_last;
   if (time_since_last_ping > pingtime_check) {
-    console.log("Error: Missing PING message from server, "
-                + "indicates server connection problem.");
+    freelog(LOG_ERROR, "Error: Missing PING message from server, indicates server connection problem.");
   }
 }
 

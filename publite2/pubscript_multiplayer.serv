@@ -19,15 +19,28 @@ set ysize 64
 set victories spacerace
 
 set landm 50
-set minp 2
-set aifill 6
-set generator FAIR
+set minplayers 2
+set maxplayers 3
+set aifill 0
+set generator ISLAND
+set landmass 30
+set separatepoles ENABLED
+
+# Starting units configuration
+set startunits cccwwwx
+set startpos DEFAULT
+set dispersion 2
+set citymindist 3
 
 set wetness 25
+set timeout 0
 set topology ""
 set wrap=
 set steepness 12
 
+# LLM agents take control of AI players via /take command
+# aifill 2 creates AI*1 and AI*2 for the two LLM agents to control
+# This ensures exactly 2 player slots exist for agents to /take
 
 metaconnection persistent
 metamessage New Freeciv-web Multiplayer Game

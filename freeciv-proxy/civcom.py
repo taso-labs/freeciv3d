@@ -18,9 +18,102 @@ from struct import *
 from threading import Thread
 import logging
 import time
+import json
+import os
+from tornado import ioloop
+
+# Import packet ID constants for type-safe packet handling
+# Gracefully handle missing packet_constants module for backward compatibility
+try:
+    from packet_constants import (
+        PACKET_CONN_INFO,
+        PACKET_PLAYER_INFO,
+        PACKET_MAP_INFO,
+        PACKET_GAME_INFO,
+        PACKET_UNIT_INFO,
+        PACKET_CITY_INFO,
+        PACKET_CHAT_MSG,
+        PACKET_RULESET_NATION,
+        get_packet_name
+    )
+    PACKET_CONSTANTS_AVAILABLE = True
+    logging.getLogger("freeciv-proxy").info("packet_constants module loaded successfully - LLM state parsing enabled")
+except ImportError as e:
+    logging.getLogger("freeciv-proxy").warning(f"packet_constants not available: {e}. Falling back to simple packet forwarding (working commit behavior).")
+    PACKET_CONSTANTS_AVAILABLE = False
+    # Define dummy constants to prevent NameError when packet_constants unavailable
+    PACKET_CONN_INFO = -1
+    PACKET_PLAYER_INFO = -1
+    PACKET_MAP_INFO = -1
+    PACKET_GAME_INFO = -1
+    PACKET_UNIT_INFO = -1
+    PACKET_CITY_INFO = -1
+    PACKET_CHAT_MSG = -1
+    PACKET_RULESET_NATION = -1
+    def get_packet_name(pid): return f"packet_{pid}"
+
+# Import RULESET packet cache for spectator mode support
+try:
+    from ruleset_cache import ruleset_cache
+    RULESET_CACHE_AVAILABLE = True
+    logging.getLogger("freeciv-proxy").info("ruleset_cache module loaded - spectator RULESET caching enabled")
+except ImportError as e:
+    logging.getLogger("freeciv-proxy").warning(f"ruleset_cache not available: {e}. Spectator mode may not work correctly.")
+    RULESET_CACHE_AVAILABLE = False
+    ruleset_cache = None
 
 HOST = '127.0.0.1'
 logger = logging.getLogger("freeciv-proxy")
+
+# Unit type ID to name mapping (FreeCiv default/classic ruleset)
+# Source: freeciv/data/classic/units.ruleset
+# Maps integer type IDs from PACKET_UNIT_INFO to human-readable unit names
+UNIT_TYPE_NAMES = {
+    0: 'settlers', 1: 'workers', 2: 'engineers',
+    3: 'warriors', 4: 'phalanx', 5: 'archers', 6: 'legion',
+    7: 'pikemen', 8: 'musketeers', 9: 'fanatics', 10: 'partisan',
+    11: 'alpine_troops', 12: 'riflemen', 13: 'marines', 14: 'paratroopers',
+    15: 'mech_inf', 16: 'horsemen', 17: 'chariot', 18: 'elephants',
+    19: 'crusaders', 20: 'knights', 21: 'dragoons', 22: 'cavalry',
+    23: 'armor', 24: 'catapult', 25: 'cannon', 26: 'artillery',
+    27: 'howitzer', 28: 'fighter', 29: 'bomber', 30: 'helicopter',
+    31: 'stealth_fighter', 32: 'stealth_bomber', 33: 'trireme',
+    34: 'caravel', 35: 'galleon', 36: 'frigate', 37: 'ironclad',
+    38: 'destroyer', 39: 'cruiser', 40: 'aegis_cruiser', 41: 'battleship',
+    42: 'submarine', 43: 'carrier', 44: 'transport', 45: 'cruise_missile',
+    46: 'nuclear', 47: 'diplomat', 48: 'spy', 49: 'caravan',
+    50: 'freight', 51: 'explorer', 52: 'barbarian_leader', 53: 'awacs',
+    # Custom rulesets may have different IDs - fallback to unit_<id>
+}
+
+def get_unit_type_name(type_id):
+    """Convert FreeCiv unit type ID to human-readable name.
+
+    This function normalizes unit types to lowercase string names for consistency
+    across the system. It handles both integer type IDs from the FreeCiv server
+    and string types that may already be normalized.
+
+    Args:
+        type_id: Integer type ID from PACKET_UNIT_INFO, or string name
+
+    Returns:
+        String type name in lowercase (e.g., 'warrior', 'settler')
+
+    Examples:
+        >>> get_unit_type_name(3)
+        'warriors'
+        >>> get_unit_type_name(0)
+        'settlers'
+        >>> get_unit_type_name('Warrior')
+        'warrior'
+        >>> get_unit_type_name(999)  # Unknown custom unit
+        'unit_999'
+    """
+    if isinstance(type_id, str):
+        return type_id.lower()  # Already a string, normalize case
+    if isinstance(type_id, int):
+        return UNIT_TYPE_NAMES.get(type_id, f'unit_{type_id}')
+    return 'unknown'
 
 # The CivCom handles communication between freeciv-proxy and the Freeciv C
 # server.
@@ -44,47 +137,106 @@ class CivCom(Thread):
         self.daemon = True
         self.civwebserver = civwebserver
 
+        # Game state tracking - populated from parsed packets
+        self.map_info = {}
+        self.player_units = {}  # Dict keyed by unit_id for efficient updates
+        self.player_cities = {}  # Dict keyed by city_id for efficient updates
+        self.all_players = []
+        self.known_techs = []
+        self.visible_tiles = []
+        self.game_turn = 1
+        self.game_phase = 'movement'
+        self.player_id = None  # Will be set from PACKET_PLAYER_INFO
+        self.nations = {}  # Will be populated from PACKET_RULESET_NATION (pid=148)
+
     def run(self):
-        # setup connection to civserver
-        if (logger.isEnabledFor(logging.INFO)):
-            logger.info("Start connection to civserver for " + self.username)
-        self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.socket.setblocking(True)
-        self.socket.settimeout(2)
         try:
-            self.socket.connect((HOST, self.civserverport))
-            self.socket.settimeout(0.01)
-        except socket.error as reason:
-            self.send_error_to_client(
-                "Proxy unable to connect to civserver. Error: %s" %
-                (reason))
-            self.close_connection()
-            return
-
-        # send initial login packet to civserver
-        self.civserver_messages = [self.civwebserver.loginpacket]
-        self.send_packets_to_civserver()
-
-        # receive packets from server
-        while True:
-            packet = self.read_from_connection()
-
-            if (self.stopped):
+            # setup connection to civserver
+            logger.info(f"[{self.username}] Starting connection to civserver on port {self.civserverport}")
+            self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.socket.setblocking(True)
+            self.socket.settimeout(2)
+            try:
+                logger.info(f"[{self.username}] Attempting to connect to {HOST}:{self.civserverport}")
+                self.socket.connect((HOST, self.civserverport))
+                self.socket.settimeout(0.01)
+                logger.info(f"[{self.username}] Successfully connected to {HOST}:{self.civserverport}")
+            except socket.error as reason:
+                logger.error(f"[{self.username}] Failed to connect to {HOST}:{self.civserverport}: {reason}")
+                self.send_error_to_client(
+                    "Proxy unable to connect to civserver. Error: %s" %
+                    (reason))
+                self.close_connection()
                 return
 
-            if (packet is not None):
-                self.net_buf += packet
+            # send initial login packet to civserver
+            logger.debug(f"Sending login packet for {self.username}")
+            self.civserver_messages = [self.civwebserver.loginpacket]
+            self.send_packets_to_civserver()
+            logger.debug(f"Login packet sent for {self.username}")
 
-                if (len(self.net_buf) == self.packet_size and self.net_buf[-1] == 0):
-                    # valid packet received from freeciv server, send it to
-                    # client.
-                    self.send_buffer_append(self.net_buf[:-1])
-                    self.packet_size = -1
-                    self.net_buf = bytearray(0)
-                    continue
+            # receive packets from server
+            logger.debug(f"Starting packet receive loop for {self.username}")
+            packet_count = 0
+            while True:
+                packet = self.read_from_connection()
 
-            time.sleep(0.01)
-            # prevent max CPU usage in case of error
+                if (self.stopped):
+                    logger.debug(f"Packet loop stopped for {self.username} after {packet_count} packets")
+                    return
+
+                if (packet is not None):
+                    packet_count += 1
+                    if packet_count <= 3:  # Log first 3 packets only
+                        logger.debug(f"Received packet #{packet_count} ({len(packet)} bytes) for {self.username}")
+                    self.net_buf += packet
+
+                    if (len(self.net_buf) == self.packet_size and self.net_buf[-1] == 0):
+                        # valid packet received from freeciv server
+                        # Parse and store game state ONLY if packet_constants module is available
+                        if PACKET_CONSTANTS_AVAILABLE:
+                            try:
+                                packet_str = self.net_buf[:-1].decode('utf-8')
+                                self.parse_and_store_packet(packet_str)
+
+                                # Log important packet types
+                                try:
+                                    packet_json = json.loads(packet_str)
+                                    pid = packet_json.get('pid')
+                                    if pid == PACKET_UNIT_INFO:
+                                        logger.info(f"✓ Received PACKET_UNIT_INFO (pid={pid}) for {self.username}")
+                                    elif pid == PACKET_CITY_INFO:
+                                        logger.info(f"✓ Received PACKET_CITY_INFO (pid={pid}) for {self.username}")
+                                    elif pid == PACKET_GAME_INFO:
+                                        logger.debug(f"Received PACKET_GAME_INFO for {self.username}")
+                                    elif pid == PACKET_CHAT_MSG:
+                                        # Log chat messages to capture server command responses
+                                        msg_text = packet_json.get('message', '')
+                                        logger.info(f"Chat message for {self.username}: {msg_text}")
+                                except:
+                                    pass  # Not JSON or parsing failed, ignore
+                            except Exception as e:
+                                logger.warning(f"⚠ Error parsing packet for state storage: {e}", exc_info=True)
+
+                        # ALWAYS forward packet to client (even if parsing disabled/failed)
+                        self.send_buffer_append(self.net_buf[:-1])
+                        self.packet_size = -1
+                        self.net_buf = bytearray(0)
+                        continue
+
+                time.sleep(0.01)
+                # prevent max CPU usage in case of error
+        except Exception as e:
+            # logger.exception() already includes full traceback
+            logger.exception(f"CivCom thread crashed for {self.username}: {e}")
+            try:
+                self.send_error_to_client(f"Connection thread crashed: {e}")
+            except:
+                pass  # If send fails, we're already in trouble
+            try:
+                self.close_connection()
+            except:
+                pass
 
     def read_from_connection(self):
         try:
@@ -93,6 +245,13 @@ class CivCom(Thread):
                     self.header_buf += self.socket.recv(2 -
                                                         len(self.header_buf))
                     if (len(self.header_buf) == 0):
+                        logger.warning(
+                            f"🔴 CIVSERVER CLOSED CONNECTION (header read): {self.username}\n"
+                            f"   Port: {self.civserverport}\n"
+                            f"   Connection age: {time.time() - self.connect_time:.1f}s\n"
+                            f"   This indicates civserver initiated disconnect\n"
+                            f"   Calling close_connection()..."
+                        )
                         self.close_connection()
                         return None
                     if (len(self.header_buf) == 2):
@@ -109,6 +268,15 @@ class CivCom(Thread):
             if (self.socket is not None and self.net_buf is not None and self.packet_size > 0):
                 data = self.socket.recv(self.packet_size - len(self.net_buf))
                 if (len(data) == 0):
+                    logger.warning(
+                        f"🔴 CIVSERVER CLOSED CONNECTION (data read): {self.username}\n"
+                        f"   Port: {self.civserverport}\n"
+                        f"   Connection age: {time.time() - self.connect_time:.1f}s\n"
+                        f"   Expected packet size: {self.packet_size} bytes\n"
+                        f"   Buffer length: {len(self.net_buf)} bytes\n"
+                        f"   This indicates civserver initiated disconnect\n"
+                        f"   Calling close_connection()..."
+                    )
                     self.close_connection()
                     return None
 
@@ -121,10 +289,14 @@ class CivCom(Thread):
             return None
 
     def close_connection(self):
+        import traceback
+
         if (logger.isEnabledFor(logging.INFO)):
             logger.info(
-                "Server connection closed. Removing civcom thread for " +
-                self.username)
+                f"Server connection closed. Removing civcom thread for {self.username}\n"
+                f"   Connection age: {time.time() - self.connect_time:.1f}s\n"
+                f"   Call stack:\n{''.join(traceback.format_stack())}"
+            )
 
         # Flush buffers
         self.send_packets_to_client()
@@ -157,6 +329,77 @@ class CivCom(Thread):
     def send_packets_to_client(self):
         packet = self.get_client_result_string()
         if (packet is not None and self.civwebserver is not None):
+            # Check if handler has buffering enabled (LLM agents buffer during auth)
+            # If buffer_enabled=True, store packets instead of sending them immediately
+            if hasattr(self.civwebserver, 'buffer_enabled') and self.civwebserver.buffer_enabled:
+                # Buffer the packet instead of sending it
+                if hasattr(self.civwebserver, 'packet_buffer'):
+                    # Check buffer size limits to prevent memory exhaustion
+                    # Import limits from llm_handler at runtime to avoid circular import
+                    try:
+                        from llm_handler import MAX_PACKET_BUFFER_SIZE, MAX_PACKET_BUFFER_BYTES
+
+                        buffer_count = len(self.civwebserver.packet_buffer)
+                        current_size = sum(len(p.encode('utf-8')) for p in self.civwebserver.packet_buffer)
+                        packet_size = len(packet.encode('utf-8'))
+
+                        # Check if adding this packet would exceed limits
+                        if buffer_count >= MAX_PACKET_BUFFER_SIZE:
+                            logger.error(
+                                f"❌ PACKET BUFFER OVERFLOW for {self.username}: "
+                                f"{buffer_count} packets exceeds limit of {MAX_PACKET_BUFFER_SIZE}. "
+                                f"Closing connection to prevent memory exhaustion."
+                            )
+                            self.civwebserver.buffer_enabled = False
+                            self.civwebserver.packet_buffer.clear()
+                            self.civwebserver.close()
+                            return
+
+                        if current_size + packet_size > MAX_PACKET_BUFFER_BYTES:
+                            logger.error(
+                                f"❌ PACKET BUFFER SIZE OVERFLOW for {self.username}: "
+                                f"{(current_size + packet_size)/(1024*1024):.2f}MB exceeds limit of "
+                                f"{MAX_PACKET_BUFFER_BYTES/(1024*1024):.0f}MB. "
+                                f"Closing connection to prevent memory exhaustion."
+                            )
+                            self.civwebserver.buffer_enabled = False
+                            self.civwebserver.packet_buffer.clear()
+                            self.civwebserver.close()
+                            return
+
+                        # Buffer is within limits - add packet
+                        self.civwebserver.packet_buffer.append(packet)
+                        buffer_count += 1
+                        logger.debug(
+                            f"🔒 BUFFERING PACKET during auth for {self.username}: "
+                            f"{packet_size:,} bytes ({packet_size/(1024*1024):.2f}MB), "
+                            f"buffer count: {buffer_count}, "
+                            f"total size: {(current_size + packet_size)/(1024*1024):.2f}MB"
+                        )
+                    except ImportError:
+                        # Fallback if llm_handler not available (shouldn't happen in production)
+                        logger.warning(f"Could not import buffer limits - buffering without size checks")
+                        self.civwebserver.packet_buffer.append(packet)
+                        packet_size = len(packet.encode('utf-8'))
+                        buffer_count = len(self.civwebserver.packet_buffer)
+                        logger.debug(
+                            f"🔒 BUFFERING PACKET during auth for {self.username}: "
+                            f"{packet_size:,} bytes ({packet_size/(1024*1024):.2f}MB), "
+                            f"buffer count: {buffer_count}"
+                        )
+                return  # Don't send, just buffer
+
+            # Normal flow: send packet immediately
+            # Log large packet sizes to track what's being blocked
+            packet_size = len(packet.encode('utf-8'))
+            if packet_size > 1_000_000:  # Log if >1MB
+                logger.warning(
+                    f"📦 LARGE PACKET: Sending {packet_size:,} bytes ({packet_size/(1024*1024):.2f}MB) "
+                    f"to {self.username}"
+                )
+                # Log first 200 chars to see packet type
+                logger.debug(f"   Packet preview: {packet[:200]}...")
+
             # Calls the write_message callback on the next Tornado I/O loop iteration (thread safely).
             conn = self.civwebserver
             conn.io_loop.add_callback(lambda: conn.write_message(packet))
@@ -181,7 +424,11 @@ class CivCom(Thread):
     # Send packets from freeciv-proxy to civserver
     def send_packets_to_civserver(self):
         if (self.civserver_messages is None or self.socket is None):
+            logger.debug(f"Cannot send packets for {self.username}: messages={'set' if self.civserver_messages else 'None'}, socket={'set' if self.socket else 'None'}")
             return
+
+        if len(self.civserver_messages) > 0:
+            logger.debug(f"Sending {len(self.civserver_messages)} packet(s) to civserver for {self.username}")
 
         try:
             for net_message in self.civserver_messages:
@@ -191,7 +438,27 @@ class CivCom(Thread):
                     header +
                     utf8_encoded +
                     b'\0')
-        except Exception:
+
+                # Log important packets
+                try:
+                    msg_json = json.loads(net_message)
+                    pid = msg_json.get('pid')
+                    message_text = msg_json.get('message', '')
+
+                    if pid == PACKET_CHAT_MSG and '/start' in message_text:
+                        logger.info(f"Sent /start command to civserver on port {self.civserverport} for {self.username}")
+                    elif pid == PACKET_CHAT_MSG:
+                        logger.debug(f"Sent chat message to civserver: {message_text}")
+                    elif pid == 10:  # PACKET_NATION_SELECT_REQ
+                        logger.info(f"Sent PACKET_NATION_SELECT_REQ (nation_no={msg_json.get('nation_no')}) for {self.username}")
+                    elif pid == 11:  # PACKET_PLAYER_READY
+                        logger.info(f"Sent PACKET_PLAYER_READY (player_no={msg_json.get('player_no')}) for {self.username}")
+                    else:
+                        logger.debug(f"Sent packet pid={pid} for {self.username}")
+                except:
+                    logger.debug(f"Sent packet to civserver for {self.username}")
+        except Exception as e:
+            logger.error(f"Failed to send packet to civserver port {self.civserverport}: {e}")
             self.send_error_to_client(
                 "Proxy unable to communicate with civserver on port " + str(self.civserverport))
         finally:
@@ -200,6 +467,197 @@ class CivCom(Thread):
     # queue message for the civserver
     def queue_to_civserver(self, message):
         self.civserver_messages.append(message)
+
+    def parse_and_store_packet(self, packet_json):
+        """Parse incoming packets and store relevant game state"""
+        # Early return if packet_constants not available (should not happen if called correctly, but safety check)
+        if not PACKET_CONSTANTS_AVAILABLE:
+            return
+
+        try:
+            packet = json.loads(packet_json)
+            packet_type = packet.get('pid')
+
+            # SPECTATOR SUPPORT: Cache RULESET packets for spectators
+            # These packets define game rules, unit types, terrain, extras (EXTRA_MINE, etc.)
+            # Spectators need these to initialize client-side constants
+            if RULESET_CACHE_AVAILABLE and ruleset_cache.is_ruleset_packet(packet_type):
+                # Get game_id from the handler (civwebserver is the LLMWebSocketHandler)
+                game_id = getattr(self.civwebserver, 'game_id', None)
+                if game_id:
+                    ruleset_cache.add_packet(game_id, packet_json)
+                    if not hasattr(self, '_ruleset_packets_cached'):
+                        self._ruleset_packets_cached = 0
+                    self._ruleset_packets_cached += 1
+                    # Log first few RULESET packets for verification
+                    if self._ruleset_packets_cached <= 5:
+                        logger.info(f"🎯 Cached RULESET packet (#{self._ruleset_packets_cached}): "
+                                   f"pid={packet_type}, game={game_id}")
+
+            # Configurable packet logging for debugging (set CIVCOM_PACKET_LOG_LIMIT env var)
+            if not hasattr(self, '_packet_type_log_count'):
+                self._packet_type_log_count = 0
+                self._packet_log_limit = int(os.getenv('CIVCOM_PACKET_LOG_LIMIT', '10'))
+
+            if self._packet_type_log_count < self._packet_log_limit:
+                self._packet_type_log_count += 1
+                packet_name = get_packet_name(packet_type)
+                logger.debug(f"Received packet: {packet_name} (pid={packet_type}) for {self.username}")
+                # Log details for critical packets
+                if packet_type in [PACKET_CONN_INFO, PACKET_PLAYER_INFO]:
+                    logger.debug(f"Packet details: {str(packet)[:200]}")
+
+            # Map info packet (contains xsize, ysize)
+            if packet_type == PACKET_MAP_INFO:
+                self.map_info = {
+                    'width': packet.get('xsize', 0),
+                    'height': packet.get('ysize', 0),
+                    'tiles': [],
+                    'visibility': {}
+                }
+                logger.info(f"Stored map info: {self.map_info['width']}x{self.map_info['height']}")
+
+            # Game info packet (turn number, etc)
+            elif packet_type == PACKET_GAME_INFO:
+                self.game_turn = packet.get('turn', self.game_turn)
+                logger.debug(f"Updated game turn: {self.game_turn}")
+
+            # CRITICAL: Connection info packet - contains player_num assignment
+            # This is the FIX for the PACKET_CONN_INFO bug
+            elif packet_type == PACKET_CONN_INFO:
+                # This packet is sent after successful join and contains the player_num
+                conn_id = packet.get('id')
+                player_num = packet.get('player_num')
+                packet_username = packet.get('username', '')
+                logger.debug(f"Received PACKET_CONN_INFO: conn_id={conn_id}, player_num={player_num}, username='{packet_username}' for {self.username}")
+
+                # Check if this is our connection by matching username
+                # CRITICAL: FreeCiv uses MAX_NUM_PLAYER_SLOTS (512) as sentinel for "no player assigned"
+                # Only accept player_num < 512 as valid player IDs
+                if packet_username == self.username and player_num is not None and player_num < 512:
+                    # Store player_num as player_id - CRITICAL for game flow
+                    self.player_id = player_num
+                    logger.info(f"Player number {player_num} assigned to connection {self.username} via PACKET_CONN_INFO")
+                elif packet_username == self.username and player_num == 512:
+                    logger.debug(f"PACKET_CONN_INFO has player_num=512 (unassigned sentinel) - waiting for PACKET_PLAYER_INFO")
+
+            # Player info packet (detailed player data sent AFTER nation selection)
+            elif packet_type == PACKET_PLAYER_INFO:
+                # Update or add player to list
+                player_id = packet.get('playerno')
+                packet_username = packet.get('username', '')
+                logger.debug(f"Received PACKET_PLAYER_INFO: playerno={player_id}, username='{packet_username}' for {self.username}")
+                if player_id is not None:
+                    # Check if this player info is for our connection
+                    if packet_username == self.username:
+                        # This is OUR player! Store the player_id (fallback if CONN_INFO didn't set it)
+                        self.player_id = player_id
+                        logger.info(f"Player ID {player_id} assigned to connection {self.username} via PACKET_PLAYER_INFO")
+
+                    # Remove old entry if exists
+                    self.all_players = [p for p in self.all_players if p.get('id') != player_id]
+                    # Add updated player
+                    self.all_players.append({
+                        'id': player_id,
+                        'name': packet.get('username', f'Player{player_id}'),
+                        'nation': packet.get('nation', 'Unknown'),
+                        'score': packet.get('score', 0),
+                        'gold': packet.get('gold', 0)
+                    })
+
+            # Unit info packet - stores units by ID for all players
+            elif packet_type == PACKET_UNIT_INFO:
+                unit_id = packet.get('id')
+                owner = packet.get('owner')
+                if unit_id is not None and owner is not None:
+                    # Get raw type ID (integer from FreeCiv server)
+                    unit_type_raw = packet.get('type')
+
+                    # Convert integer type ID to human-readable string name
+                    unit_type_name = get_unit_type_name(unit_type_raw)
+
+                    def get_coords_from_tile_index(tile_idx):
+                        # tile['index'] = x + y * map['xsize'];
+                        # tile['x'] = x;
+                        # tile['y'] = y;
+                        xsize = self.map_info.get('width', 1)
+                        x = tile_idx % xsize
+                        y = tile_idx // xsize
+                        return x, y
+
+                    tile_idx = packet.get("tile")
+                    x, y = get_coords_from_tile_index(tile_idx)
+
+                    unit_data = {
+                        'id': unit_id,
+                        'owner': owner,
+                        'type': unit_type_name,  # String name (e.g., 'warriors', 'settlers')
+                        'type_id': unit_type_raw,  # Preserve original integer for debugging/reference
+                        'tile': tile_idx,
+                        'homecity': packet.get('homecity', 0),
+                        'moves_left': packet.get('moves_left', 0),
+                        'hp': packet.get('hp', 0),
+                        'veteran': packet.get('veteran', 0),
+                        'transported': packet.get('transported', False),
+                        'done_moving': packet.get('done_moving', False),
+                        'activity': packet.get('activity', 'idle'),
+                        'x': x,
+                        'y': y
+                    }
+
+                    # Convert player_units to dict if it's still a list
+                    if not isinstance(self.player_units, dict):
+                        self.player_units = {}
+
+                    self.player_units[unit_id] = unit_data
+                    logger.info(f"✓ Stored unit {unit_id} (type={unit_type_name}, type_id={unit_type_raw}) for owner {owner}")
+
+            # City info packet - stores cities by ID for all players
+            elif packet_type == PACKET_CITY_INFO:
+                city_id = packet.get('id')
+                owner = packet.get('owner')
+                if city_id is not None and owner is not None:
+                    city_data = {
+                        'id': city_id,
+                        'owner': owner,
+                        'name': packet.get('name', f'City{city_id}'),
+                        'tile': packet.get('tile'),
+                        'size': packet.get('size', 1),
+                        'production': packet.get('production'),
+                        'food_stock': packet.get('food_stock', 0),
+                        'shield_stock': packet.get('shield_stock', 0),
+                        'trade': packet.get('trade', [0, 0, 0]),
+                        'luxury': packet.get('luxury', 0),
+                        'science': packet.get('science', 0),
+                        'tax': packet.get('tax', 0)
+                    }
+
+                    # Convert player_cities to dict if it's still a list
+                    if not isinstance(self.player_cities, dict):
+                        self.player_cities = {}
+
+                    self.player_cities[city_id] = city_data
+                    logger.info(f"✓ Stored city {city_id} ({city_data['name']}, size={city_data['size']}) for owner {owner}")
+
+            # Ruleset nation packet - stores nation ID to name mappings
+            elif packet_type == PACKET_RULESET_NATION:
+                nation_id = packet.get('id')
+                # Try multiple fields for nation name (different packet versions use different fields)
+                nation_name = packet.get('adjective') or packet.get('plural') or packet.get('rule_name', '')
+                if nation_id is not None and nation_name:
+                    self.nations[nation_name] = nation_id
+                    logger.debug(f"Registered nation: {nation_name} -> ID {nation_id}")
+
+            # Default handler for unknown/unhandled packet types
+            # This prevents "unsupported packet type" disconnects from civserver
+            else:
+                # Log debug info for unhandled packets (helps identify missing handlers)
+                logger.debug(f"Received unhandled packet type {packet_type} for {self.username}")
+                # Don't crash - just acknowledge and continue
+                # Common unhandled types: PING (88), PONG (89), various info packets
+
+        except (json.JSONDecodeError, KeyError, TypeError) as e:
+            logger.debug(f"Could not parse packet for state storage: {e}")
 
     # LLM-optimized state query methods
     def handle_state_query(self, player_id, format='full'):
@@ -218,6 +676,12 @@ class CivCom(Thread):
             'turn': getattr(self, 'game_turn', 1),
             'phase': getattr(self, 'game_phase', 'movement'),
             'player_id': player_id,
+            'game': {
+                'turn': getattr(self, 'game_turn', 1),
+                'phase': getattr(self, 'game_phase', 'movement'),
+                'is_over': False,
+                'current_player': player_id
+            },
             'strategic': self._build_strategic_view(player_id),
             'tactical': self._build_tactical_view(player_id),
             'economic': self._build_economic_view(player_id),
@@ -333,16 +797,48 @@ class CivCom(Thread):
 
     def get_full_state(self, player_id):
         """Get complete game state (larger format)"""
+        # Ensure map_info has valid dimensions
+        map_info = getattr(self, 'map_info', {})
+        if not map_info or map_info.get('width', 0) < 1 or map_info.get('height', 0) < 1:
+            map_info = {'width': 80, 'height': 50, 'tiles': [], 'visibility': {}}
+
+        # Ensure players is returned as a list (not dict)
+        all_players = getattr(self, 'all_players', [])
+        if isinstance(all_players, dict):
+            all_players = list(all_players.values()) if all_players else []
+
+        # Convert units dict to list, filtering by player_id
+        units_dict = getattr(self, 'player_units', {})
+        if isinstance(units_dict, dict):
+            player_units_list = [u for u in units_dict.values() if u.get('owner') == player_id]
+            logger.debug(f"Filtered {len(player_units_list)} units for player {player_id} from {len(units_dict)} total")
+        else:
+            player_units_list = units_dict if isinstance(units_dict, list) else []
+
+        # Convert cities dict to list, filtering by player_id
+        cities_dict = getattr(self, 'player_cities', {})
+        if isinstance(cities_dict, dict):
+            player_cities_list = [c for c in cities_dict.values() if c.get('owner') == player_id]
+            logger.debug(f"Filtered {len(player_cities_list)} cities for player {player_id} from {len(cities_dict)} total")
+        else:
+            player_cities_list = cities_dict if isinstance(cities_dict, list) else []
+
         return {
             'turn': getattr(self, 'game_turn', 1),
             'phase': getattr(self, 'game_phase', 'movement'),
             'player_id': player_id,
-            'units': getattr(self, 'player_units', []),
-            'cities': getattr(self, 'player_cities', []),
+            'units': player_units_list,  # Filtered list of player's units
+            'cities': player_cities_list,  # Filtered list of player's cities
             'visible_tiles': getattr(self, 'visible_tiles', []),
-            'players': getattr(self, 'all_players', {}),
+            'players': all_players,
             'techs': getattr(self, 'known_techs', []),
-            'map_info': getattr(self, 'map_info', {})
+            'map': map_info,
+            'game': {
+                'turn': getattr(self, 'game_turn', 1),
+                'phase': getattr(self, 'game_phase', 'movement'),
+                'is_over': False,
+                'current_player': player_id
+            }
         }
 
     def get_state_delta(self, player_id):

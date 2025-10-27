@@ -174,24 +174,27 @@ function handle_ruleset_resource(packet)
 function handle_tile_info(packet)
 {
   if (tiles != null) {
+
     packet['extras'] = new BitVector(packet['extras']);
 
     map_tile_height_adjust(packet);
 
-    var old_tile = $.extend({}, tiles[packet['tile']]);
-    webgl_update_tile_known(tiles[packet['tile']], packet);
-    update_tile_extras($.extend(old_tile, packet));
+    // Create deep copy of old tile BEFORE modification to enable change detection
+    var old_tile = $.extend(true, {}, tiles[packet['tile']]);
+    tiles[packet['tile']] = $.extend(tiles[packet['tile']], packet);
+    webgl_update_tile_known(old_tile, tiles[packet['tile']]);
+    update_tile_extras(tiles[packet['tile']]);
 
     if (active_city != null) {
       remove_city_worked_tiles();
       show_city_worked_tiles();
     }
 
-    tiles[packet['tile']] = $.extend(tiles[packet['tile']], packet);
-
     update_borders_tile(tiles[packet['tile']]);
     update_roads_tile(tiles[packet['tile']], true);
     update_tiletypes_tile(tiles[packet['tile']]);
+  } else {
+    console.warn('PACKET_TILE_INFO received but tiles array is null!');
   }
 }
 
@@ -446,7 +449,9 @@ function handle_player_info(packet)
 
   players[packet['playerno']] = $.extend(players[packet['playerno']], packet);
 
-  if (C_S_PREPARING == client_state()) {
+  // SPECTATOR FIX: Don't call pregame UI updates in spectator mode
+  // Spectator doesn't have pregame UI elements, would cause contextMenu errors
+  if (C_S_PREPARING == client_state() && !window.isSpectator && !window.observing) {
     update_player_info_pregame();
   }
 }

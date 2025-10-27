@@ -12,7 +12,7 @@ if [ ! -f ${SCRIPT_DIR}/configuration.sh ]; then
 fi
 . ./configuration.sh
 
-echo "Shutting down Freeciv-web: nginx, tomcat, publite2, freeciv-proxy."
+echo "Shutting down Freeciv-web: tomcat, publite2, freeciv-proxy."
 
 if [ "${TOMCATMANAGER}" = "Y" ]; then
     if [ -z "${TOMCATMANAGER_PASSWORD}" ]; then
@@ -22,10 +22,6 @@ if [ "${TOMCATMANAGER}" = "Y" ]; then
     curl -LsSg -K - << EOF
 url="http://${TOMCATMANAGER_USER}:${TOMCATMANAGER_PASSWORD}@localhost:8080/manager/text/stop?path=/freeciv-web"
 EOF
-fi
-
-if [ ! "${NGINX_DISABLE_ON_SHUTDOW}" = "N" ]; then
-    sudo rm -f /etc/nginx/sites-enabled/freeciv-web
 fi
 
 # Shutdown Freeciv-web's dependency services according to the users
@@ -41,4 +37,4 @@ killall -9 freeciv-web
 ps aux | grep -ie freeciv-proxy | awk '{print $2}' | xargs kill -9 
 
 # Clean up server list in metaserver database.
-echo "delete from servers" | mysql -u "${DB_USER}" -p"${DB_PASSWORD}" "${DB_NAME}"
+mysql -u "${DB_USER}" -p"${DB_PASSWORD}" "${DB_NAME}" -e 'TRUNCATE servers;'

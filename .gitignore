@@ -81,12 +81,22 @@ tests/screenshot*.png
 .freeciv_index
 .idea
 *.iml
+.vscode/
 
 # Claude Code generated files
 agents.md
 CLAUDE.md
+Claude.md
 Technical Spec.md
 .cursor/*
+.playwright-mcp/*
 
 # macOS system files
 .DS_Store
+
+# Local development config files (contain credentials)
+freeciv-web/flyway.properties
+
+# Generated JavaScript packet handlers (auto-generated from packets.def)
+freeciv-web/src/main/webapp/javascript/packets.js
+freeciv-web/src/main/webapp/javascript/packhand_gen.js

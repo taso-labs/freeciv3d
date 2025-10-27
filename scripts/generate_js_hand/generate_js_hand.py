@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: latin-1 -*-
 ''' 
- Freeciv - Copyright (C) 2009 - Andreas Røsdal   andrearo@pvv.ntnu.no
+ Freeciv - Copyright (C) 2009 - Andreas Rï¿½sdal   andrearo@pvv.ntnu.no
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
    the Free Software Foundation; either version 2, or (at your option)
@@ -46,19 +46,19 @@ for packet in list(packets.values()):
   f.write("      handle_" + packet.type.lower().replace("packet_", ""))
   f.write(",");
 
-f.write(""" 
+f.write("""
 };
 
 function client_handle_packet(p)
 {
  if (p == null) return;
+
   for (var i = 0; i < p.length; i++) {
     if (p[i] == null) continue;
     var packet_type = p[i]['pid'];
-
     packet_hand_table[packet_type](p[i]);
   }
- 
+
   if (p.length > 0) {
     if (debug_active) clinet_debug_collect();
   }

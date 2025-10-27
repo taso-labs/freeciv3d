@@ -236,9 +236,15 @@ class StateCache:
             optimized['units'] = []
             for unit in data['units'][:10]:  # Limit to 10 most relevant units
                 if isinstance(unit, dict):
+                    # Handle unit type - can be int (type ID) or string (type name)
+                    unit_type = unit.get('type', '')
+                    if isinstance(unit_type, str):
+                        unit_type = unit_type[:8]  # Truncate type names
+                    # else: keep int type ID as-is
+
                     optimized['units'].append({
                         'id': unit.get('id'),
-                        'type': unit.get('type', '')[:8],  # Truncate type names
+                        'type': unit_type,
                         'x': unit.get('x'),
                         'y': unit.get('y'),
                         'owner': unit.get('owner'),
@@ -250,9 +256,16 @@ class StateCache:
             optimized['cities'] = []
             for city in data['cities'][:MAX_CITIES_FOR_OPTIMIZATION]:
                 if isinstance(city, dict):
+                    # Handle city name - should be string but add defensive check
+                    city_name = city.get('name', '')
+                    if isinstance(city_name, str):
+                        city_name = city_name[:10]  # Truncate names
+                    else:
+                        city_name = str(city_name)[:10]  # Convert to string if needed
+
                     optimized['cities'].append({
                         'id': city.get('id'),
-                        'name': city.get('name', '')[:10],  # Truncate names
+                        'name': city_name,
                         'x': city.get('x'),
                         'y': city.get('y'),
                         'owner': city.get('owner'),
@@ -269,8 +282,22 @@ class StateCache:
                     if i >= 4:
                         break
                     if isinstance(pdata, dict):
-                        optimized['players'][pid] = {
+                        # Ensure pid is string for JSON serialization compatibility
+                        optimized['players'][str(pid)] = {
                             'name': pdata.get('name', '')[:8],  # Truncate names
+                            'score': pdata.get('score', 0),
+                            'gold': pdata.get('gold', 0)
+                        }
+            elif isinstance(players_data, list):
+                optimized['players'] = {}
+                for i, pdata in enumerate(players_data):
+                    if i >= 4:
+                        break
+                    if isinstance(pdata, dict):
+                        pid = pdata.get('id') or pdata.get('player_id') or i
+                        # Ensure pid is string for JSON serialization compatibility
+                        optimized['players'][str(pid)] = {
+                            'name': pdata.get('name', '')[:8],
                             'score': pdata.get('score', 0),
                             'gold': pdata.get('gold', 0)
                         }

@@ -253,21 +253,6 @@ done
 echo "==== Filling configuration templates ===="
 "${basedir}/config/gen-from-templates.sh"
 
-echo "==== Setting up DB ===="
-pidof mysqld > /dev/null || start_svc mariadb || start_svc mysql
-if [ -z "${DB_ROOT_PASSWORD}" ]; then
-  echo "Will need the DB root password twice"
-fi
-sudo mysqladmin -u root -p"${DB_ROOT_PASSWORD}" create "${DB_NAME}"
-sudo mysql -u root -p"${DB_ROOT_PASSWORD}" << EOF
-CREATE USER '${DB_USER}'@'localhost' IDENTIFIED BY '${DB_PASSWORD}',
-            '${DB_USER}'@'127.0.0.1' IDENTIFIED BY '${DB_PASSWORD}',
-            '${DB_USER}'@'::1'       IDENTIFIED BY '${DB_PASSWORD}';
-GRANT ALL ON ${DB_NAME}.* TO '${DB_USER}'@'localhost',
-                             '${DB_USER}'@'127.0.0.1',
-                             '${DB_USER}'@'::1';
-EOF
-
 echo "==== Preparing Tomcat ===="
 cd "${TOMCAT_HOME}"
 sudo setfacl -m d:u:$(id -u):rwX,u:$(id -u):rwx webapps
@@ -275,13 +260,19 @@ mkdir -p webapps/data/{savegames/pbem,scorelogs,ranklogs}
 setfacl -Rm d:u:tomcat:rwX webapps/data
 
 echo "==== Building Freeciv C server ===="
-echo "Please be patient"
-echo "If you get an error: Clock skew detected, on Windows, then try setting the clock exactly correct on your computer using ntp or some clock software."
+if [ "${SKIP_FREECIV_BUILD}" = "true" ]; then
+  echo "Skipping Freeciv build (SKIP_FREECIV_BUILD=true)"
+elif [ ! -d "${basedir}/freeciv" ]; then
+  echo "Skipping Freeciv build (freeciv directory not present)"
+else
+  echo "Please be patient"
+  echo "If you get an error: Clock skew detected, on Windows, then try setting the clock exactly correct on your computer using ntp or some clock software."
 
-cd "${basedir}"/freeciv && \
-  ./prepare_freeciv.sh  && \
-  cd build && ninja install || \
-  handle_error 5 "Failed to install freeciv"
+  cd "${basedir}"/freeciv && \
+    ./prepare_freeciv.sh  && \
+    cd build && ninja install || \
+    handle_error 5 "Failed to install freeciv"
+fi
 
 
 echo "==== Building freeciv-web ===="
@@ -293,28 +284,28 @@ cd "${basedir}"/scripts/migration
 mig_scripts=([0-9]*)
 echo "${mig_scripts[-1]}" > checkpoint
 
-mkdir -p "${basedir}/freeciv-web/src/derived/webapp" && \
-"${basedir}"/scripts/sync-js-hand.sh \
-  -f "${basedir}/freeciv/freeciv" \
-  -i "${HOME}/freeciv" \
-  -o "${basedir}/freeciv-web/src/derived/webapp" \
-  -d "${TOMCAT_HOME}/webapps/data" || \
-  handle_error 6 "Failed to synchronize freeciv project"
+if [ -d "${basedir}/freeciv" ]; then
+  mkdir -p "${basedir}/freeciv-web/src/derived/webapp" && \
+  "${basedir}"/scripts/sync-js-hand.sh \
+    -f "${basedir}/freeciv/freeciv" \
+    -i "${HOME}/freeciv" \
+    -o "${basedir}/freeciv-web/src/derived/webapp" \
+    -d "${TOMCAT_HOME}/webapps/data" || \
+    handle_error 6 "Failed to synchronize freeciv project"
+else
+  echo "Skipping freeciv project synchronization (freeciv directory not present)"
+  mkdir -p "${basedir}/freeciv-web/src/derived/webapp"
+fi
 
-cd "${basedir}"/freeciv-web && \
-  ./build.sh -B || \
-  handle_error 7 "Failed to build freeciv-web server"
-
-echo "==== Setting up nginx ===="
-stop_svc nginx
-sudo rm -f /etc/nginx/sites-enabled/default
-sudo cp -R "${basedir}"/config/nginx /etc/
-if [ "${FCW_INSTALL_MODE}" = TEST ] && [ ! -f /etc/nginx/ssl/freeciv-web.crt ]; then
-  sudo mkdir -p /etc/nginx/ssl/private
-  sudo chmod 700 /etc/nginx/ssl/private
-  openssl req -x509 -newkey rsa:2048 -keyout freeciv-web.key -out freeciv-web.crt -days 3650 -nodes -subj '/CN=localhost' -batch
-  sudo mv freeciv-web.crt /etc/nginx/ssl/
-  sudo mv freeciv-web.key /etc/nginx/ssl/private/
+# Skip Maven build if SKIP_MVN_BUILD is set (used in Docker build)
+# The WAR will be built later in the webapp-builder stage
+if [ "${SKIP_MVN_BUILD}" != "true" ]; then
+  cd "${basedir}"/freeciv-web && \
+    ./build.sh -B || \
+    handle_error 7 "Failed to build freeciv-web server"
+else
+  echo "Skipping Maven build (SKIP_MVN_BUILD=true)"
+  echo "WAR will be built in webapp-builder Docker stage"
 fi
 
 echo
@@ -335,8 +326,6 @@ You may want to personalize some things before starting it:
 - Set the mail account data for pbem games in pbem/settings.ini, and the
   templates for the messages in pbem/email_template* (at least the URL).
 - Users for tomcat-admin web interface.
-- Point /etc/nginx/snippets/freeciv-web-ssl.conf to your certificate and key,
-  or remove SSL support from /etc/nginx/sites-available/freeciv-web.
 
 Then run scripts/start-freeciv-web.sh and enjoy!
 EOF

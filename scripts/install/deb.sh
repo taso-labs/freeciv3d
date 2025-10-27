@@ -31,22 +31,23 @@ dependencies="\
   libsqlite3-dev \
   libtool \
   maven \
-  default-mysql-server \
-  nginx \
+  default-mysql-client \
   openjdk-17-jdk-headless \
   patch \
   pkg-config \
   pngcrush \
   procps \
+  python3-bcrypt \
+  python3-dev \
+  python3-dotenv \
   python3-minimal \
+  python3-pillow \
   python3-pip \
+  python3-redis \
   python3-setuptools \
   python3-tornado \
-  python3-pillow \
-  python3-dotenv \
-  python3-redis \
-  python3-dev \
   python3-wheel \
+  python3-yaml \
   sed \
   tar \
   unzip \
@@ -76,9 +77,6 @@ if apt-get --simulate install liblua5.4-dev &> /dev/null; then
 fi
 
 echo "==== Installing Dependencies ===="
-echo "mysql setup..."
-sudo debconf-set-selections <<< "mysql-server mysql-server/root_password password ${DB_ROOT_PASSWORD}"
-sudo debconf-set-selections <<< "mysql-server mysql-server/root_password_again password ${DB_ROOT_PASSWORD}"
 echo "apt-get install dependencies"
 sudo ${APT_GET} install --no-install-recommends ${dependencies}
 

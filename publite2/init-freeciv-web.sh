@@ -19,11 +19,11 @@ addArgs() {
 
 echo "init-freeciv-web.sh port ${2}"
 
-addArgs --debug 1
+addArgs --debug verbose
 addArgs --port "${2}"
 addArgs --Announce none
 addArgs --exit-on-end
-addArgs --meta --keep --Metaserver "http://${4}"
+addArgs --meta --keep --Metaserver "http://${4}" --identity localhost
 addArgs --type "${5}"
 addArgs --read "pubscript_${6}.serv"
 addArgs --log "../logs/freeciv-web-log-${2}.log"
@@ -44,6 +44,11 @@ if [ "$5" = "longturn" ]; then
       addArgs --file "${lastsave%.*}"
     fi
   fi
+elif [ "$5" = "multiplayer" ]; then
+  # Multiplayer games with LLM agents should NOT use --quitidle
+  # LLM agents connect via /take and are treated as AI, not human players
+  # Using --quitidle would cause the server to quit after 20 seconds
+  echo "Multiplayer mode: skipping --quitidle for LLM agent games"
 else
   addArgs --quitidle 20
 fi
@@ -51,10 +56,19 @@ addArgs --saves "${savesdir}"
 
 export FREECIV_SAVE_PATH=${savesdir};
 rm -f "/var/lib/tomcat10/webapps/data/scorelogs/score-${2}.log"
+rm -f "../logs/freeciv-web-log-${2}.log"
+
+# Export LLM Gateway environment variables for freeciv-proxy
+export CACHE_HMAC_SECRET="${CACHE_HMAC_SECRET:-75d6fd1ee3fb974b9a04f64eae2d48f2d7acdbc294cda59bc75485bcfe0bf861}"
+export REDIS_HOST="${REDIS_HOST:-127.0.0.1}"
+export REDIS_PORT="${REDIS_PORT:-6379}"
+export SESSION_TIMEOUT_SECONDS="${SESSION_TIMEOUT_SECONDS:-3600}"
+export API_KEY_SECRET="${API_KEY_SECRET:-test12345678901234567890123456789012}"
+export LLM_API_TOKENS="${LLM_API_TOKENS:-test-token-fc3d-001,test-token-fc3d-002}"
 
 python3 ../freeciv-proxy/freeciv-proxy.py "${3}" > "../logs/freeciv-proxy-${3}.log" 2>&1 &
 proxy_pid=$! && 
-${HOME}/freeciv/bin/freeciv-web "${args[@]}" > /dev/null 2> "../logs/freeciv-web-stderr-${2}.log"
+${HOME}/freeciv/bin/freeciv-web "${args[@]}" > "../logs/freeciv-web-stdout-${2}.log" 2> "../logs/freeciv-web-stderr-${2}.log"
 
 rc=$?; 
 kill -9 $proxy_pid; 

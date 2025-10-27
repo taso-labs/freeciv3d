@@ -58,6 +58,13 @@ $(document).ready(function() {
 **************************************************************************/
 function civclient_init()
 {
+  // SPECTATOR FIX: Skip normal client initialization in spectator mode
+  // Spectator has its own initialization in spectator_client.js
+  if (typeof window.isSpectator !== 'undefined' && window.isSpectator === true) {
+    freelog(LOG_DEBUG, "Spectator mode detected - skipping civclient_init()");
+    return;
+  }
+
   if (!Detector.webgl) {
     swal("3D WebGL not supported by your browser or you don't have a 3D graphics card.  ");
     return;
@@ -90,7 +97,21 @@ function civclient_init()
   //initialize a seeded random number generator
   fc_seedrandom = new Math.seedrandom('freeciv-web');
 
-  init_webgl_renderer();
+  // Wait for DOM to be ready before initializing WebGL
+  setTimeout(function() {
+    if (document.getElementById('mapcanvas')) {
+      init_webgl_renderer();
+    } else {
+      console.error("mapcanvas element not found, retrying WebGL initialization...");
+      setTimeout(function() {
+        if (document.getElementById('mapcanvas')) {
+          init_webgl_renderer();
+        } else {
+          console.error("Failed to initialize WebGL: mapcanvas element not available");
+        }
+      }, 1000);
+    }
+  }, 100);
 
   game_init();
   $('#tabs').tabs({ heightStyle: "fill" });
@@ -134,7 +155,12 @@ function civclient_init()
 
   dialogs_minimized_setting = simpleStorage.get('dialogs_minimized_setting');
 
- init_common_intro_dialog();
+ // SPECTATOR FIX: Don't show intro dialog in spectator mode
+ if (typeof isSpectator === 'undefined' || !isSpectator) {
+   init_common_intro_dialog();
+ } else {
+   freelog(LOG_DEBUG, "Spectator mode - skipping intro dialog");
+ }
  setup_window_size();
 
  $("#mapcanvas").hide();

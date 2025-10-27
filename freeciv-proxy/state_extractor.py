@@ -74,68 +74,138 @@ class CivComRegistry:
     """
     Registry for CivCom instances with proper lifecycle management
     Provides clean interface for registering and retrieving game connections
+
+    FIXED: Now uses composite key (game_id, agent_id) to support multiple players per game
     """
 
     def __init__(self):
-        self._civcom_instances: Dict[str, CivCom] = {}
-        self._game_metadata: Dict[str, Dict[str, Any]] = {}
+        self._civcom_instances: Dict[Tuple[str, str], CivCom] = {}
+        self._game_metadata: Dict[Tuple[str, str], Dict[str, Any]] = {}
 
-    def register_game(self, game_id: str, civcom: CivCom, metadata: Optional[Dict[str, Any]] = None):
-        """Register a CivCom instance for a game"""
+    def register_game(self, game_id: str, agent_id: str, civcom: CivCom, metadata: Optional[Dict[str, Any]] = None):
+        """Register a CivCom instance for a game with specific agent
+
+        Args:
+            game_id: Unique game identifier
+            agent_id: Unique agent/player identifier
+            civcom: CivCom instance to register
+            metadata: Optional metadata dictionary
+        """
         if not isinstance(game_id, str) or not game_id.strip():
             raise ValueError("game_id must be a non-empty string")
+
+        if not isinstance(agent_id, str) or not agent_id.strip():
+            raise ValueError("agent_id must be a non-empty string")
 
         if not civcom:
             raise ValueError("civcom instance cannot be None")
 
-        self._civcom_instances[game_id] = civcom
-        self._game_metadata[game_id] = metadata or {}
+        key = (game_id, agent_id)
+        if key in self._civcom_instances:
+            logger.warning(f"Replacing CivCom for agent {agent_id} in game {game_id}")
 
-        logger.info(f"Registered CivCom for game: {game_id}")
+        self._civcom_instances[key] = civcom
+        self._game_metadata[key] = metadata or {}
 
-    def unregister_game(self, game_id: str):
-        """Unregister a game and clean up resources"""
-        if game_id in self._civcom_instances:
+        logger.info(f"Registered CivCom for agent {agent_id} in game {game_id}")
+
+    def unregister_game(self, game_id: str, agent_id: str):
+        """Unregister a game and clean up resources
+
+        Args:
+            game_id: Unique game identifier
+            agent_id: Unique agent/player identifier
+        """
+        key = (game_id, agent_id)
+        if key in self._civcom_instances:
             try:
                 # Try to cleanup the civcom instance if it has cleanup methods
-                civcom = self._civcom_instances[game_id]
+                civcom = self._civcom_instances[key]
                 if hasattr(civcom, 'cleanup'):
                     civcom.cleanup()
                 elif hasattr(civcom, 'close'):
                     civcom.close()
             except Exception as e:
-                logger.warning(f"Error cleaning up CivCom for game {game_id}: {e}")
+                logger.warning(f"Error cleaning up CivCom for agent {agent_id} in game {game_id}: {e}")
 
-            del self._civcom_instances[game_id]
-            if game_id in self._game_metadata:
-                del self._game_metadata[game_id]
+            del self._civcom_instances[key]
+            if key in self._game_metadata:
+                del self._game_metadata[key]
 
-            logger.info(f"Unregistered CivCom for game: {game_id}")
+            logger.info(f"Unregistered CivCom for agent {agent_id} in game {game_id}")
 
-    def get_civcom(self, game_id: str) -> Optional[CivCom]:
-        """Get CivCom instance for a game"""
-        if not isinstance(game_id, str):
+    def get_civcom(self, game_id: str, agent_id: str) -> Optional[CivCom]:
+        """Get CivCom instance for a specific game and agent
+
+        Args:
+            game_id: Unique game identifier
+            agent_id: Unique agent/player identifier
+
+        Returns:
+            CivCom instance or None if not found
+        """
+        if not isinstance(game_id, str) or not isinstance(agent_id, str):
             return None
 
-        return self._civcom_instances.get(game_id)
+        key = (game_id, agent_id)
+        return self._civcom_instances.get(key)
 
-    def has_game(self, game_id: str) -> bool:
-        """Check if game is registered"""
-        return game_id in self._civcom_instances
+    def get_all_for_game(self, game_id: str) -> Dict[Tuple[str, str], CivCom]:
+        """Get all CivCom instances for a specific game
+
+        Useful for multiplayer game coordination where you need access to all
+        players' connections for the same game.
+
+        Args:
+            game_id: Unique game identifier
+
+        Returns:
+            Dictionary mapping (game_id, agent_id) tuples to CivCom instances
+        """
+        return {k: v for k, v in self._civcom_instances.items() if k[0] == game_id}
+
+    def has_game(self, game_id: str, agent_id: Optional[str] = None) -> bool:
+        """Check if game is registered
+
+        Args:
+            game_id: Unique game identifier
+            agent_id: Optional agent identifier. If provided, checks for specific agent.
+                     If None, checks if any agent is registered for this game.
+
+        Returns:
+            True if game (and optionally agent) is registered
+        """
+        if agent_id is not None:
+            key = (game_id, agent_id)
+            return key in self._civcom_instances
+        else:
+            # Check if any agent is registered for this game
+            return any(k[0] == game_id for k in self._civcom_instances.keys())
 
     def list_games(self) -> List[str]:
-        """Get list of registered game IDs"""
-        return list(self._civcom_instances.keys())
+        """Get list of unique registered game IDs"""
+        return list(set(k[0] for k in self._civcom_instances.keys()))
 
-    def get_game_metadata(self, game_id: str) -> Dict[str, Any]:
-        """Get metadata for a game"""
-        return self._game_metadata.get(game_id, {})
+    def get_game_metadata(self, game_id: str, agent_id: str) -> Dict[str, Any]:
+        """Get metadata for a specific game and agent
+
+        Args:
+            game_id: Unique game identifier
+            agent_id: Unique agent/player identifier
+
+        Returns:
+            Metadata dictionary or empty dict if not found
+        """
+        key = (game_id, agent_id)
+        return self._game_metadata.get(key, {})
 
     def get_registry_stats(self) -> Dict[str, Any]:
         """Get registry statistics"""
+        unique_games = set(k[0] for k in self._civcom_instances.keys())
         return {
-            'total_games': len(self._civcom_instances),
-            'active_games': list(self._civcom_instances.keys()),
+            'total_connections': len(self._civcom_instances),
+            'unique_games': len(unique_games),
+            'active_games': list(unique_games),
             'registry_size_kb': len(str(self._civcom_instances)) / 1024
         }
 
@@ -297,12 +367,18 @@ class StateExtractor:
         self.executor = _shared_executor
         self.registry = registry or civcom_registry  # Use global registry by default
 
-    def _get_civcom_for_game(self, game_id: str) -> Optional[CivCom]:
-        """Get CivCom instance for a game from registry or fallback"""
-        # Try registry first
-        civcom = self.registry.get_civcom(game_id)
-        if civcom:
-            return civcom
+    def _get_civcom_for_game(self, game_id: str, agent_id: Optional[str] = None) -> Optional[CivCom]:
+        """Get CivCom instance for a game from registry or fallback
+
+        Args:
+            game_id: Unique game identifier
+            agent_id: Agent/player identifier (required for registry lookup after composite key fix)
+        """
+        # Try registry first - now requires both game_id and agent_id
+        if agent_id:
+            civcom = self.registry.get_civcom(game_id, agent_id)
+            if civcom:
+                return civcom
 
         # Fallback to provided civcom if it exists and has required methods
         if self.civcom and hasattr(self.civcom, 'get_full_state'):
@@ -312,7 +388,7 @@ class StateExtractor:
         return None
 
     def extract_state(self, game_id: str, player_id: int, format_type: StateFormat,
-                     since_turn: Optional[int] = None) -> Dict[str, Any]:
+                     since_turn: Optional[int] = None, agent_id: Optional[str] = None) -> Dict[str, Any]:
         """
         Extract game state in specified format
 
@@ -321,6 +397,7 @@ class StateExtractor:
             player_id: Player ID for perspective-based state
             format_type: State format (full, delta, llm_optimized)
             since_turn: For delta format, changes since this turn
+            agent_id: Agent identifier (required for proper CivCom registry lookup)
 
         Returns:
             Dictionary containing game state in requested format
@@ -333,8 +410,8 @@ class StateExtractor:
             logger.debug(f"Cache hit for {cache_key}")
             return cached_state
 
-        # Get civcom for this game
-        civcom = self._get_civcom_for_game(game_id)
+        # Get civcom for this game - pass agent_id for composite key lookup
+        civcom = self._get_civcom_for_game(game_id, agent_id)
         if not civcom:
             raise CivComNotFoundError(game_id)
 
@@ -376,6 +453,59 @@ class StateExtractor:
             raise StateExtractionError(
                 f"Unexpected error during state extraction: {e}",
                 game_id=game_id,
+                player_id=player_id,
+                cause=e
+            )
+
+    def get_state(self, raw_state: Dict[str, Any], format_type: StateFormat,
+                  player_id: Optional[int] = None) -> Dict[str, Any]:
+        """
+        Format a raw game state into the specified format.
+        This method is used when you already have the raw state and just need formatting.
+
+        Args:
+            raw_state: Raw game state dictionary from civcom.get_full_state()
+            format_type: State format (FULL, DELTA, LLM_OPTIMIZED)
+            player_id: Optional player ID for perspective-based formatting
+                      If not provided, will try to extract from raw_state
+
+        Returns:
+            Dictionary containing formatted game state
+
+        Raises:
+            ValidationError: If format type is unsupported or state is invalid
+        """
+        # Extract player_id if not provided
+        if player_id is None:
+            # Try to get from raw_state
+            player_id = raw_state.get('player_id') or raw_state.get('current_player', 0)
+
+        try:
+            # Format based on requested type
+            if format_type == StateFormat.FULL:
+                state = self._format_full_state(raw_state, player_id)
+            elif format_type == StateFormat.LLM_OPTIMIZED:
+                state = self._format_llm_optimized_state(raw_state, player_id)
+            elif format_type == StateFormat.DELTA:
+                # For delta format without historical data, return full state
+                # The caller should use extract_state() for proper delta functionality
+                logger.warning("get_state() called with DELTA format - returning full state instead. Use extract_state() for delta functionality.")
+                state = self._format_full_state(raw_state, player_id)
+            else:
+                raise ValidationError(
+                    f"Unsupported format: {format_type}",
+                    parameter="format",
+                    value=format_type.value if hasattr(format_type, 'value') else str(format_type)
+                )
+
+            return state
+
+        except ValidationError:
+            raise
+        except Exception as e:
+            logger.error(f"Error formatting state: {e}", exc_info=True)
+            raise StateExtractionError(
+                f"Failed to format state: {e}",
                 player_id=player_id,
                 cause=e
             )
@@ -531,16 +661,54 @@ class StateExtractor:
 
         return changes
 
+    def _ensure_valid_map(self, map_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Ensure map has valid dimensions (width, height >= 1)."""
+        if not map_data:
+            return {'width': 80, 'height': 50, 'tiles': [], 'visibility': {}}
+
+        # Ensure width and height are at least 1
+        if map_data.get('width', 0) < 1:
+            map_data['width'] = 80
+        if map_data.get('height', 0) < 1:
+            map_data['height'] = 50
+
+        # Ensure required fields exist
+        if 'tiles' not in map_data:
+            map_data['tiles'] = []
+        if 'visibility' not in map_data:
+            map_data['visibility'] = {}
+
+        return map_data
+
+    def _ensure_list(self, data: Any) -> List:
+        """Ensure data is returned as a list (convert dict to list if needed)."""
+        if data is None:
+            return []
+        if isinstance(data, list):
+            return data
+        if isinstance(data, dict):
+            return list(data.values())
+        return []
+
     def _format_full_state(self, raw_state: Dict[str, Any], player_id: int) -> Dict[str, Any]:
         """Format complete game state"""
+        # ALWAYS construct game dict with all required fields - don't trust raw_state
+        game_dict = {
+            'turn': raw_state.get('turn', 1),
+            'phase': raw_state.get('phase', 'movement'),
+            'is_over': False,
+            'current_player': player_id
+        }
+
         return {
             'format': 'full',
             'turn': raw_state.get('turn'),
             'phase': raw_state.get('phase'),
-            'map': raw_state.get('map'),
-            'units': raw_state.get('units', []),
-            'cities': raw_state.get('cities', []),
-            'players': raw_state.get('players', []),
+            'map': self._ensure_valid_map(raw_state.get('map', {})),
+            'game': game_dict,
+            'units': self._ensure_list(raw_state.get('units')),
+            'cities': self._ensure_list(raw_state.get('cities')),
+            'players': self._ensure_list(raw_state.get('players')),
             'techs': raw_state.get('techs', {}),
             'timestamp': time.time(),
             'player_perspective': player_id
@@ -560,6 +728,15 @@ class StateExtractor:
         # Build economic view
         economic = self._build_economic_view(raw_state, player_id)
 
+        # ALWAYS construct game dict with all required fields - don't trust raw_state
+        # This ensures current_player is always present for game_arena
+        game_dict = {
+            'turn': raw_state.get('turn', 1),
+            'phase': raw_state.get('phase', 'movement'),
+            'is_over': False,
+            'current_player': player_id
+        }
+
         return {
             'format': 'llm_optimized',
             'turn': raw_state.get('turn'),
@@ -567,9 +744,35 @@ class StateExtractor:
             'strategic': strategic,
             'tactical': tactical,
             'economic': economic,
+            # Required fields for game_arena FreeCivState compatibility
+            'game': game_dict,
+            'map': self._ensure_valid_map(raw_state.get('map', {})),
+            'players': self._ensure_list(raw_state.get('players')),
+            'units': self._ensure_list(raw_state.get('units')),
+            'cities': self._ensure_list(raw_state.get('cities')),
             'timestamp': time.time(),
             'player_perspective': player_id
         }
+
+    def _extract_player_techs(self, state: Dict[str, Any], player_id: int) -> list:
+        """Extract researched technologies for a player
+
+        Handles both formats:
+        - Dict format: {'player0': [...], 'player1': [...]}
+        - List format: [...] (shared/global techs)
+        """
+        techs = state.get('techs', [])
+
+        # If techs is a dict with per-player keys
+        if isinstance(techs, dict):
+            return techs.get(f'player{player_id}', [])
+
+        # If techs is a list (shared techs for all players)
+        elif isinstance(techs, list):
+            return techs
+
+        # Fallback: empty list
+        return []
 
     def _build_strategic_view(self, state: Dict[str, Any], player_id: int) -> Dict[str, Any]:
         """Build strategic layer focusing on long-term game position"""
@@ -590,7 +793,7 @@ class StateExtractor:
                 'total_players': len(players)
             },
             'tech_position': {
-                'researched': state.get('techs', {}).get(f'player{player_id}', []),
+                'researched': self._extract_player_techs(state, player_id),
                 'research_points': player.get('science', 0)
             },
             'diplomatic_status': self._get_diplomatic_summary(state, player_id),

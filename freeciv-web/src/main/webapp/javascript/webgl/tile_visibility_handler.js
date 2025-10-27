@@ -44,6 +44,7 @@ function webgl_update_tile_known(old_tile, new_tile)
 **************************************************************************/
 function update_tiles_known_vertex_colors()
 {
+
   const colors = [];
 
   for ( let iy = 0; iy < gridY1; iy ++ ) {
@@ -63,8 +64,6 @@ function update_tiles_known_vertex_colors()
   landGeometry.setAttribute( 'vertColor', new THREE.Float32BufferAttribute( colors, 3) );
 
   landGeometry.colorsNeedUpdate = true;
-  //console.log("updated vertex colours (tiles known, irrigation).");
-
 }
 
 

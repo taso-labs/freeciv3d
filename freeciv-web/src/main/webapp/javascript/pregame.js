@@ -17,7 +17,10 @@
 
 ***********************************************************************/
 
-var observing = false;
+// SPECTATOR FIX: Don't overwrite observing if already set by spectator.jsp
+if (typeof observing === 'undefined') {
+  var observing = false;
+}
 var chosen_nation = -1;
 var chosen_style = -1;
 var choosing_player = -1;
@@ -112,6 +115,13 @@ function update_game_info_pregame()
 ****************************************************************************/
 function update_player_info_pregame()
 {
+  // SPECTATOR FIX: Skip pregame UI updates in spectator mode
+  // Spectator doesn't have pregame lobby UI elements (#pregame_player_list, etc.)
+  // Prevents contextMenu errors when PACKET_PLAYER_INFO arrives before client state is set
+  if (window.isSpectator || window.observing) {
+    return;
+  }
+
   var id;
   if (C_S_PREPARING == client_state()) {
     var player_html = "";
@@ -1032,7 +1042,7 @@ function show_intro_dialog(title, message) {
 
   blur_input_on_touchdevice();
 
-  $(".ui-widget-overlay").css("background-image", window.location.href.includes('localhost')  ? "url('/images/backgrounds/6.jpg')" : "url('/data/game_of_the_day.png')");
+  $(".ui-widget-overlay").css("background-image", "url('/data/game_of_the_day.png'), url('/images/backgrounds/6.jpg')");
   $(".ui-widget-overlay").css("background-position", "center");
   $(".ui-widget-overlay").css("background-repeat", "no-repeat");
   $(".ui-widget-overlay").css("background-size", "cover");

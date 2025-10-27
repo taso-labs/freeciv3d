@@ -61,6 +61,9 @@ public class RecentServerStatistics extends HttpServlet {
 			conn = ds.getConnection();
 
 			//
+			// Increased tolerance from 1 to 5 minutes to prevent "invisible server" issue
+			// where servers become unavailable due to temporary network delays or
+			// registration timing issues
 			String query = "	SELECT COUNT(*) AS count " //
 					+ "	  FROM servers " //
 					+ "UNION ALL " //
@@ -69,13 +72,13 @@ public class RecentServerStatistics extends HttpServlet {
 					+ "	 WHERE type = 'singleplayer' " //
 					+ "    AND state = 'Pregame' " //
 					+ "    AND humans = '0' " //
-					+ "    AND stamp >= DATE_SUB(NOW(), INTERVAL 1 MINUTE) " //
+					+ "    AND stamp >= DATE_SUB(NOW(), INTERVAL 5 MINUTE) " //
 					+ "UNION ALL " //
 					+ "	SELECT COUNT(*) AS count " //
 					+ "	  FROM servers " //
 					+ "	 WHERE type = 'multiplayer' " //
 					+ "	   AND state = 'Pregame' " //
-					+ "	   AND stamp >= DATE_SUB(NOW(), INTERVAL 1 MINUTE) ";
+					+ "	   AND stamp >= DATE_SUB(NOW(), INTERVAL 5 MINUTE) ";
 
 			PreparedStatement preparedStatement = conn.prepareStatement(query);
 			ResultSet rs = preparedStatement.executeQuery();

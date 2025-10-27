@@ -38,13 +38,80 @@ Freeciv-Web consists of these components:
   Git repository, and patched to work with a WebSocket/JSON protocol. Implemented in C.
 
 * [Freeciv-proxy](freeciv-proxy) - a WebSocket proxy which allows WebSocket clients in Freeciv-web
-  to send socket requests to Freeciv servers. WebSocket requests are sent from Javascript 
-  in Freeciv-web to nginx, which then proxies the WebSocket messages to freeciv-proxy, 
-  which finally sends Freeciv socket requests to the Freeciv servers. Implemented in Python.
+  to send socket requests to Freeciv servers. WebSocket requests are sent from Javascript
+  in Freeciv-web to nginx, which then proxies the WebSocket messages to freeciv-proxy,
+  which finally sends Freeciv socket requests to the Freeciv servers. Also includes an
+  LLM gateway for AI agent integration via WebSocket API. Implemented in Python.
 
 * [Publite2](publite2) - a process launcher for Freeciv C servers, which manages
-  multiple Freeciv server processes and checks capacity through the Metaserver. 
+  multiple Freeciv server processes and checks capacity through the Metaserver.
   Implemented in Python.
+
+* [LLM Gateway](llm-gateway) - a FastAPI-based WebSocket gateway that enables AI agent integration.
+  Provides a pass-through layer for game_arena LLM agents to control FreeCiv games via WebSocket API.
+  Includes connection management, rate limiting, authentication, and message transformation.
+  Implemented in Python. **(Starts automatically with sensible defaults)**
+
+### Architecture Diagram
+
+```mermaid
+graph LR
+    subgraph "Client Layer"
+        B[Web Browser]
+        A[game_arena<br/>LLM Agents]
+    end
+
+    subgraph "Gateway Layer"
+        N[nginx<br/>Port 80]
+        G[llm-gateway<br/>Port 8003]
+    end
+
+    subgraph "Application Layer"
+        T[Tomcat<br/>freeciv-web]
+        P[freeciv-proxy<br/>Port 8002]
+    end
+
+    subgraph "Game Layer"
+        L[publite2<br/>Launcher]
+        S1[civserver<br/>6001]
+        S2[civserver<br/>6002]
+        SN[civserver<br/>600N]
+    end
+
+    subgraph "Data Layer"
+        M[MySQL<br/>Metaserver]
+        R[Redis<br/>Cache]
+    end
+
+    B -->|HTTP/WS| N
+    N --> T
+    T -->|WebSocket| P
+
+    A -->|WebSocket| G
+    G -->|Transform| P
+
+    P <-->|Socket| S1
+    P <-->|Socket| S2
+    P <-->|Socket| SN
+
+    L -->|Launch| S1
+    L -->|Launch| S2
+    L -->|Register| M
+
+    P <-->|Cache| R
+
+    style B fill:#e3f2fd
+    style A fill:#e1f5fe
+    style G fill:#f3e5f5
+    style P fill:#fff3e0
+    style S1 fill:#e8f5e9
+```
+
+**Standard players** connect via web browser → nginx → Tomcat → freeciv-proxy → civserver
+
+**LLM agents** connect via WebSocket → llm-gateway → freeciv-proxy → civserver
+
+For detailed integration documentation, see [Technical Spec.md](Technical%20Spec.md).
 
 Freeciv 3D
 -------------
@@ -87,11 +154,115 @@ Freeciv-web can easily be built and run from Docker using `docker-compose`.
 
 http://localhost:8080/
 
-Enjoy.
+#### LLM Gateway for AI Integration
 
-Start and stop Freeciv-web with the following commands:  
-  start-freeciv-web.sh  
-  stop-freeciv-web.sh  
+FreeCiv3D includes an LLM Gateway that enables AI agents (like those in game_arena) to play FreeCiv through a WebSocket API. The complete gateway system starts automatically with sensible defaults - no configuration needed for testing.
+
+**Architecture:**
+
+The LLM Gateway consists of two components that start automatically:
+
+1. **Dedicated FreeCiv Proxy (Port 8002)** - Provides `/llmsocket/8002` endpoint for LLM agents
+2. **LLM Gateway API (Port 8003)** - Pass-through layer that connects to the proxy
+
+**Quick Start:**
+```bash
+# Start services (both components start automatically)
+docker-compose up -d
+
+# The LLM WebSocket gateway will be available at:
+# ws://localhost:8003/ws/agent/{agent_id}
+
+# Verify both components started
+docker logs fciv-net | grep -E "(FreeCiv proxy|LLM Gateway)"
+# Expected output:
+# ✓ FreeCiv proxy started on port 8002 (PID: XXXXX)
+# ✓ LLM Gateway started on port 8003 (PID: XXXXX)
+```
+
+**For game_arena Integration:**
+
+The gateway uses authentication tokens to secure connections from game_arena. Default tokens are provided for testing:
+
+* `test-token-fc3d-001`
+* `test-token-fc3d-002`
+
+**For Production:**
+
+Set custom authentication tokens in docker-compose.yml:
+```yaml
+services:
+  fciv-net:
+    environment:
+      - LLM_API_TOKENS=your-prod-token-1,your-prod-token-2
+```
+
+Or use a `.env` file (see [`.env.example`](.env.example) for all options).
+
+**Note**: LLM provider API keys (OpenAI, Gemini, etc.) are handled by game_arena, not freeciv3d.
+
+**Local Development Setup:**
+```bash
+# 1. Create logs directory
+mkdir -p logs
+
+# 2. Start freeciv-proxy locally (for development/testing)
+cd freeciv-proxy
+CACHE_HMAC_SECRET="abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890" \
+API_KEY_SECRET="test1234567890123456789012345" \
+LLM_API_TOKENS="test-token-fc3d-001,test-token-fc3d-002" \
+python3 freeciv-proxy.py
+
+# 3. Test LLM gateway connection
+python3 tests/test_llm_websocket.py localhost 8002
+
+# 4. Test Docker build (optional)
+./tests/test_docker_build.sh
+```
+
+For detailed Docker optimization information, see [DOCKER_OPTIMIZATION.md](DOCKER_OPTIMIZATION.md).
+
+**game_arena Integration:**
+To connect game_arena to FreeCiv3D:
+
+```python
+from game_arena.harness.freeciv_proxy_client import FreeCivProxyClient
+
+client = FreeCivProxyClient(
+    host="localhost",  # or "fciv-net" when running inside Docker network
+    port=8003,  # LLM Gateway API port
+    api_token="test-token-fc3d-001",
+    agent_id="my_ai_agent",
+    game_id="test_game"
+)
+
+# Connect and play
+await client.connect()
+state = await client.get_state()
+# ... AI logic here ...
+```
+
+**Multiplayer LLM Games:**
+
+LLM agents can play against each other in multiplayer mode. The system automatically:
+
+- Allocates multiplayer civserver ports (6001-6009) instead of singleplayer (6000)
+- Uses `/take` command to control AI players (AI*1, AI*2)
+- Manages game sessions so both players connect to the same server
+- Prevents idle timeouts (`--quitidle` disabled for multiplayer)
+- Handles FreeCiv packet protocol (tech research uses tech IDs, not names)
+
+Example with game_arena:
+```bash
+cd /path/to/game_arena
+python3 run_freeciv_game.py --turns 10 --host localhost
+```
+
+This creates two LLM agents (Gemini vs OpenAI) that play against each other for 10 turns.
+
+Start and stop Freeciv-web with the following commands:
+  start-freeciv-web.sh
+  stop-freeciv-web.sh
   status-freeciv-web.sh
 
 ### Running Freeciv-web on Windows Subsystem for Linux (WSL)
