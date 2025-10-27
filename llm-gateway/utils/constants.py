@@ -30,6 +30,11 @@ CONNECTION_ATTEMPT_BLOCK_DURATION = 300  # Block duration for excessive connecti
 REDIS_CONNECTION_TIMEOUT = 5  # Redis connection timeout
 HEALTH_CHECK_INTERVAL = 30.0  # Health check interval
 
+# WebSocket connection constants
+WEBSOCKET_PING_INTERVAL = 20  # Send ping every 20 seconds to detect dead connections
+WEBSOCKET_PING_TIMEOUT = 10  # Wait up to 10 seconds for pong response
+WEBSOCKET_CLOSE_TIMEOUT = 10  # Timeout for graceful close handshake
+
 # Message and data size limits
 # Increased to 100MB to handle large FreeCiv game state packets
 # FreeCiv sends map data, player info, city data that can exceed the default 1MB limit
@@ -63,6 +68,19 @@ MIN_HEARTBEAT_INTERVAL = 1
 MAX_HEARTBEAT_INTERVAL = 300
 MIN_RATE_LIMIT = 1
 MAX_RATE_LIMIT = 10000
+
+# Map size to dimensions mapping (FreeCiv map sizes)
+# Format: (width, height) for each map size
+MAP_SIZE_DIMENSIONS = {
+    "tiny": (40, 40),
+    "small": (60, 60),
+    "medium": (80, 80),
+    "large": (110, 90),
+    "huge": (140, 90)
+}
+
+# Default coordinate limits (when map size is unknown)
+DEFAULT_MAX_COORDINATE = 9999
 
 # Error codes
 ERROR_CODE_INTERNAL = "E500"

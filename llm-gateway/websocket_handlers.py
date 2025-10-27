@@ -18,14 +18,16 @@ try:
     from .config import settings
     from .utils.origin_validator import validate_websocket_origin, get_websocket_origin_info, create_origin_rejection_response
     from .utils.rate_limiter import comprehensive_rate_limiter
-    from .utils.constants import MAX_MESSAGE_SIZE_BYTES, ERROR_CODE_VALIDATION
+    from .utils.constants import (MAX_MESSAGE_SIZE_BYTES, ERROR_CODE_VALIDATION,
+                                   WEBSOCKET_PING_INTERVAL, WEBSOCKET_PING_TIMEOUT, WEBSOCKET_CLOSE_TIMEOUT)
     from .spectator_broadcast import spectator_broadcaster, ViewMode
 except ImportError:
     from connection_manager import connection_manager
     from config import settings
     from utils.origin_validator import validate_websocket_origin, get_websocket_origin_info, create_origin_rejection_response
     from utils.rate_limiter import comprehensive_rate_limiter
-    from utils.constants import MAX_MESSAGE_SIZE_BYTES, ERROR_CODE_VALIDATION
+    from utils.constants import (MAX_MESSAGE_SIZE_BYTES, ERROR_CODE_VALIDATION,
+                                  WEBSOCKET_PING_INTERVAL, WEBSOCKET_PING_TIMEOUT, WEBSOCKET_CLOSE_TIMEOUT)
     from spectator_broadcast import spectator_broadcaster, ViewMode
 
 # Gateway will be injected by main.py to avoid circular imports
@@ -162,12 +164,16 @@ class AgentWebSocketHandler:
             # Set max_size to 100MB to handle large FreeCiv game state packets
             # FreeCiv sends packets with map data, player info, city data that exceed the default 1MB limit
             # This prevents "frame exceeds limit of 1048576 bytes" errors (close code 1009)
+            # Add ping/timeout parameters to detect and close dead connections
             self.proxy_connection = await websockets.connect(
                 proxy_url,
                 max_size=100 * 1024 * 1024,  # 100MB for large game state packets
-                max_queue=64  # Increase queue size to handle multiple large frames
+                max_queue=64,  # Increase queue size to handle multiple large frames
+                ping_interval=WEBSOCKET_PING_INTERVAL,  # Ping every 20s to detect dead connections
+                ping_timeout=WEBSOCKET_PING_TIMEOUT,  # Wait up to 10s for pong response
+                close_timeout=WEBSOCKET_CLOSE_TIMEOUT  # Timeout for graceful close
             )
-            logger.info(f"Connected to proxy for agent {self.agent_id} (max_size=100MB)")
+            logger.info(f"Connected to proxy for agent {self.agent_id} (max_size=100MB, ping_interval={WEBSOCKET_PING_INTERVAL}s)")
 
             # Start listening for proxy messages in background
             asyncio.create_task(self._listen_to_proxy())

@@ -124,8 +124,8 @@ class SecureTokenManager:
                 # Encrypt the token
                 encrypted_token = self._cipher.encrypt(token.encode('utf-8'))
 
-                # Create token hash for validation
-                token_hash = self._create_token_hash(token)
+                # Create token hash for validation (using thread pool to avoid blocking event loop)
+                token_hash = await self.create_token_hash_async(token)
 
                 # Store token info
                 token_info = TokenInfo(
@@ -215,13 +215,13 @@ class SecureTokenManager:
                     self._stats["validation_failures"] += 1
                     return False
 
-                # Validate using hash comparison (timing-safe)
+                # Validate using hash comparison (timing-safe, using thread pool to avoid blocking event loop)
                 stored_hash = self._token_hashes.get(agent_id)
                 if not stored_hash:
                     self._stats["validation_failures"] += 1
                     return False
 
-                is_valid = self._verify_token_hash(token, stored_hash)
+                is_valid = await self.verify_token_hash_async(token, stored_hash)
 
                 if is_valid:
                     token_info.last_used = time.time()
@@ -396,22 +396,61 @@ class SecureTokenManager:
 
     # Internal methods
 
-    def _create_token_hash(self, token: str) -> str:
-        """Create a secure hash of the token using PBKDF2-HMAC-SHA256 with a per-token random salt"""
-        salt = os.urandom(16)
+    def _pbkdf2_derive_sync(self, token: str, salt: bytes) -> bytes:
+        """
+        Synchronous PBKDF2 derivation (CPU-intensive)
+
+        This is intentionally synchronous and should be called via asyncio.to_thread()
+        to avoid blocking the event loop.
+        """
         kdf = PBKDF2HMAC(
             algorithm=hashes.SHA256(),
             length=32,
             salt=salt,
             iterations=100_000,
         )
-        key = kdf.derive(token.encode('utf-8'))
+        return kdf.derive(token.encode('utf-8'))
+
+    def _create_token_hash(self, token: str) -> str:
+        """
+        Create a secure hash of the token using PBKDF2-HMAC-SHA256 with a per-token random salt
+
+        NOTE: This is a synchronous method. For async contexts, use create_token_hash_async()
+        """
+        salt = os.urandom(16)
+        key = self._pbkdf2_derive_sync(token, salt)
         # Store as base64(salt) + '$' + base64(digest)
         return base64.b64encode(salt).decode('utf-8') + "$" + base64.b64encode(key).decode('utf-8')
+
+    async def create_token_hash_async(self, token: str) -> str:
+        """
+        Async version of _create_token_hash that runs PBKDF2 in thread pool
+
+        This prevents blocking the event loop during CPU-intensive hashing.
+        """
+        salt = os.urandom(16)
+        # Run CPU-intensive PBKDF2 in thread pool
+        key = await asyncio.to_thread(self._pbkdf2_derive_sync, token, salt)
+        return base64.b64encode(salt).decode('utf-8') + "$" + base64.b64encode(key).decode('utf-8')
+
+    def _pbkdf2_verify_sync(self, token: str, salt: bytes, expected_key: bytes) -> bool:
+        """
+        Synchronous PBKDF2 verification (CPU-intensive)
+
+        This is intentionally synchronous and should be called via asyncio.to_thread()
+        to avoid blocking the event loop.
+        """
+        try:
+            derived_key = self._pbkdf2_derive_sync(token, salt)
+            return hmac.compare_digest(expected_key, derived_key)
+        except Exception:
+            return False
 
     def _verify_token_hash(self, token: str, stored_hash: str) -> bool:
         """
         Verify a token against its stored PBKDF2 hash
+
+        NOTE: This is a synchronous method. For async contexts, use verify_token_hash_async()
 
         Args:
             token: Plain text token to verify
@@ -438,19 +477,46 @@ class SecureTokenManager:
             except Exception:
                 return False
 
-            # Derive key from provided token using same salt
-            kdf = PBKDF2HMAC(
-                algorithm=hashes.SHA256(),
-                length=32,
-                salt=salt,
-                iterations=100_000,
-            )
+            # Verify using PBKDF2
+            return self._pbkdf2_verify_sync(token, salt, expected_key)
+
+        except Exception as e:
+            logger.debug(f"Error verifying token hash: {e}")
+            return False
+
+    async def verify_token_hash_async(self, token: str, stored_hash: str) -> bool:
+        """
+        Async version of _verify_token_hash that runs PBKDF2 in thread pool
+
+        This prevents blocking the event loop during CPU-intensive hashing.
+
+        Args:
+            token: Plain text token to verify
+            stored_hash: Stored hash in format base64(salt)$base64(key)
+
+        Returns:
+            bool: True if token matches the stored hash
+        """
+        try:
+            # Handle both old SHA256 hashes and new PBKDF2 hashes for backward compatibility
+            if '$' not in stored_hash:
+                # Legacy SHA256 hash - quick comparison without thread pool
+                legacy_hash = hashlib.sha256(token.encode('utf-8')).hexdigest()
+                return hmac.compare_digest(stored_hash, legacy_hash)
+
+            # New PBKDF2 format
+            parts = stored_hash.split('$')
+            if len(parts) != 2:
+                return False
 
             try:
-                derived_key = kdf.derive(token.encode('utf-8'))
-                return hmac.compare_digest(expected_key, derived_key)
+                salt = base64.b64decode(parts[0])
+                expected_key = base64.b64decode(parts[1])
             except Exception:
                 return False
+
+            # Run CPU-intensive PBKDF2 verification in thread pool
+            return await asyncio.to_thread(self._pbkdf2_verify_sync, token, salt, expected_key)
 
         except Exception as e:
             logger.debug(f"Error verifying token hash: {e}")

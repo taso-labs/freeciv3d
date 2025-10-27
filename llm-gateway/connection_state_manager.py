@@ -294,6 +294,41 @@ class ConnectionStateManager:
 
             return True
 
+    async def get_healthy_connection(self, game_id: str) -> Optional[websockets.WebSocketServerProtocol]:
+        """
+        Atomically check if connection is healthy and return it (thread-safe)
+
+        This method prevents race conditions by checking health and retrieving
+        the connection in a single atomic operation under lock.
+
+        Args:
+            game_id: Game identifier
+
+        Returns:
+            WebSocket connection if healthy, None otherwise
+        """
+        async with self._connection_lock:
+            connection_info = self._connections.get(game_id)
+
+            if not connection_info:
+                return None
+
+            if connection_info.status != ConnectionStatus.CONNECTED:
+                return None
+
+            if not connection_info.connection:
+                return None
+
+            # Check if WebSocket is closed (close_code is None when open)
+            if connection_info.connection.close_code is not None:
+                await self._mark_connection_unhealthy_unsafe(game_id)
+                return None
+
+            # Update last used time
+            connection_info.last_used = time.time()
+
+            return connection_info.connection
+
     async def get_all_connections(self) -> Dict[str, ConnectionInfo]:
         """
         Get all connections (thread-safe copy)

@@ -40,6 +40,7 @@ try:
     from .metaserver_client import metaserver_client
     from .utils.safe_access import get_agent_game_id, get_agent_config, safe_get_nested
     from .utils.constants import *
+    from .validation import sanitize_for_logging
 except ImportError:
     from config import settings, get_cors_origins, get_freeciv_proxy_url, validate_settings
     from connection_manager import connection_manager, ConnectionInfo
@@ -49,6 +50,7 @@ except ImportError:
     from metaserver_client import metaserver_client
     from utils.safe_access import get_agent_game_id, get_agent_config, safe_get_nested
     from utils.constants import *
+    from validation import sanitize_for_logging
 
 # Configure logging
 import os
@@ -112,6 +114,12 @@ class LLMGateway:
         self.game_sessions: Dict[str, Dict[str, Any]] = {}
         self._running = False
 
+        # Legacy connection tracking (kept for backward compatibility with retry logic)
+        # TODO: Migrate fully to connection_state_manager and remove these
+        self.proxy_connections: Dict[str, Any] = {}  # Deprecated - use connection_state_manager
+        self.failed_connections: Dict[str, float] = {}  # game_id -> failure timestamp
+        self.connection_retry_counts: Dict[str, int] = {}  # game_id -> retry count
+
         # Note: Complex state management removed - gateway acts as pure pass-through
         # The proxy's LLM handler manages game state, authentication, and actions
         # game_sessions is kept for health monitoring and basic session tracking
@@ -160,7 +168,7 @@ class LLMGateway:
             }
 
         except Exception as e:
-            logger.error(f"Error registering agent {agent_id}: {e}")
+            logger.error(f"Error registering agent {sanitize_for_logging(agent_id)}: {sanitize_for_logging(e)}")
             return {
                 "success": False,
                 "error": f"Registration failed: {str(e)}"
@@ -196,8 +204,13 @@ class LLMGateway:
 
             proxy_url = get_freeciv_proxy_url()
 
-            # Connect to FreeCiv proxy
-            websocket = await websockets.connect(proxy_url)
+            # Connect to FreeCiv proxy with timeout parameters to detect dead connections
+            websocket = await websockets.connect(
+                proxy_url,
+                ping_interval=WEBSOCKET_PING_INTERVAL,
+                ping_timeout=WEBSOCKET_PING_TIMEOUT,
+                close_timeout=WEBSOCKET_CLOSE_TIMEOUT
+            )
 
             # Add to connection state manager (thread-safe)
             success = await connection_state_manager.add_connection(game_id, websocket)
@@ -226,7 +239,7 @@ class LLMGateway:
             }
 
         except Exception as e:
-            logger.error(f"Failed to connect to FreeCiv proxy for game {game_id}: {e}")
+            logger.error(f"Failed to connect to FreeCiv proxy for game {sanitize_for_logging(game_id)}: {sanitize_for_logging(e)}")
             await connection_state_manager.mark_connection_failed(game_id, str(e))
             return {
                 "success": False,
@@ -236,17 +249,19 @@ class LLMGateway:
     async def forward_to_proxy(self, game_id: str, message: Dict[str, Any]) -> bool:
         """Forward message to FreeCiv proxy with retry logic"""
         try:
-            # Check if we have a working connection using connection state manager
-            proxy_ws = await connection_state_manager.get_connection(game_id)
-            if not proxy_ws or not await connection_state_manager.is_connection_healthy(game_id):
+            # Atomically check if we have a healthy connection (prevents race conditions)
+            proxy_ws = await connection_state_manager.get_healthy_connection(game_id)
+            if not proxy_ws:
+                # No healthy connection, try to establish one
                 success = await self._ensure_proxy_connection(game_id)
                 if not success:
-                    logger.error(f"Failed to establish proxy connection for game {game_id}")
+                    logger.error(f"Failed to establish proxy connection for game {sanitize_for_logging(game_id)}")
                     return False
-                proxy_ws = await connection_state_manager.get_connection(game_id)
+                # Retrieve the newly established connection atomically
+                proxy_ws = await connection_state_manager.get_healthy_connection(game_id)
 
             if not proxy_ws:
-                logger.error(f"No proxy connection available for game {game_id}")
+                logger.error(f"No proxy connection available for game {sanitize_for_logging(game_id)}")
                 return False
 
             await proxy_ws.send(json.dumps(message))
@@ -254,7 +269,7 @@ class LLMGateway:
             return True
 
         except Exception as e:
-            logger.error(f"Error forwarding message to proxy for game {game_id}: {e}")
+            logger.error(f"Error forwarding message to proxy for game {sanitize_for_logging(game_id)}: {sanitize_for_logging(e)}")
             # Mark connection as failed using connection state manager
             await connection_state_manager.mark_connection_failed(game_id, str(e))
             return False
@@ -285,7 +300,7 @@ class LLMGateway:
                     return True
 
             except Exception as e:
-                logger.warning(f"Connection attempt {attempt + 1} failed for game {game_id}: {e}")
+                logger.warning(f"Connection attempt {attempt + 1} failed for game {sanitize_for_logging(game_id)}: {sanitize_for_logging(e)}")
 
             # Calculate exponential backoff delay
             if attempt < settings.max_retry_attempts - 1:  # Don't wait after last attempt
@@ -306,23 +321,14 @@ class LLMGateway:
         return False
 
     async def _is_connection_healthy(self, game_id: str) -> bool:
-        """Check if connection is healthy"""
-        if game_id not in self.proxy_connections:
-            return False
+        """
+        Check if connection is healthy
 
-        try:
-            proxy_ws = self.proxy_connections[game_id]
-            # Check if WebSocket is closed (close_code is None when open)
-            if proxy_ws.close_code is not None:
-                return False
-
-            # Send a ping to test connection
-            await proxy_ws.ping()
-            return True
-
-        except Exception as e:
-            logger.debug(f"Connection health check failed for game {game_id}: {e}")
-            return False
+        DEPRECATED: Use connection_state_manager.is_connection_healthy() instead
+        This method is kept for backward compatibility only.
+        """
+        # Delegate to connection state manager (thread-safe implementation)
+        return await connection_state_manager.is_connection_healthy(game_id)
 
     async def _initialize_freeciv_game(self, game_id: str, websocket) -> Dict[str, Any]:
         """Initialize a FreeCiv game by sending necessary protocol messages"""
@@ -510,7 +516,10 @@ class LLMGateway:
         # Record failure time
         self.failed_connections[game_id] = time.time()
 
-        # Remove the failed connection
+        # Remove the failed connection using connection state manager (thread-safe)
+        await connection_state_manager.remove_connection(game_id)
+
+        # Also remove from legacy dictionary if it exists (backward compatibility)
         if game_id in self.proxy_connections:
             try:
                 await self.proxy_connections[game_id].close()

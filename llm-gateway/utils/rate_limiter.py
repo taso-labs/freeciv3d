@@ -220,19 +220,22 @@ class MessageSizeValidator:
 
         return True
 
-    def validate_message_content(self, message: str) -> Tuple[bool, str]:
+    def validate_message_content(self, message: str) -> Tuple[bool, str, Optional[Dict]]:
         """
-        Comprehensive message validation
+        Comprehensive message validation with parsed JSON return
 
         Args:
             message: Message to validate
 
         Returns:
-            Tuple of (is_valid, error_message)
+            Tuple of (is_valid, error_message, parsed_data)
+            - is_valid: bool indicating if validation passed
+            - error_message: str with error details (empty if valid)
+            - parsed_data: Dict with parsed JSON if valid, None if invalid
         """
         # Size validation
         if not self.validate_size(message):
-            return False, f"Message size exceeds limit ({self.max_message_size} bytes)"
+            return False, f"Message size exceeds limit ({self.max_message_size} bytes)", None
 
         # JSON parsing and depth validation
         try:
@@ -240,12 +243,13 @@ class MessageSizeValidator:
             data = json.loads(message)
 
             if not self.validate_json_depth(data):
-                return False, f"JSON nesting depth exceeds limit ({self.max_json_depth})"
+                return False, f"JSON nesting depth exceeds limit ({self.max_json_depth})", None
+
+            # Return parsed data to avoid double parsing by caller
+            return True, "", data
 
         except json.JSONDecodeError as e:
-            return False, f"Invalid JSON format: {str(e)}"
-
-        return True, ""
+            return False, f"Invalid JSON format: {str(e)}", None
 
 
 class ComprehensiveRateLimiter:
@@ -307,7 +311,7 @@ class ComprehensiveRateLimiter:
 
         # Message size validation
         if message_content:
-            is_valid, error_msg = self.size_validator.validate_message_content(message_content)
+            is_valid, error_msg, _ = self.size_validator.validate_message_content(message_content)
             if not is_valid:
                 self._stats["size_violations"] += 1
                 await self._add_violation(identifier)

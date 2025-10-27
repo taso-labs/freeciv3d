@@ -7,9 +7,15 @@ Provides comprehensive validation for all LLM Gateway inputs
 """
 
 from typing import Dict, Any, List, Optional, Union
-from pydantic import BaseModel, Field, validator, constr, conint
+from pydantic import BaseModel, Field, validator, constr, conint, root_validator
 import re
 import time
+
+# Import map size constants
+try:
+    from .utils.constants import MAP_SIZE_DIMENSIONS, DEFAULT_MAX_COORDINATE
+except ImportError:
+    from utils.constants import MAP_SIZE_DIMENSIONS, DEFAULT_MAX_COORDINATE
 
 
 class AgentIdValidator(BaseModel):
@@ -44,9 +50,42 @@ class ApiTokenValidator(BaseModel):
 
 
 class CoordinateValidator(BaseModel):
-    """Validates game coordinates"""
-    x: conint(ge=0, le=9999) = Field(..., description="X coordinate")
-    y: conint(ge=0, le=9999) = Field(..., description="Y coordinate")
+    """
+    Validates game coordinates with map-size aware bounds checking
+
+    If map_size is provided, validates against actual map dimensions.
+    Otherwise uses default maximum of 9999 for backward compatibility.
+    """
+    x: int = Field(..., ge=0, description="X coordinate")
+    y: int = Field(..., ge=0, description="Y coordinate")
+    map_size: Optional[str] = Field(None, description="Map size (tiny/small/medium/large/huge)")
+
+    @root_validator
+    def validate_coordinates_against_map_size(cls, values):
+        """Validate coordinates are within map bounds"""
+        x = values.get('x')
+        y = values.get('y')
+        map_size = values.get('map_size')
+
+        if x is None or y is None:
+            return values
+
+        # Determine max bounds based on map size
+        if map_size and map_size.lower() in MAP_SIZE_DIMENSIONS:
+            max_x, max_y = MAP_SIZE_DIMENSIONS[map_size.lower()]
+
+            if x >= max_x:
+                raise ValueError(f'X coordinate {x} exceeds map width {max_x} for {map_size} map')
+            if y >= max_y:
+                raise ValueError(f'Y coordinate {y} exceeds map height {max_y} for {map_size} map')
+        else:
+            # Use default maximum for unknown or unspecified map sizes (backward compatible)
+            if x > DEFAULT_MAX_COORDINATE:
+                raise ValueError(f'X coordinate {x} exceeds maximum {DEFAULT_MAX_COORDINATE}')
+            if y > DEFAULT_MAX_COORDINATE:
+                raise ValueError(f'Y coordinate {y} exceeds maximum {DEFAULT_MAX_COORDINATE}')
+
+        return values
 
 
 class LLMConnectData(BaseModel):
@@ -258,9 +297,22 @@ def validate_api_token(api_token: str) -> str:
     return validator.api_token
 
 
-def validate_coordinates(x: int, y: int) -> Dict[str, int]:
-    """Validate game coordinates"""
-    validator = CoordinateValidator(x=x, y=y)
+def validate_coordinates(x: int, y: int, map_size: Optional[str] = None) -> Dict[str, int]:
+    """
+    Validate game coordinates with optional map-size aware bounds checking
+
+    Args:
+        x: X coordinate
+        y: Y coordinate
+        map_size: Optional map size (tiny/small/medium/large/huge) for accurate bounds checking
+
+    Returns:
+        Dict with validated x, y coordinates
+
+    Raises:
+        ValueError: If coordinates exceed map bounds
+    """
+    validator = CoordinateValidator(x=x, y=y, map_size=map_size)
     return {"x": validator.x, "y": validator.y}
 
 
@@ -287,6 +339,53 @@ def sanitize_string_input(input_str: str, max_length: int = 256) -> str:
 
     if not sanitized:
         raise ValueError("Input cannot be empty after sanitization")
+
+    return sanitized
+
+
+def sanitize_for_logging(value: Any, max_length: int = 200) -> str:
+    """
+    Sanitize user-controlled data for safe logging
+
+    Prevents log injection attacks by removing or escaping dangerous characters
+    that could be used to:
+    - Split log entries (newlines, carriage returns)
+    - Execute control sequences (ANSI escape codes, null bytes)
+    - Obfuscate log analysis (control characters)
+
+    Args:
+        value: Value to sanitize (will be converted to string)
+        max_length: Maximum length of sanitized output
+
+    Returns:
+        Sanitized string safe for logging
+
+    Examples:
+        >>> sanitize_for_logging("game_id\\nmalicious_line")
+        'game_id_malicious_line'
+        >>> sanitize_for_logging("agent\\x00hidden")
+        'agenthidden'
+    """
+    if value is None:
+        return "None"
+
+    # Convert to string
+    str_value = str(value)
+
+    # Remove dangerous characters:
+    # - Null bytes (\x00)
+    # - Control characters (\x00-\x1f, \x7f-\x9f) including newlines, tabs, etc.
+    # - ANSI escape sequences (commonly used for log injection)
+    sanitized = re.sub(r'[\x00-\x1f\x7f-\x9f]', '', str_value)
+
+    # Replace common injection characters with safe alternatives
+    sanitized = sanitized.replace('\n', '_')
+    sanitized = sanitized.replace('\r', '_')
+    sanitized = sanitized.replace('\t', ' ')
+
+    # Limit length to prevent log flooding
+    if len(sanitized) > max_length:
+        sanitized = sanitized[:max_length] + "...[truncated]"
 
     return sanitized
 
