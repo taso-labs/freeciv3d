@@ -187,6 +187,128 @@ sequenceDiagram
 | MySQL | 3306 | Internal only | Metaserver database |
 | Redis | 6379 | Internal only | State cache, rate limiting |
 
+#### Server Allocation API
+
+The LLM Gateway integration includes a **dynamic server pool management system** that prevents port conflicts in concurrent LLM games. Game servers (ports 6000-6009) are treated as shared resources that must be explicitly allocated before use and released after completion.
+
+##### Architecture Pattern
+
+```mermaid
+sequenceDiagram
+    participant GA as game_arena
+    participant SA as ServerAllocator<br/>(Servlet)
+    participant DB as MySQL<br/>(servers table)
+    participant SR as ServerRelease<br/>(Servlet)
+
+    Note over GA,SR: Allocation Phase
+    GA->>SA: POST /meta/allocate?type=multiplayer
+    SA->>DB: SELECT available server
+    DB-->>SA: port=6001, host=localhost
+    SA->>DB: UPDATE available=0
+    SA-->>GA: {port: 6001, proxy_port: 7001}
+
+    Note over GA,SR: Gaming Phase
+    GA->>GA: Connect agents to port 6001<br/>via llm-gateway (port 8003)
+    GA->>GA: Play game...
+
+    Note over GA,SR: Release Phase
+    GA->>SR: POST /meta/release?host=localhost&port=6001
+    SR->>DB: UPDATE available=1, state='Pregame'
+    SR-->>GA: {success: true, message: "Server released"}
+```
+
+##### ServerAllocator Servlet
+
+**Purpose**: Allocates an available game server from the pool.
+
+**Endpoint**: `POST /freeciv-web/meta/allocate`
+
+**Request**:
+```http
+POST /freeciv-web/meta/allocate?type=multiplayer HTTP/1.1
+```
+
+**Response**:
+```json
+{
+  "success": true,
+  "host": "localhost",
+  "port": 6001,
+  "proxy_port": 7001,
+  "type": "multiplayer"
+}
+```
+
+**Implementation** ([ServerAllocator.java](freeciv-web/src/main/java/org/freeciv/servlet/ServerAllocator.java)):
+```sql
+-- Find available server
+SELECT host, port FROM servers
+WHERE type = ? AND state = 'Pregame' AND available = 1
+ORDER BY port LIMIT 1
+
+-- Mark as unavailable
+UPDATE servers SET available = 0, stamp = NOW()
+WHERE host = ? AND port = ?
+```
+
+**Key Logic**:
+- Proxy port calculated as `game_port + 1000` (e.g., 6001 → 7001)
+- Marks server as `available = 0` to prevent concurrent allocation
+- Returns 503 if no servers available for requested game type
+
+##### ServerRelease Servlet
+
+**Purpose**: Returns a game server to the available pool after game completion.
+
+**Endpoint**: `POST /freeciv-web/meta/release`
+
+**Request**:
+```http
+POST /freeciv-web/meta/release?host=localhost&port=6001 HTTP/1.1
+```
+
+**Response**:
+```json
+{
+  "success": true,
+  "host": "localhost",
+  "port": 6001,
+  "message": "Server released and available"
+}
+```
+
+**Implementation** ([ServerRelease.java](freeciv-web/src/main/java/org/freeciv/servlet/ServerRelease.java)):
+```sql
+-- Return server to pool
+UPDATE servers SET available = 1, state = 'Pregame', stamp = NOW()
+WHERE host = ? AND port = ?
+```
+
+##### MetaserverClient (Python)
+
+The llm-gateway provides a Python client for calling these servlets ([metaserver_client.py](llm-gateway/metaserver_client.py)):
+
+```python
+from llm_gateway.metaserver_client import metaserver_client
+
+# Allocate server
+server_info = await metaserver_client.allocate_server(game_type="multiplayer")
+# Returns: {"host": "localhost", "port": 6001, "proxy_port": 7001}
+
+# Use server for game...
+
+# Release when done
+await metaserver_client.release_server("localhost", 6001)
+```
+
+**Why This Matters**:
+- **Prevents Port Conflicts**: Multiple concurrent LLM games can run without collision
+- **Resource Pooling**: Efficient utilization of game server capacity (10 servers support 10 concurrent games)
+- **Clean Separation**: Server lifecycle management (servlets) separate from game communication (llm-gateway)
+- **Scalability**: Easy to add more servers by updating the `servers` table
+
+For complete API documentation, see [llm-gateway/README.md](llm-gateway/README.md).
+
 #### Service Startup Sequence
 
 ```mermaid

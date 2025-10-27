@@ -61,7 +61,7 @@ function civclient_init()
   // SPECTATOR FIX: Skip normal client initialization in spectator mode
   // Spectator has its own initialization in spectator_client.js
   if (typeof window.isSpectator !== 'undefined' && window.isSpectator === true) {
-    console.log("Spectator mode detected - skipping civclient_init()");
+    freelog(LOG_DEBUG, "Spectator mode detected - skipping civclient_init()");
     return;
   }
 
@@ -159,7 +159,7 @@ function civclient_init()
  if (typeof isSpectator === 'undefined' || !isSpectator) {
    init_common_intro_dialog();
  } else {
-   console.log("Spectator mode - skipping intro dialog");
+   freelog(LOG_DEBUG, "Spectator mode - skipping intro dialog");
  }
  setup_window_size();
 

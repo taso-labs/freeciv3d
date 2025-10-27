@@ -27,10 +27,34 @@ var LOG_DEBUG = 4;		/* suppressed unless DEBUG defined;
 
 
 
+/**
+ * Centralized logging function with level-based filtering
+ *
+ * @param {number} level - Log level (LOG_FATAL, LOG_ERROR, LOG_NORMAL, LOG_VERBOSE, LOG_DEBUG)
+ * @param {string} message - Message to log
+ */
 function freelog(level, message)
 {
+  // In production, suppress verbose and debug logs unless debug_active is enabled
+  if (typeof debug_active !== 'undefined' && !debug_active && level >= LOG_VERBOSE) {
+    return;
+  }
 
-  console.log(message);
-
+  // Use appropriate console method based on log level
+  switch(level) {
+    case LOG_FATAL:
+    case LOG_ERROR:
+      console.error(message);
+      break;
+    case LOG_NORMAL:
+      console.info(message);
+      break;
+    case LOG_VERBOSE:
+    case LOG_DEBUG:
+      console.log(message);
+      break;
+    default:
+      console.log(message);
+  }
 }
 
