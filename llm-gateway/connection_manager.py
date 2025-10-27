@@ -201,18 +201,6 @@ class ConnectionManager:
 
         return connections
 
-    async def broadcast_to_spectators(self, game_id: str, message: Dict[str, Any]):
-        """Broadcast message to all spectators of a game"""
-        spectator_connections = await self.get_spectator_connections(game_id)
-
-        for connection_info in spectator_connections:
-            try:
-                await connection_info.websocket.send_text(json.dumps(message))
-            except Exception as e:
-                logger.warning(f"Error broadcasting to spectator {connection_info.connection_id}: {e}")
-                # Schedule for removal
-                asyncio.create_task(self.handle_disconnect(connection_info.connection_id))
-
     async def send_to_agent(self, agent_id: str, message: Dict[str, Any]) -> bool:
         """Send message to a specific agent (first available connection)"""
         agent_connections = await self.get_agent_connections(agent_id)

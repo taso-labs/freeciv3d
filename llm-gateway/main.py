@@ -35,7 +35,7 @@ try:
     from .api_endpoints import GameConfig, FreeCivAction
     from .websocket_handlers import AgentWebSocketHandler, SpectatorWebSocketHandler
     from .request_manager import request_manager
-    from .connection_state_manager import connection_state_manager
+    from .connection_state_manager import connection_state_manager, ConnectionStatus
     from .security.token_manager import secure_token_manager
     from .metaserver_client import metaserver_client
     from .utils.safe_access import get_agent_game_id, get_agent_config, safe_get_nested
@@ -45,7 +45,7 @@ except ImportError:
     from config import settings, get_cors_origins, get_freeciv_proxy_url, validate_settings
     from connection_manager import connection_manager, ConnectionInfo
     from request_manager import request_manager
-    from connection_state_manager import connection_state_manager
+    from connection_state_manager import connection_state_manager, ConnectionStatus
     from security.token_manager import secure_token_manager
     from metaserver_client import metaserver_client
     from utils.safe_access import get_agent_game_id, get_agent_config, safe_get_nested
@@ -86,6 +86,11 @@ app.add_middleware(
 # Rate limiting setup
 if HAS_SLOWAPI:
     # Use Redis for distributed rate limiting if available, otherwise in-memory
+    # TODO: Add test for Redis failure scenarios:
+    #   - What happens when Redis connection fails during startup?
+    #   - How does rate limiting degrade when Redis becomes unavailable?
+    #   - Does the in-memory fallback work correctly under load?
+    #   - Are rate limit counters properly synchronized after Redis reconnection?
     try:
         import redis
         redis_client = redis.from_url(settings.redis_url, db=settings.redis_db)
@@ -113,12 +118,6 @@ class LLMGateway:
         # Referenced by health endpoint and session status queries
         self.game_sessions: Dict[str, Dict[str, Any]] = {}
         self._running = False
-
-        # Legacy connection tracking (kept for backward compatibility with retry logic)
-        # TODO: Migrate fully to connection_state_manager and remove these
-        self.proxy_connections: Dict[str, Any] = {}  # Deprecated - use connection_state_manager
-        self.failed_connections: Dict[str, float] = {}  # game_id -> failure timestamp
-        self.connection_retry_counts: Dict[str, int] = {}  # game_id -> retry count
 
         # Note: Complex state management removed - gateway acts as pure pass-through
         # The proxy's LLM handler manages game state, authentication, and actions
@@ -257,12 +256,11 @@ class LLMGateway:
                 if not success:
                     logger.error(f"Failed to establish proxy connection for game {sanitize_for_logging(game_id)}")
                     return False
-                # Retrieve the newly established connection atomically
+                # Retrieve the newly established connection atomically only if establishment succeeded
                 proxy_ws = await connection_state_manager.get_healthy_connection(game_id)
-
-            if not proxy_ws:
-                logger.error(f"No proxy connection available for game {sanitize_for_logging(game_id)}")
-                return False
+                if not proxy_ws:
+                    logger.error(f"No proxy connection available after establishment for game {sanitize_for_logging(game_id)}")
+                    return False
 
             await proxy_ws.send(json.dumps(message))
             logger.debug(f"Message forwarded to proxy for game {game_id}")
@@ -276,15 +274,17 @@ class LLMGateway:
 
     async def _ensure_proxy_connection(self, game_id: str) -> bool:
         """Ensure proxy connection exists with retry logic"""
-        # Check if connection is in cooldown period
-        if game_id in self.failed_connections:
-            last_failure = self.failed_connections[game_id]
-            cooldown_period = COOLDOWN_PERIOD
-            if time.time() - last_failure < cooldown_period:
+        # Check if connection exists and get its info from state manager
+        connections = await connection_state_manager.get_all_connections()
+        connection_info = connections.get(game_id)
+
+        # Check if connection is in cooldown period (recently failed)
+        if connection_info and connection_info.status == ConnectionStatus.FAILED:
+            if connection_info.last_error and time.time() - connection_info.last_used < COOLDOWN_PERIOD:
                 logger.debug(f"Connection for game {game_id} in cooldown period")
                 return False
 
-        retry_count = self.connection_retry_counts.get(game_id, 0)
+        retry_count = connection_info.retry_count if connection_info else 0
 
         for attempt in range(settings.max_retry_attempts):
             try:
@@ -292,10 +292,7 @@ class LLMGateway:
 
                 success = await self.connect_to_freeciv_proxy(game_id)
                 if success.get("success", False):
-                    # Reset retry count on successful connection
-                    self.connection_retry_counts[game_id] = 0
-                    if game_id in self.failed_connections:
-                        del self.failed_connections[game_id]
+                    # Connection successful - state manager handles tracking
                     logger.info(f"Successfully connected to proxy for game {game_id}")
                     return True
 
@@ -316,7 +313,6 @@ class LLMGateway:
                 await asyncio.sleep(total_delay)
 
         # All attempts failed
-        self.connection_retry_counts[game_id] = retry_count + 1
         await self._handle_connection_failure(game_id)
         return False
 
@@ -332,6 +328,11 @@ class LLMGateway:
 
     async def _initialize_freeciv_game(self, game_id: str, websocket) -> Dict[str, Any]:
         """Initialize a FreeCiv game by sending necessary protocol messages"""
+        # TODO: Add test for connection loss during authentication:
+        #   - Proxy closes connection between sending auth and receiving response
+        #   - Verify timeout handling works correctly (currently 5.0s)
+        #   - Ensure connection cleanup happens on auth failure
+        #   - Test partial authentication scenarios (sent but not confirmed)
         try:
             # Get API token for LLM authentication
             api_token = os.getenv("LLM_API_TOKENS", "test-token-fc3d-001").split(",")[0]
@@ -513,22 +514,17 @@ class LLMGateway:
         """Handle connection failure"""
         logger.warning(f"Handling connection failure for game {game_id}")
 
-        # Record failure time
-        self.failed_connections[game_id] = time.time()
+        # Mark connection as failed (state manager records failure time)
+        await connection_state_manager.mark_connection_failed(game_id, "Connection attempts exhausted")
 
         # Remove the failed connection using connection state manager (thread-safe)
         await connection_state_manager.remove_connection(game_id)
 
-        # Also remove from legacy dictionary if it exists (backward compatibility)
-        if game_id in self.proxy_connections:
-            try:
-                await self.proxy_connections[game_id].close()
-            except:
-                pass
-            del self.proxy_connections[game_id]
-
         # Implement circuit breaker pattern
-        retry_count = self.connection_retry_counts.get(game_id, 0)
+        connections = await connection_state_manager.get_all_connections()
+        connection_info = connections.get(game_id)
+        retry_count = connection_info.retry_count if connection_info else 0
+
         if retry_count >= settings.max_retry_attempts:
             logger.error(f"Max retry attempts reached for game {game_id}. Implementing circuit breaker.")
             # Could trigger alerts, disable game, etc.

@@ -205,9 +205,11 @@ class LLMMessage(BaseModel):
 
     @validator('timestamp')
     def validate_timestamp(cls, v):
-        # Check if timestamp is reasonable (within last 24 hours to 1 hour in future)
+        # Check if timestamp is reasonable (within last 24 hours to 10 seconds in future)
+        # Reduced future tolerance from 1 hour to 10 seconds to prevent timestamp-based attacks
+        # while still allowing for reasonable clock skew
         now = time.time()
-        if v < (now - 86400) or v > (now + 3600):
+        if v < (now - 86400) or v > (now + 10):
             raise ValueError('Timestamp out of reasonable range')
         return v
 

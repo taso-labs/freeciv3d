@@ -77,6 +77,11 @@ class AgentWebSocketHandler:
                     data = await self.websocket.receive_text()
 
                     # WebSocket-level message size enforcement
+                    # TODO: Add test for accumulated buffer scenarios:
+                    #   - Multiple large messages sent rapidly (within rate limit window)
+                    #   - Combined buffer size exceeding MAX_MESSAGE_SIZE_BYTES across pending messages
+                    #   - Memory pressure from buffered messages in WebSocket queue
+                    #   - Behavior when buffer fills and new messages arrive
                     message_size = len(data.encode('utf-8'))
                     if message_size > MAX_MESSAGE_SIZE_BYTES:
                         await self._send_error(
