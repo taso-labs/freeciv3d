@@ -197,7 +197,7 @@ class LLMMessage(BaseModel):
         valid_types = [
             'llm_connect', 'llm_disconnect', 'state_query', 'state_update',
             'action', 'action_result', 'turn_start', 'turn_end',
-            'spectator_update', 'ping', 'pong', 'error'
+            'ping', 'pong', 'error'
         ]
         if v not in valid_types:
             raise ValueError(f'Invalid message type: {v}')

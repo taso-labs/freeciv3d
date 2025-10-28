@@ -51,11 +51,6 @@
         "action_timeout_ms": 30,
         "connection_timeout_s": 60
     },
-    "spectator": {
-        "enabled": true,
-        "endpoint": "/spectator",
-        "allow_state_access": true
-    },
     "logging": {
         "level": "INFO",
         "log_actions": true,

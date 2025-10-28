@@ -20,7 +20,6 @@ try:
     from .utils.rate_limiter import comprehensive_rate_limiter
     from .utils.constants import (MAX_MESSAGE_SIZE_BYTES, ERROR_CODE_VALIDATION,
                                    WEBSOCKET_PING_INTERVAL, WEBSOCKET_PING_TIMEOUT, WEBSOCKET_CLOSE_TIMEOUT)
-    from .spectator_broadcast import spectator_broadcaster, ViewMode
 except ImportError:
     from connection_manager import connection_manager
     from config import settings
@@ -28,7 +27,6 @@ except ImportError:
     from utils.rate_limiter import comprehensive_rate_limiter
     from utils.constants import (MAX_MESSAGE_SIZE_BYTES, ERROR_CODE_VALIDATION,
                                   WEBSOCKET_PING_INTERVAL, WEBSOCKET_PING_TIMEOUT, WEBSOCKET_CLOSE_TIMEOUT)
-    from spectator_broadcast import spectator_broadcaster, ViewMode
 
 # Gateway will be injected by main.py to avoid circular imports
 gateway = None
@@ -213,9 +211,6 @@ class AgentWebSocketHandler:
                     # Transform proxy messages to agent format
                     try:
                         msg_data = json.loads(proxy_message)
-                        # SPECTATOR FIX: Store original message for spectator broadcast
-                        # before any transformation happens
-                        original_msg_data = msg_data.copy() if isinstance(msg_data, dict) else msg_data
 
                         # Handle both single objects and arrays of packets from FreeCiv protocol
                         if isinstance(msg_data, list):
@@ -223,21 +218,6 @@ class AgentWebSocketHandler:
                             logger.debug(f"📦 Forwarding packet array ({len(msg_data)} packets) to agent {self.agent_id}")
                             await self.websocket.send_text(proxy_message)
                             logger.debug(f"📤 Forwarded packet array to agent {self.agent_id}")
-
-                            # SPECTATOR BROADCAST: Forward FreeCiv packet array to spectators
-                            if self.game_id and self.player_id is not None:
-                                logger.info(f"📡 Broadcasting {len(msg_data)} packets to spectators of game {self.game_id}")
-                                for packet in msg_data:
-                                    if isinstance(packet, dict):
-                                        asyncio.create_task(
-                                            spectator_broadcaster.forward_packet(
-                                                self.game_id,
-                                                packet,
-                                                self.player_id
-                                            )
-                                        )
-                            else:
-                                logger.debug(f"Skipping spectator broadcast - game_id:{self.game_id}, player_id:{self.player_id}")
                             continue
 
                         msg_type = msg_data.get("type")
@@ -349,45 +329,6 @@ class AgentWebSocketHandler:
                     # Forward to agent
                     await self.websocket.send_text(proxy_message)
                     logger.debug(f"📤 Forwarded message to agent {self.agent_id}")
-
-                    # SPECTATOR BROADCAST: Forward ORIGINAL packet to spectators (async, non-blocking)
-                    # CRITICAL: Use original_msg_data (from proxy) NOT transformed proxy_message
-                    # Spectators need raw FreeCiv protocol packets, not agent-formatted messages
-                    # Use create_task() for fire-and-forget - zero latency impact on agent
-                    if self.game_id and self.player_id is not None:
-                        try:
-                            # SPECTATOR FIX: Handle both single packets (dict) and batches (list)
-                            # FreeCiv proxy sends large batches like [{"pid":15},{"pid":15},...] for tile data
-                            # These batches were being skipped because isinstance(list, dict) == False
-                            packets_to_forward = []
-
-                            if isinstance(original_msg_data, list):
-                                # Batch of packets - forward each one
-                                packets_to_forward = original_msg_data
-                                logger.info(f"📡 Broadcasting {len(packets_to_forward)} packets to spectators of game {self.game_id}")
-                            elif isinstance(original_msg_data, dict):
-                                # Single packet or message
-                                msg_type = original_msg_data.get("type")
-                                has_pid = "pid" in original_msg_data
-
-                                # Only forward FreeCiv protocol packets or important game messages
-                                if has_pid or msg_type in ["game_ready", "turn_done", "end_turn", "state_response"]:
-                                    packets_to_forward = [original_msg_data]
-                                    if has_pid:
-                                        logger.info(f"📡 Broadcast packet PID {original_msg_data.get('pid')} to spectators of game {self.game_id}")
-
-                            # Forward all collected packets
-                            for packet in packets_to_forward:
-                                asyncio.create_task(
-                                    spectator_broadcaster.forward_packet(
-                                        self.game_id,
-                                        packet,
-                                        self.player_id
-                                    )
-                                )
-                        except Exception as e:
-                            # Don't let spectator broadcast errors affect agent
-                            logger.debug(f"Spectator broadcast error (non-critical): {e}")
 
                 except websockets.ConnectionClosed:
                     logger.info(f"Proxy connection closed for agent {self.agent_id}")
@@ -569,260 +510,6 @@ class AgentWebSocketHandler:
             return False
 
 
-class SpectatorWebSocketHandler:
-    """Handler for spectator WebSocket connections"""
-
-    def __init__(self, websocket: WebSocket, game_id: str):
-        self.websocket = websocket
-        self.game_id = game_id
-        self.connection_id: Optional[str] = None
-
-    async def handle_connection(self):
-        """Handle the WebSocket connection lifecycle"""
-        # Validate origin before accepting connection (strict mode for spectators)
-        if not self._validate_origin():
-            await self.websocket.close(code=1008, reason="Unauthorized origin")
-            return
-
-        await self.websocket.accept()
-
-        try:
-            # Check if game exists - allow spectators to connect even if game doesn't exist yet
-            game_exists = hasattr(gateway, 'game_sessions') and self.game_id in gateway.game_sessions
-            if not game_exists:
-                logger.info(f"Spectator connecting to game {self.game_id} - game session not found, will wait for game to start")
-
-            # Add to connection manager
-            self.connection_id = await connection_manager.add_connection(
-                self.websocket, "spectator", self.game_id
-            )
-
-            # SPECTATOR BROADCAST: Register with broadcaster
-            view_mode = ViewMode.PLAYER_1  # MVP: always player 1 view
-            self.spec_conn = await spectator_broadcaster.register_spectator(
-                self.game_id,
-                self.websocket,
-                view_mode
-            )
-
-            # Send welcome message
-            await self._send_welcome()
-
-            # Keep connection alive and handle messages
-            while True:
-                try:
-                    # Spectators mainly receive updates, minimal message handling
-                    data = await self.websocket.receive_text()
-
-                    # WebSocket-level message size enforcement
-                    message_size = len(data.encode('utf-8'))
-                    if message_size > MAX_MESSAGE_SIZE_BYTES:
-                        await self._send_error(
-                            f"Message size {message_size} bytes exceeds limit of {MAX_MESSAGE_SIZE_BYTES} bytes"
-                        )
-                        logger.warning(
-                            f"Spectator on game {self.game_id} sent oversized message: {message_size} bytes"
-                        )
-                        continue
-
-                    message = json.loads(data)
-
-                    # Handle spectator messages
-                    message_type = message.get("type")
-                    if message_type == "ping":
-                        await self._handle_ping()
-                    elif message_type == "spectator_join":
-                        await self._handle_spectator_join(message)
-                    else:
-                        logger.debug(f"Unknown spectator message type: {message_type}")
-
-                except WebSocketDisconnect:
-                    logger.info(f"Spectator disconnected from game {self.game_id}")
-                    break
-
-                except json.JSONDecodeError:
-                    await self._send_error("Invalid JSON format")
-
-                except Exception as e:
-                    logger.error(f"Error handling spectator message: {e}")
-
-        except Exception as e:
-            logger.error(f"Error in spectator connection for game {self.game_id}: {e}")
-
-        finally:
-            # Cleanup spectator from broadcaster
-            try:
-                if hasattr(self, 'spec_conn'):
-                    spectator_broadcaster.unregister_spectator(self.game_id, self.spec_conn)
-            except Exception as e:
-                logger.warning(f"Error unregistering spectator: {e}")
-
-            # Cleanup connection manager
-            if self.connection_id:
-                await connection_manager.handle_disconnect(self.connection_id)
-
-    async def _send_welcome(self):
-        """Send welcome message to spectator"""
-        welcome = {
-            "type": "spectator_joined",
-            "game_id": self.game_id,
-            "message": f"Connected as spectator to game {self.game_id}",
-            "timestamp": time.time()
-        }
-        await self.websocket.send_text(json.dumps(welcome))
-
-        # Send initial game state if available
-        await self._send_initial_game_state()
-
-    async def _handle_ping(self):
-        """Handle ping from spectator"""
-        pong = {
-            "type": "pong",
-            "game_id": self.game_id,
-            "timestamp": time.time()
-        }
-        await self.websocket.send_text(json.dumps(pong))
-
-    async def _handle_spectator_join(self, message: Dict[str, Any]):
-        """Handle spectator join message"""
-        # Already handled in _send_welcome, but can send confirmation
-        response = {
-            "type": "spectator_joined",
-            "game_id": self.game_id,
-            "spectator_id": message.get("spectator_id"),
-            "message": "Successfully joined as spectator",
-            "timestamp": time.time()
-        }
-        await self.websocket.send_text(json.dumps(response))
-
-    async def _send_initial_game_state(self):
-        """Send initial game state to spectator using cached packets"""
-        try:
-            # Use spectator broadcaster's packet cache for initial state
-            # This replays the last N packets to sync the spectator
-            view_mode = ViewMode.PLAYER_1  # MVP: always player 1 view
-
-            await spectator_broadcaster.send_initial_state(
-                self.game_id,
-                self.websocket,
-                view_mode
-            )
-
-            logger.info(f"Sent cached packets to spectator for game {self.game_id}")
-        except Exception as e:
-            logger.error(f"Error sending initial game state to spectator: {e}")
-
-            # Fallback: send basic state message
-            try:
-                game_state = {
-                    "turn": 1,
-                    "players": {},
-                    "game_info": {"status": "running", "turn": 1}
-                }
-
-                state_message = {
-                    "type": "game_state",
-                    "game_id": self.game_id,
-                    "data": game_state,
-                    "timestamp": time.time()
-                }
-                await self.websocket.send_text(json.dumps(state_message))
-            except Exception as fallback_error:
-                logger.error(f"Error sending fallback state to spectator: {fallback_error}")
-
-    async def send_game_update(self, update_data: Dict[str, Any]):
-        """Send game update to spectator (called by game session)"""
-        try:
-            message = {
-                "type": "game_state",
-                "game_id": self.game_id,
-                "data": update_data,
-                "timestamp": time.time()
-            }
-            await self.websocket.send_text(json.dumps(message))
-        except Exception as e:
-            logger.error(f"Error sending game update to spectator: {e}")
-
-    async def send_turn_update(self, turn_number: int):
-        """Send turn update to spectator"""
-        try:
-            message = {
-                "type": "turn_update",
-                "game_id": self.game_id,
-                "turn": turn_number,
-                "timestamp": time.time()
-            }
-            await self.websocket.send_text(json.dumps(message))
-        except Exception as e:
-            logger.error(f"Error sending turn update to spectator: {e}")
-
-    async def send_player_action(self, player_id: int, action_data: Dict[str, Any]):
-        """Send player action to spectator"""
-        try:
-            message = {
-                "type": "player_action",
-                "game_id": self.game_id,
-                "player_id": player_id,
-                "action": action_data,
-                "timestamp": time.time()
-            }
-            await self.websocket.send_text(json.dumps(message))
-        except Exception as e:
-            logger.error(f"Error sending player action to spectator: {e}")
-
-    async def send_game_ended(self, result_data: Dict[str, Any]):
-        """Send game ended message to spectator"""
-        try:
-            message = {
-                "type": "game_ended",
-                "game_id": self.game_id,
-                "result": result_data,
-                "timestamp": time.time()
-            }
-            await self.websocket.send_text(json.dumps(message))
-        except Exception as e:
-            logger.error(f"Error sending game ended to spectator: {e}")
-
-    async def _send_error(self, error_message: str):
-        """Send error message"""
-        error = {
-            "type": "error",
-            "game_id": self.game_id,
-            "message": error_message
-        }
-        await self.websocket.send_text(json.dumps(error))
-
-    def _validate_origin(self) -> bool:
-        """
-        Validate WebSocket origin for security (strict mode for spectators)
-
-        Returns:
-            bool: True if origin is allowed, False otherwise
-        """
-        try:
-            # Get origin info for logging
-            origin_info = get_websocket_origin_info(self.websocket)
-            logger.debug(f"Spectator connection to game {self.game_id} from: {origin_info}")
-
-            # For spectators (browsers), require valid origin
-            is_valid = validate_websocket_origin(
-                self.websocket,
-                settings.allowed_origins,
-                strict_mode=True  # Strict mode for browser clients
-            )
-
-            if not is_valid:
-                logger.warning(
-                    f"Rejected spectator connection to game {self.game_id} from unauthorized origin: "
-                    f"{origin_info.get('origin', 'null')}"
-                )
-
-            return is_valid
-
-        except Exception as e:
-            logger.error(f"Error validating origin for spectator connection to game {self.game_id}: {e}")
-            return False
-
 
 # WebSocket route registration
 def register_websocket_routes(app: FastAPI):
@@ -832,16 +519,6 @@ def register_websocket_routes(app: FastAPI):
     async def agent_websocket_endpoint(websocket: WebSocket, agent_id: str):
         """WebSocket endpoint for LLM agents"""
         handler = AgentWebSocketHandler(websocket, agent_id)
-        await handler.handle_connection()
-
-    @app.websocket("/ws/spectator/{game_id}")
-    async def spectator_websocket_endpoint(websocket: WebSocket, game_id: str):
-        """WebSocket endpoint for game spectators"""
-        if not settings.enable_spectator_mode:
-            await websocket.close(code=1008, reason="Spectator mode disabled")
-            return
-
-        handler = SpectatorWebSocketHandler(websocket, game_id)
         await handler.handle_connection()
 
     logger.info("WebSocket routes registered")
