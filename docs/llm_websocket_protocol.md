@@ -129,6 +129,30 @@ All messages follow this structure:
           "priority": "high"
         }
       ],
+      "players": {
+        "1": {
+          "id": 1,
+          "name": "Player 1",
+          "nation": "Romans",
+          "score": 150
+        }
+      },
+      "units": {
+        "42": {
+          "id": 42,
+          "type": "warrior",
+          "activity": "idle",
+          "x": 10,
+          "y": 20
+        }
+      },
+      "cities": {
+        "1": {
+          "id": 1,
+          "name": "Capital",
+          "population": 3
+        }
+      },
       "legal_actions": [
         {
           "type": "unit_move",
@@ -141,6 +165,8 @@ All messages follow this structure:
   }
 }
 ```
+
+**Note**: The `players`, `units`, and `cities` fields are always returned as **dictionaries** (objects) keyed by ID, not arrays. This provides efficient O(1) lookups by ID.
 
 ### 3. Action Submission
 
@@ -261,10 +287,56 @@ All messages follow this structure:
   "data": {
     "type": "error",
     "success": false,
-    "error_code": "E102",
-    "error_message": "Invalid API token",
+    "code": "E120",
+    "message": "Session expired - please reauthenticate",
     "details": {
-      "retry_after": 60
+      "session_valid": false,
+      "civserver_connected": true,
+      "player_id": null,
+      "reason": "session_expired_after_disconnect",
+      "can_retry": true
+    }
+  }
+}
+```
+
+**Enhanced Error Response Fields:**
+- `code`: Specific error code (E120, E123, E429, E999, etc.)
+- `message`: Human-readable error description
+- `details`: Context object with diagnostic information:
+  - `session_valid`: Whether the session is still valid
+  - `civserver_connected`: Whether connected to game server
+  - `player_id`: Current player ID (if assigned)
+  - `reason`: Machine-readable reason code
+  - `can_retry`: Whether the operation can be retried
+  - `exception_type`: Type of exception (for E999 errors)
+
+**Rate Limit Error Example:**
+```json
+{
+  "type": "rate_limit_error",
+  "agent_id": "my-agent",
+  "timestamp": 1234567890.123,
+  "data": {
+    "type": "error",
+    "success": false,
+    "code": "E429",
+    "message": "Rate limit exceeded: Request rate limit exceeded",
+    "details": {
+      "reason": "Request rate limit exceeded",
+      "retry_after": 1.0,
+      "grace_period": {
+        "violations": 2,
+        "max_violations": 3,
+        "remaining_violations": 1,
+        "will_reset_in": 15.3
+      },
+      "remaining_limits": {
+        "requests_per_minute": {
+          "remaining": 45,
+          "reset_time": 1234567920.0
+        }
+      }
     }
   }
 }
@@ -274,11 +346,14 @@ All messages follow this structure:
 - `E101`: Missing required field
 - `E102`: Invalid API token
 - `E103`: Unknown message type
-- `E120`: Not authenticated
+- `E120`: Not authenticated (session expired or not yet authenticated)
 - `E121`: State query failed
+- `E123`: Connection to game server lost
 - `E130`: Action validation failed
 - `E131`: Action execution failed
+- `E429`: Rate limit exceeded (with grace period details)
 - `E500`: Internal server error
+- `E999`: Unknown error (with diagnostic context)
 
 ## Connection Management
 
@@ -301,7 +376,8 @@ All messages follow this structure:
 
 - **Max Connections per Agent**: 2
 - **Max Concurrent Games**: 10 (configurable)
-- **Session Timeout**: 120 seconds (configurable)
+- **Session Timeout**: 600 seconds (10 minutes, configurable)
+- **Session Resumption Window**: 60 seconds (after disconnect)
 - **Heartbeat Interval**: 30 seconds
 
 ## State Formats
@@ -346,25 +422,26 @@ Compressed state designed for LLM consumption:
 
 ### Full Format
 
-Complete game state with all details:
+Complete game state with all details. **Note**: `players`, `units`, and `cities` are returned as **dictionaries** keyed by ID (not arrays) for efficient lookups:
 
 ```json
 {
   "turn": 15,
   "phase": "movement",
   "player_id": 1,
-  "units": [
-    {
+  "units": {
+    "42": {
       "id": 42,
       "type": "warrior",
       "x": 10, "y": 20,
       "moves_left": 1,
       "hp": 10,
-      "owner": 1
+      "owner": 1,
+      "activity": "idle"
     }
-  ],
-  "cities": [
-    {
+  },
+  "cities": {
+    "1": {
       "id": 1,
       "name": "Capital",
       "x": 15, "y": 25,
@@ -372,7 +449,7 @@ Complete game state with all details:
       "production": "warrior",
       "owner": 1
     }
-  ],
+  },
   "visible_tiles": [
     {
       "x": 10, "y": 20,
@@ -381,12 +458,28 @@ Complete game state with all details:
     }
   ],
   "players": {
-    "1": {"name": "Player 1", "score": 150},
-    "2": {"name": "Player 2", "score": 120}
+    "1": {
+      "id": 1,
+      "name": "Player 1",
+      "nation": "Romans",
+      "score": 150
+    },
+    "2": {
+      "id": 2,
+      "name": "Player 2",
+      "nation": "Greeks",
+      "score": 120
+    }
   },
   "technologies": ["pottery", "animal_husbandry"]
 }
 ```
+
+**Field Types**:
+- `units[].type`: string (e.g., `"warrior"`, `"settler"`)
+- `units[].activity`: string or null (e.g., `"idle"`, `"sentry"`, `"fortified"`, or `null` for no activity)
+- `players[].nation`: string (e.g., `"Romans"`, `"Americans"`, `"Greeks"`)
+- All dictionary keys are strings for JSON compatibility
 
 ## Error Handling
 
@@ -404,9 +497,12 @@ Complete game state with all details:
 
 ### Rate Limiting
 
-- **Messages per minute**: 100 (configurable)
-- **Burst limit**: 20 messages
-- **Action rate limit**: 30 actions per minute
+- **Messages per minute**: 200 (configurable, increased for 2-4 player games)
+- **Burst limit**: 40 messages per second (increased to handle turn spikes)
+- **Bytes per minute**: 2MB (increased for larger state queries)
+- **Grace period**: 30 seconds before blocking
+- **Max violations**: 3 violations within grace period before blocking
+- **Block duration**: 60 seconds after exceeding max violations
 
 ## Usage Examples
 

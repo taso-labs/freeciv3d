@@ -850,6 +850,11 @@ class LLMWSHandler(websocket.WebSocketHandler):
             if "unit_id" in action_data:
                 normalized["unit_id"] = action_data["unit_id"]
 
+        elif action_type == "end_turn":
+            # end_turn is simple - just needs player_id (already mapped above)
+            # No additional fields required
+            logger.info(f"Normalized end_turn action for player {normalized.get('player_id')}")
+
         # Copy any parameters field
         if "parameters" in action_data:
             for key, value in action_data["parameters"].items():
@@ -962,6 +967,15 @@ class LLMWSHandler(websocket.WebSocketHandler):
 
             logger.info(f"Parsed unit_build_city: {result}")
 
+        elif action_type == "end_turn":
+            # end_turn only needs player_id
+            if "player" in params:
+                result["player_id"] = params["player"]
+            elif "actor_id" in params:
+                result["player_id"] = params["actor_id"]
+
+            logger.info(f"Parsed end_turn: {result}")
+
         else:
             # For unknown action types, copy all params as-is
             for key, value in params.items():
@@ -1067,6 +1081,10 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 action_type = sanitized_action.get('type', 'unknown')
                 expected_format = self._get_expected_format(action_type)
 
+                # Get current game state for debugging
+                game_state = self._get_current_game_state()
+                current_turn = game_state.get('turn', 'unknown') if game_state else 'unknown'
+
                 self.write_message(json.dumps({
                     'type': 'action_rejected',
                     'error_code': validation_result.error_code,
@@ -1074,12 +1092,16 @@ class LLMWSHandler(websocket.WebSocketHandler):
                     'action': action_data,
                     'expected_format': expected_format,
                     'player_id': self.player_id,
+                    'turn': current_turn,
                     'timestamp': time.time()
                 }))
                 logger.warning(
                     f"❌ Action validation failed for {self.agent_id}:\n"
+                    f"   Error Code: {validation_result.error_code}\n"
                     f"   Error: {validation_result.error_message}\n"
                     f"   Action: {action_data}\n"
+                    f"   Player ID: {self.player_id}\n"
+                    f"   Turn: {current_turn}\n"
                     f"   Expected: {expected_format.get('json_example', {})}"
                 )
                 return
@@ -1088,6 +1110,9 @@ class LLMWSHandler(websocket.WebSocketHandler):
             if self.civcom:
                 action_packet = self._convert_action_to_packet(sanitized_action)
                 self.civcom.queue_to_civserver(json.dumps(action_packet))
+                # CRITICAL: Must call send_packets_to_civserver() to actually send queued packets!
+                # Without this, actions are queued but never transmitted to civserver
+                self.civcom.send_packets_to_civserver()
 
                 SecurityLogger.log_connection_event(self.agent_id, "ACTION_EXECUTED",
                                                   f"type={sanitized_action.get('type')}")
@@ -1247,8 +1272,8 @@ class LLMWSHandler(websocket.WebSocketHandler):
         state['player_id'] = self.player_id
         state['timestamp'] = time.time()
 
-        # Normalise players to list form for downstream processing
-        state['players'] = self._normalize_players_list(state.get('players', []))
+        # NOTE: Players, units, and cities are kept in dict format (keyed by ID) for efficiency
+        # No normalization needed - dict format is now the standard
 
         # NOTE: game_ready signal is now sent by GameSessionManager when game actually starts
         # Removed duplicate logic that sent game_ready during state query (chicken-and-egg problem fixed)
@@ -1272,27 +1297,50 @@ class LLMWSHandler(websocket.WebSocketHandler):
         return state
 
     def _get_fallback_state(self) -> Dict[str, Any]:
-        """Fallback state when civcom is not available"""
+        """Fallback state when civcom is not available - returns dict format"""
         return {
             'turn': 1,
             'phase': 'movement',
-            'units': [],
-            'cities': [],
+            'units': {},
+            'cities': {},
             'visible_tiles': [],
-            'players': [],
+            'players': {},
             'techs': [],
             'map_info': {}
         }
 
-    def _build_fallback_state_from_full(self, full_state: Dict[str, Any]) -> Dict[str, Any]:
-        """Construct a minimally useful state payload from a civcom snapshot."""
-        units = full_state.get('units', [])
-        if isinstance(units, dict):
-            units = list(units.values())
+    def _ensure_dict(self, data: Any, key_field: str = 'id') -> Dict:
+        """Ensure data is returned as a dict (convert list to dict if needed).
 
-        cities = full_state.get('cities', [])
-        if isinstance(cities, dict):
-            cities = list(cities.values())
+        Args:
+            data: Input data (dict, list, or None)
+            key_field: Field name to use as key when converting list to dict (default: 'id')
+
+        Returns:
+            Dictionary keyed by key_field value (string keys for JSON compatibility)
+        """
+        if data is None:
+            return {}
+        if isinstance(data, dict):
+            return data
+        if isinstance(data, list):
+            # Convert list to dict, keyed by key_field
+            result = {}
+            for item in data:
+                if isinstance(item, dict) and key_field in item:
+                    key = str(item[key_field])  # Ensure key is string for JSON compatibility
+                    result[key] = item
+            return result
+        # Unexpected type - log warning and return empty dict
+        logger.warning(f"Unexpected type {type(data)} in _ensure_dict, returning empty dict")
+        return {}
+
+    def _build_fallback_state_from_full(self, full_state: Dict[str, Any]) -> Dict[str, Any]:
+        """Construct a minimally useful state payload from a civcom snapshot - dict format."""
+        # Keep dict format - no conversion to list
+        units = self._ensure_dict(full_state.get('units', {}))
+        cities = self._ensure_dict(full_state.get('cities', {}))
+        players = self._ensure_dict(full_state.get('players', {}))
 
         map_info = full_state.get('map') or full_state.get('map_info') or {
             'width': 80,
@@ -1311,42 +1359,25 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 'phase': full_state.get('phase', 'movement')
             },
             'map': map_info,
-            'players': self._normalize_players_list(full_state.get('players', [])),
+            'players': players,
             'units': units,
             'cities': cities
         }
 
         return fallback_state
 
-    def _normalize_players_list(self, players: Any) -> List[Dict[str, Any]]:
-        """Return a list of player dicts regardless of original collection type."""
-        normalized: List[Dict[str, Any]] = []
-
-        if isinstance(players, dict):
-            for player_id, pdata in players.items():
-                if isinstance(pdata, dict):
-                    entry = dict(pdata)
-                    entry.setdefault('id', player_id)
-                    normalized.append(entry)
-        elif isinstance(players, list):
-            for pdata in players:
-                if isinstance(pdata, dict):
-                    entry = dict(pdata)
-                    pid = entry.get('id') or entry.get('player_id')
-                    if pid is not None:
-                        entry.setdefault('id', pid)
-                    normalized.append(entry)
-
-        return normalized
-
     def _get_strategic_summary(self) -> Dict[str, Any]:
         """Get high-level strategic situation"""
         if self.civcom and hasattr(self.civcom, 'get_full_state'):
             try:
                 state = self.civcom.get_full_state(self.player_id)
-                units = state.get('units', [])
-                cities = state.get('cities', [])
+                units_raw = state.get('units', {})
+                cities_raw = state.get('cities', {})
                 techs = state.get('techs', [])
+
+                # Convert dicts to lists for iteration
+                units = list(units_raw.values()) if isinstance(units_raw, dict) else units_raw
+                cities = list(cities_raw.values()) if isinstance(cities_raw, dict) else cities_raw
 
                 # Calculate military strength based on units
                 military_units = [u for u in units if u.get('type', '').lower() in ['warriors', 'archers', 'legion', 'cavalry']]
@@ -1394,12 +1425,13 @@ class LLMWSHandler(websocket.WebSocketHandler):
         if self.civcom and hasattr(self.civcom, 'get_full_state'):
             try:
                 state = self.civcom.get_full_state(self.player_id)
-                units = state.get('units', [])
-                players = self._normalize_players_list(state.get('players', []))
+                units = list(state.get('units', {}).values()) if isinstance(state.get('units'), dict) else state.get('units', [])
+                players = list(state.get('players', {}).values()) if isinstance(state.get('players'), dict) else state.get('players', [])
                 visible_tiles = state.get('visible_tiles', [])
 
                 # Check for enemy units near our cities
-                our_cities = [c for c in state.get('cities', []) if c.get('owner') == self.player_id]
+                cities_data = state.get('cities', {})
+                our_cities = [c for c in (list(cities_data.values()) if isinstance(cities_data, dict) else cities_data) if c.get('owner') == self.player_id]
                 enemy_units = [u for u in units if u.get('owner') != self.player_id and u.get('type', '').lower() in ['warriors', 'archers', 'legion']]
 
                 for city in our_cities:
@@ -1444,9 +1476,13 @@ class LLMWSHandler(websocket.WebSocketHandler):
         if self.civcom and hasattr(self.civcom, 'get_full_state'):
             try:
                 state = self.civcom.get_full_state(self.player_id)
-                units = state.get('units', [])
+                units_raw = state.get('units', {})
+                cities_raw = state.get('cities', {})
                 visible_tiles = state.get('visible_tiles', [])
-                cities = state.get('cities', [])
+
+                # Convert dicts to lists for iteration
+                units = list(units_raw.values()) if isinstance(units_raw, dict) else units_raw
+                cities = list(cities_raw.values()) if isinstance(cities_raw, dict) else cities_raw
 
                 # Find good settlement locations
                 resource_tiles = [t for t in visible_tiles if t.get('resource') and not t.get('city_id')]
@@ -1480,7 +1516,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                         })
 
                 # Trading opportunities
-                players = self._normalize_players_list(state.get('players', []))
+                players = list(state.get('players', {}).values()) if isinstance(state.get('players'), dict) else state.get('players', [])
                 friendly_players = [
                     p for p in players
                     if str(p.get('id') or p.get('player_id')) != str(self.player_id)
@@ -1511,9 +1547,13 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 game_state = {}
 
         if game_state:
-            units = game_state.get('units', [])
-            cities = game_state.get('cities', [])
+            units_raw = game_state.get('units', {})
+            cities_raw = game_state.get('cities', {})
             techs = game_state.get('techs', [])
+
+            # Convert dicts to lists for iteration
+            units = list(units_raw.values()) if isinstance(units_raw, dict) else units_raw
+            cities = list(cities_raw.values()) if isinstance(cities_raw, dict) else cities_raw
 
             # Get our units that can move
             our_units = [u for u in units if u.get('owner') == self.player_id and u.get('moves_left', 0) > 0]
@@ -1739,6 +1779,16 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 'pid': 55,  # PACKET_PLAYER_RESEARCH
                 'tech': tech_id  # Field name is 'tech', not 'tech_name'!
             }
+        elif action_type == 'end_turn':
+            # CRITICAL: Signal turn completion to advance game
+            # Sends PACKET_PLAYER_PHASE_DONE to tell civserver this player is done with their turn
+            # Without this, the game will remain stuck on the current turn indefinitely
+            # CRITICAL FIX (AGE-192): Must send 'turn' field, not 'player_no'
+            # Per packets.def:971-973: PACKET_PLAYER_PHASE_DONE requires TURN turn field
+            return {
+                'pid': 52,  # PACKET_PLAYER_PHASE_DONE
+                'turn': self.civcom.game_turn if hasattr(self.civcom, 'game_turn') else 1
+            }
         elif action_type == 'unit_build_city':
             return {
                 'pid': 35,  # PACKET_UNIT_BUILD_CITY
@@ -1750,6 +1800,37 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 'pid': 32,  # PACKET_UNIT_AUTO
                 'unit_id': action['unit_id'],
                 'auto_type': 'explore'
+            }
+        # AGE-192: New unit action packet converters
+        elif action_type == 'unit_fortify':
+            return {
+                'pid': 33,  # PACKET_UNIT_ACTIVITY
+                'unit_id': action['unit_id'],
+                'activity': 'fortifying'
+            }
+        elif action_type == 'unit_sentry':
+            return {
+                'pid': 33,  # PACKET_UNIT_ACTIVITY
+                'unit_id': action['unit_id'],
+                'activity': 'sentry'
+            }
+        elif action_type == 'unit_build_road':
+            return {
+                'pid': 33,  # PACKET_UNIT_ACTIVITY
+                'unit_id': action['unit_id'],
+                'activity': 'road'
+            }
+        elif action_type == 'unit_build_irrigation':
+            return {
+                'pid': 33,  # PACKET_UNIT_ACTIVITY
+                'unit_id': action['unit_id'],
+                'activity': 'irrigate'
+            }
+        elif action_type == 'unit_build_mine':
+            return {
+                'pid': 33,  # PACKET_UNIT_ACTIVITY
+                'unit_id': action['unit_id'],
+                'activity': 'mine'
             }
 
         return action  # Fallback

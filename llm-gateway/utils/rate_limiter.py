@@ -267,6 +267,11 @@ class ComprehensiveRateLimiter:
         self.active_connections: Dict[str, int] = defaultdict(int)
         self.connection_timestamps: Dict[str, List[float]] = defaultdict(list)
 
+        # Grace period tracking (identifier -> (violation_count, last_violation_time))
+        self.grace_period_violations: Dict[str, Tuple[int, float]] = {}
+        self.grace_period_seconds = 30  # Default grace period
+        self.max_violations_before_block = 3  # Default max violations
+
         self._lock = asyncio.Lock()
 
         # Statistics
@@ -275,7 +280,8 @@ class ComprehensiveRateLimiter:
             "blocked_requests": 0,
             "size_violations": 0,
             "rate_limit_violations": 0,
-            "active_blocks": 0
+            "active_blocks": 0,
+            "grace_period_warnings": 0
         }
 
     def add_rate_limit(self, limit_type: RateLimitType, config: RateLimitConfig):
@@ -285,6 +291,18 @@ class ComprehensiveRateLimiter:
             config.window_seconds
         )
 
+    def configure_grace_period(self, grace_period_seconds: int, max_violations: int):
+        """
+        Configure grace period settings for rate limiting
+
+        Args:
+            grace_period_seconds: Time window to track violations before blocking
+            max_violations: Number of violations allowed before blocking
+        """
+        self.grace_period_seconds = grace_period_seconds
+        self.max_violations_before_block = max_violations
+        logger.info(f"Grace period configured: {grace_period_seconds}s, max violations: {max_violations}")
+
     async def check_rate_limits(
         self,
         identifier: str,
@@ -292,7 +310,7 @@ class ComprehensiveRateLimiter:
         message_content: str = None
     ) -> Tuple[bool, str]:
         """
-        Check all applicable rate limits
+        Check all applicable rate limits with message-type-specific limits
 
         Args:
             identifier: Unique identifier (agent_id, IP, etc.)
@@ -309,37 +327,74 @@ class ComprehensiveRateLimiter:
             self._stats["blocked_requests"] += 1
             return False, "Temporarily blocked due to rate limit violation"
 
-        # Message size validation
+        # Message size validation and type extraction
+        msg_type = "unknown"
         if message_content:
-            is_valid, error_msg, _ = self.size_validator.validate_message_content(message_content)
+            is_valid, error_msg, parsed_data = self.size_validator.validate_message_content(message_content)
             if not is_valid:
                 self._stats["size_violations"] += 1
                 await self._add_violation(identifier)
                 return False, f"Message validation failed: {error_msg}"
 
-        # Check request rate limits
-        for limit_type, limiter in self.rate_limiters.items():
-            if limit_type == RateLimitType.REQUESTS_PER_MINUTE:
-                if not await limiter.is_allowed(identifier):
-                    self._stats["rate_limit_violations"] += 1
-                    await self._add_violation(identifier)
-                    return False, "Request rate limit exceeded"
+            # Extract message type for type-specific rate limiting
+            if parsed_data and isinstance(parsed_data, dict):
+                msg_type = parsed_data.get("type", "unknown")
 
-            elif limit_type == RateLimitType.BYTES_PER_MINUTE and message_size > 0:
-                # Check byte rate limit using token bucket
-                bucket_key = f"bytes_{identifier}"
-                if bucket_key not in self.token_buckets:
-                    # Create bucket with byte limit
-                    capacity = self.rate_limiters[limit_type].limit
-                    self.token_buckets[bucket_key] = TokenBucket(
-                        capacity=capacity,
-                        refill_rate=capacity / 60.0  # Refill over 1 minute
-                    )
+        # Message-type-specific rate limiting for turn-based gameplay
+        # Different message types have different performance impacts:
+        # - 'action': Cheap (just forwarding JSON) - allow high burst
+        # - 'state_query': Expensive (builds game state) - limit more strictly
+        # - 'llm_connect': One-time (connection setup) - very permissive
+        if msg_type == "action":
+            # Actions: Allow 80 per minute with burst of 80 (full turn execution)
+            action_bucket_key = f"action_{identifier}"
+            if action_bucket_key not in self.token_buckets:
+                self.token_buckets[action_bucket_key] = TokenBucket(
+                    capacity=80,
+                    refill_rate=80.0 / 60.0  # 80 per minute
+                )
+            if not await self.token_buckets[action_bucket_key].consume(1):
+                self._stats["rate_limit_violations"] += 1
+                await self._add_violation(identifier)
+                return False, "Action rate limit exceeded (80/min)"
 
-                if not await self.token_buckets[bucket_key].consume(message_size):
-                    self._stats["rate_limit_violations"] += 1
-                    await self._add_violation(identifier)
-                    return False, "Byte rate limit exceeded"
+        elif msg_type == "state_query":
+            # State queries: More restrictive - 20 per minute with burst of 20
+            query_bucket_key = f"query_{identifier}"
+            if query_bucket_key not in self.token_buckets:
+                self.token_buckets[query_bucket_key] = TokenBucket(
+                    capacity=20,
+                    refill_rate=20.0 / 60.0  # 20 per minute
+                )
+            if not await self.token_buckets[query_bucket_key].consume(1):
+                self._stats["rate_limit_violations"] += 1
+                await self._add_violation(identifier)
+                return False, "State query rate limit exceeded (20/min)"
+
+        else:
+            # All other message types: Use default rate limits
+            for limit_type, limiter in self.rate_limiters.items():
+                if limit_type == RateLimitType.REQUESTS_PER_MINUTE:
+                    if not await limiter.is_allowed(identifier):
+                        self._stats["rate_limit_violations"] += 1
+                        await self._add_violation(identifier)
+                        return False, "Request rate limit exceeded"
+
+                elif limit_type == RateLimitType.BYTES_PER_MINUTE and message_size > 0:
+                    # Check byte rate limit using token bucket
+                    bucket_key = f"bytes_{identifier}"
+                    if bucket_key not in self.token_buckets:
+                        # Create bucket with byte limit
+                        capacity = self.rate_limiters[limit_type].limit
+                        self.token_buckets[bucket_key] = TokenBucket(
+                            capacity=capacity,
+                            refill_rate=capacity / 60.0  # Refill over 1 minute
+                        )
+
+                    if not await self.token_buckets[bucket_key].consume(message_size):
+                        self._stats["rate_limit_violations"] += 1
+                        await self._add_violation(identifier)
+                        return False, "Byte rate limit exceeded"
 
         return True, ""
 
@@ -407,13 +462,51 @@ class ComprehensiveRateLimiter:
             return False
 
     async def _add_violation(self, identifier: str, block_duration: int = 60):
-        """Add a rate limit violation and potentially block identifier"""
+        """
+        Add a rate limit violation with grace period tracking
+        Only blocks after exceeding max_violations within grace_period_seconds
+        """
         async with self._lock:
-            # Block for specified duration
-            self.blocked_identifiers[identifier] = time.time() + block_duration
-            self._stats["active_blocks"] += 1
+            now = time.time()
 
-            logger.warning(f"Rate limit violation: blocking {identifier} for {block_duration}s")
+            # Get current violation info
+            if identifier in self.grace_period_violations:
+                violation_count, last_violation_time = self.grace_period_violations[identifier]
+
+                # Check if within grace period window
+                if now - last_violation_time <= self.grace_period_seconds:
+                    violation_count += 1
+                else:
+                    # Grace period expired, reset counter
+                    violation_count = 1
+            else:
+                # First violation
+                violation_count = 1
+
+            # Update violation tracking
+            self.grace_period_violations[identifier] = (violation_count, now)
+            self._stats["grace_period_warnings"] += 1
+
+            # Check if should block
+            if violation_count >= self.max_violations_before_block:
+                # Exceeded max violations - block identifier
+                self.blocked_identifiers[identifier] = now + block_duration
+                self._stats["active_blocks"] += 1
+
+                # Clear grace period tracking (will restart after block expires)
+                del self.grace_period_violations[identifier]
+
+                logger.warning(
+                    f"Rate limit violation: blocking {identifier} for {block_duration}s "
+                    f"(exceeded {violation_count} violations in {self.grace_period_seconds}s grace period)"
+                )
+            else:
+                # Still within grace period
+                remaining_violations = self.max_violations_before_block - violation_count
+                logger.info(
+                    f"Rate limit warning for {identifier}: violation {violation_count}/{self.max_violations_before_block} "
+                    f"({remaining_violations} remaining before block)"
+                )
 
     async def get_stats(self) -> Dict[str, Any]:
         """Get comprehensive statistics"""
@@ -434,13 +527,29 @@ class ComprehensiveRateLimiter:
             }
 
     async def get_identifier_status(self, identifier: str) -> Dict[str, Any]:
-        """Get status for a specific identifier"""
+        """Get status for a specific identifier including grace period info"""
         status = {
             "identifier": identifier,
             "is_blocked": await self._is_blocked(identifier),
             "active_connections": self.active_connections.get(identifier, 0),
-            "remaining_limits": {}
+            "remaining_limits": {},
+            "grace_period": {}
         }
+
+        # Get grace period violation status
+        async with self._lock:
+            if identifier in self.grace_period_violations:
+                violation_count, last_violation_time = self.grace_period_violations[identifier]
+                time_since_last = time.time() - last_violation_time
+
+                status["grace_period"] = {
+                    "violations": violation_count,
+                    "max_violations": self.max_violations_before_block,
+                    "remaining_violations": self.max_violations_before_block - violation_count,
+                    "time_since_last_violation": time_since_last,
+                    "grace_period_window": self.grace_period_seconds,
+                    "will_reset_in": max(0, self.grace_period_seconds - time_since_last)
+                }
 
         # Get remaining limits for each type
         for limit_type, limiter in self.rate_limiters.items():
@@ -467,37 +576,59 @@ comprehensive_rate_limiter = ComprehensiveRateLimiter()
 # Default configuration
 def setup_default_rate_limits():
     """Setup default rate limiting configuration"""
+    try:
+        from .constants import (
+            DEFAULT_REQUESTS_PER_MINUTE, DEFAULT_BURST_SIZE,
+            RATE_LIMIT_GRACE_PERIOD, RATE_LIMIT_MAX_VIOLATIONS_BEFORE_BLOCK
+        )
+    except ImportError:
+        from constants import (
+            DEFAULT_REQUESTS_PER_MINUTE, DEFAULT_BURST_SIZE,
+            RATE_LIMIT_GRACE_PERIOD, RATE_LIMIT_MAX_VIOLATIONS_BEFORE_BLOCK
+        )
+
     # Requests per minute
     comprehensive_rate_limiter.add_rate_limit(
         RateLimitType.REQUESTS_PER_MINUTE,
         RateLimitConfig(
             limit_type=RateLimitType.REQUESTS_PER_MINUTE,
-            limit_value=100,  # 100 requests per minute
+            limit_value=DEFAULT_REQUESTS_PER_MINUTE,  # 200 requests per minute (increased for 2-4 player games)
             window_seconds=60
         )
     )
 
     # Burst protection (requests per second)
+    # Use DEFAULT_BURST_SIZE as requests per second limit to handle turn spikes
     comprehensive_rate_limiter.add_rate_limit(
         RateLimitType.REQUESTS_PER_SECOND,
         RateLimitConfig(
             limit_type=RateLimitType.REQUESTS_PER_SECOND,
-            limit_value=10,  # 10 requests per second
+            limit_value=DEFAULT_BURST_SIZE,  # 40 requests per second (increased to handle 20-24 msg/turn)
             window_seconds=1
         )
     )
 
-    # Bytes per minute (1MB)
+    # Bytes per minute (2MB - increased for larger state queries)
     comprehensive_rate_limiter.add_rate_limit(
         RateLimitType.BYTES_PER_MINUTE,
         RateLimitConfig(
             limit_type=RateLimitType.BYTES_PER_MINUTE,
-            limit_value=1_000_000,  # 1MB per minute
+            limit_value=2_000_000,  # 2MB per minute (increased from 1MB)
             window_seconds=60
         )
     )
 
-    logger.info("Default rate limits configured")
+    # Configure grace period
+    comprehensive_rate_limiter.configure_grace_period(
+        grace_period_seconds=RATE_LIMIT_GRACE_PERIOD,
+        max_violations=RATE_LIMIT_MAX_VIOLATIONS_BEFORE_BLOCK
+    )
+
+    logger.info(
+        f"Default rate limits configured: {DEFAULT_REQUESTS_PER_MINUTE} req/min, "
+        f"{DEFAULT_BURST_SIZE} req/sec burst, 2MB/min bandwidth, "
+        f"{RATE_LIMIT_GRACE_PERIOD}s grace period with {RATE_LIMIT_MAX_VIOLATIONS_BEFORE_BLOCK} max violations"
+    )
 
 
 # Initialize with default configuration

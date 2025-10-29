@@ -34,6 +34,8 @@ try:
         PACKET_CITY_INFO,
         PACKET_CHAT_MSG,
         PACKET_RULESET_NATION,
+        PACKET_CONN_PING,
+        PACKET_CONN_PONG,
         get_packet_name
     )
     PACKET_CONSTANTS_AVAILABLE = True
@@ -50,6 +52,8 @@ except ImportError as e:
     PACKET_CITY_INFO = -1
     PACKET_CHAT_MSG = -1
     PACKET_RULESET_NATION = -1
+    PACKET_CONN_PING = -1
+    PACKET_CONN_PONG = -1
     def get_packet_name(pid): return f"packet_{pid}"
 
 # Import RULESET packet cache for spectator mode support
@@ -115,6 +119,57 @@ def get_unit_type_name(type_id):
         return UNIT_TYPE_NAMES.get(type_id, f'unit_{type_id}')
     return 'unknown'
 
+# Activity type ID to name mapping (FreeCiv activity enum)
+# Source: freeciv/common/unit.h enum unit_activity
+# Maps integer activity IDs from PACKET_UNIT_INFO to human-readable activity names
+ACTIVITY_NAMES = {
+    0: 'idle',           # ACTIVITY_IDLE
+    1: 'pollution',      # ACTIVITY_POLLUTION
+    2: 'road',           # ACTIVITY_ROAD
+    3: 'mine',           # ACTIVITY_MINE
+    4: 'irrigate',       # ACTIVITY_IRRIGATE
+    5: 'fortified',      # ACTIVITY_FORTIFIED
+    6: 'fortress',       # ACTIVITY_FORTRESS
+    7: 'sentry',         # ACTIVITY_SENTRY
+    8: 'railroad',       # ACTIVITY_RAILROAD
+    9: 'pillage',        # ACTIVITY_PILLAGE
+    10: 'goto',          # ACTIVITY_GOTO
+    11: 'explore',       # ACTIVITY_EXPLORE
+    12: 'transform',     # ACTIVITY_TRANSFORM
+    13: 'airbase',       # ACTIVITY_AIRBASE
+    14: 'fortifying',    # ACTIVITY_FORTIFYING
+    15: 'fallout',       # ACTIVITY_FALLOUT
+    16: 'patrol',        # ACTIVITY_PATROL
+    17: 'base',          # ACTIVITY_BASE
+}
+
+def get_activity_name(activity_id):
+    """Convert FreeCiv activity ID to human-readable name.
+
+    Args:
+        activity_id: Integer activity ID from PACKET_UNIT_INFO, string name, or None
+
+    Returns:
+        String activity name (e.g., 'idle', 'sentry') or None for no activity
+
+    Examples:
+        >>> get_activity_name(0)
+        'idle'
+        >>> get_activity_name(7)
+        'sentry'
+        >>> get_activity_name(None)
+        None
+        >>> get_activity_name('sentry')
+        'sentry'
+    """
+    if activity_id is None:
+        return None
+    if isinstance(activity_id, str):
+        return activity_id.lower()
+    if isinstance(activity_id, int):
+        return ACTIVITY_NAMES.get(activity_id, 'idle')
+    return 'idle'
+
 # The CivCom handles communication between freeciv-proxy and the Freeciv C
 # server.
 
@@ -148,6 +203,36 @@ class CivCom(Thread):
         self.game_phase = 'movement'
         self.player_id = None  # Will be set from PACKET_PLAYER_INFO
         self.nations = {}  # Will be populated from PACKET_RULESET_NATION (pid=148)
+
+    def _get_nation_name(self, nation_id):
+        """Convert nation ID to human-readable name using nations registry.
+
+        Args:
+            nation_id: Integer nation ID from PACKET_PLAYER_INFO, or string name
+
+        Returns:
+            String nation name (e.g., 'Romans', 'Americans') or 'Unknown' if not found
+
+        Examples:
+            >>> civcom._get_nation_name(1)
+            'Romans'
+            >>> civcom._get_nation_name('Romans')
+            'Romans'
+            >>> civcom._get_nation_name(999)
+            'Unknown'
+        """
+        if nation_id is None:
+            return 'Unknown'
+        if isinstance(nation_id, str):
+            return nation_id  # Already a string name
+        if isinstance(nation_id, int):
+            # Reverse lookup: nations dict is {name: id}, we need {id: name}
+            for name, nid in self.nations.items():
+                if nid == nation_id:
+                    return name
+            # If not found in registry, return generic name
+            return f'Nation{nation_id}'
+        return 'Unknown'
 
     def run(self):
         try:
@@ -556,11 +641,16 @@ class CivCom(Thread):
 
                     # Remove old entry if exists
                     self.all_players = [p for p in self.all_players if p.get('id') != player_id]
+
+                    # Normalize nation field: convert integer ID to string name
+                    nation_raw = packet.get('nation')
+                    nation_name = self._get_nation_name(nation_raw)
+
                     # Add updated player
                     self.all_players.append({
                         'id': player_id,
                         'name': packet.get('username', f'Player{player_id}'),
-                        'nation': packet.get('nation', 'Unknown'),
+                        'nation': nation_name,  # String name (e.g., 'Romans', 'Americans')
                         'score': packet.get('score', 0),
                         'gold': packet.get('gold', 0)
                     })
@@ -588,6 +678,10 @@ class CivCom(Thread):
                     tile_idx = packet.get("tile")
                     x, y = get_coords_from_tile_index(tile_idx)
 
+                    # Normalize activity field: convert integer ID to string name
+                    activity_raw = packet.get('activity')
+                    activity_name = get_activity_name(activity_raw)
+
                     unit_data = {
                         'id': unit_id,
                         'owner': owner,
@@ -595,12 +689,12 @@ class CivCom(Thread):
                         'type_id': unit_type_raw,  # Preserve original integer for debugging/reference
                         'tile': tile_idx,
                         'homecity': packet.get('homecity', 0),
-                        'moves_left': packet.get('moves_left', 0),
+                        'moves_left': packet.get('movesleft', 0),  # CRITICAL FIX: FreeCiv protocol uses 'movesleft' not 'moves_left'
                         'hp': packet.get('hp', 0),
                         'veteran': packet.get('veteran', 0),
                         'transported': packet.get('transported', False),
                         'done_moving': packet.get('done_moving', False),
-                        'activity': packet.get('activity', 'idle'),
+                        'activity': activity_name,  # String name (e.g., 'idle', 'sentry') or None
                         'x': x,
                         'y': y
                     }
@@ -648,13 +742,22 @@ class CivCom(Thread):
                     self.nations[nation_name] = nation_id
                     logger.debug(f"Registered nation: {nation_name} -> ID {nation_id}")
 
+            # CRITICAL: Connection ping packet - MUST respond with pong to keep connection alive
+            # FreeCiv civserver sends PACKET_CONN_PING every ~2 minutes to verify connection health
+            # Without responding with PACKET_CONN_PONG, the server will timeout and disconnect with "ping timeout"
+            # This was causing agents to disconnect at exactly ~2 minutes after connection
+            elif packet_type == PACKET_CONN_PING:
+                # Immediately respond with pong packet to keep connection alive
+                pong_packet = json.dumps({"pid": PACKET_CONN_PONG})
+                logger.debug(f"[PING] Received PACKET_CONN_PING from civserver, responding with PACKET_CONN_PONG for {self.username}")
+                self.queue_to_civserver(pong_packet)
+
             # Default handler for unknown/unhandled packet types
             # This prevents "unsupported packet type" disconnects from civserver
             else:
                 # Log debug info for unhandled packets (helps identify missing handlers)
                 logger.debug(f"Received unhandled packet type {packet_type} for {self.username}")
                 # Don't crash - just acknowledge and continue
-                # Common unhandled types: PING (88), PONG (89), various info packets
 
         except (json.JSONDecodeError, KeyError, TypeError) as e:
             logger.debug(f"Could not parse packet for state storage: {e}")
@@ -671,17 +774,25 @@ class CivCom(Thread):
 
     def build_llm_optimized_state(self, player_id):
         """Build compressed state for LLMs (target < 4KB)"""
+        # Ensure we always have valid game state values (defensive against early queries)
+        game_turn = getattr(self, 'game_turn', 1)
+        game_phase = getattr(self, 'game_phase', 'movement')
+
+        # CRITICAL: Always include 'game' dict at top level for game_arena compatibility
+        # This dict is REQUIRED by freeciv_state.py validation
+        game_dict = {
+            'turn': game_turn,
+            'phase': game_phase,
+            'is_over': getattr(self, 'game_is_over', False),
+            'current_player': player_id
+        }
+
         # Basic game state structure for LLM consumption
         state = {
-            'turn': getattr(self, 'game_turn', 1),
-            'phase': getattr(self, 'game_phase', 'movement'),
+            'turn': game_turn,
+            'phase': game_phase,
             'player_id': player_id,
-            'game': {
-                'turn': getattr(self, 'game_turn', 1),
-                'phase': getattr(self, 'game_phase', 'movement'),
-                'is_over': False,
-                'current_player': player_id
-            },
+            'game': game_dict,  # Required field - must always be present
             'strategic': self._build_strategic_view(player_id),
             'tactical': self._build_tactical_view(player_id),
             'economic': self._build_economic_view(player_id),
@@ -796,49 +907,64 @@ class CivCom(Thread):
         return [action for score, action in scored_actions[:max_actions]]
 
     def get_full_state(self, player_id):
-        """Get complete game state (larger format)"""
+        """Get complete game state - returns dict format for units/cities/players"""
         # Ensure map_info has valid dimensions
         map_info = getattr(self, 'map_info', {})
         if not map_info or map_info.get('width', 0) < 1 or map_info.get('height', 0) < 1:
             map_info = {'width': 80, 'height': 50, 'tiles': [], 'visibility': {}}
 
-        # Ensure players is returned as a list (not dict)
-        all_players = getattr(self, 'all_players', [])
-        if isinstance(all_players, dict):
-            all_players = list(all_players.values()) if all_players else []
+        # Convert players list to dict keyed by ID
+        all_players_raw = getattr(self, 'all_players', [])
+        players_dict = {}
+        if isinstance(all_players_raw, list):
+            for p in all_players_raw:
+                if isinstance(p, dict) and 'id' in p:
+                    players_dict[str(p['id'])] = p
+        elif isinstance(all_players_raw, dict):
+            players_dict = all_players_raw
 
-        # Convert units dict to list, filtering by player_id
+        # Keep units as dict, filtering by player_id
         units_dict = getattr(self, 'player_units', {})
+        player_units_dict = {}
         if isinstance(units_dict, dict):
-            player_units_list = [u for u in units_dict.values() if u.get('owner') == player_id]
-            logger.debug(f"Filtered {len(player_units_list)} units for player {player_id} from {len(units_dict)} total")
-        else:
-            player_units_list = units_dict if isinstance(units_dict, list) else []
+            for unit_id, unit in units_dict.items():
+                if unit.get('owner') == player_id:
+                    player_units_dict[str(unit_id)] = unit
+            logger.debug(f"Filtered {len(player_units_dict)} units for player {player_id} from {len(units_dict)} total")
 
-        # Convert cities dict to list, filtering by player_id
+        # Keep cities as dict, filtering by player_id
         cities_dict = getattr(self, 'player_cities', {})
+        player_cities_dict = {}
         if isinstance(cities_dict, dict):
-            player_cities_list = [c for c in cities_dict.values() if c.get('owner') == player_id]
-            logger.debug(f"Filtered {len(player_cities_list)} cities for player {player_id} from {len(cities_dict)} total")
-        else:
-            player_cities_list = cities_dict if isinstance(cities_dict, list) else []
+            for city_id, city in cities_dict.items():
+                if city.get('owner') == player_id:
+                    player_cities_dict[str(city_id)] = city
+            logger.debug(f"Filtered {len(player_cities_dict)} cities for player {player_id} from {len(cities_dict)} total")
+
+        # Ensure we always have valid game state values (defensive against early queries)
+        game_turn = getattr(self, 'game_turn', 1)
+        game_phase = getattr(self, 'game_phase', 'movement')
+
+        # CRITICAL: Always include 'game' dict at top level for game_arena compatibility
+        # This dict is REQUIRED by freeciv_state.py validation
+        game_dict = {
+            'turn': game_turn,
+            'phase': game_phase,
+            'is_over': getattr(self, 'game_is_over', False),
+            'current_player': player_id
+        }
 
         return {
-            'turn': getattr(self, 'game_turn', 1),
-            'phase': getattr(self, 'game_phase', 'movement'),
+            'turn': game_turn,
+            'phase': game_phase,
             'player_id': player_id,
-            'units': player_units_list,  # Filtered list of player's units
-            'cities': player_cities_list,  # Filtered list of player's cities
+            'units': player_units_dict,  # Dict of player's units keyed by ID
+            'cities': player_cities_dict,  # Dict of player's cities keyed by ID
             'visible_tiles': getattr(self, 'visible_tiles', []),
-            'players': all_players,
+            'players': players_dict,  # Dict of all players keyed by ID
             'techs': getattr(self, 'known_techs', []),
             'map': map_info,
-            'game': {
-                'turn': getattr(self, 'game_turn', 1),
-                'phase': getattr(self, 'game_phase', 'movement'),
-                'is_over': False,
-                'current_player': player_id
-            }
+            'game': game_dict  # Required field - must always be present
         }
 
     def get_state_delta(self, player_id):

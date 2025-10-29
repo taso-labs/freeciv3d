@@ -185,10 +185,10 @@ class DistributedRateLimiter:
         self.redis_limiter = RedisRateLimiter(redis_config=redis_config)
         self.memory_limiter = InMemoryRateLimiter()
 
-        # Default rate limits
+        # Default rate limits (optimized for turn-based gameplay with bursts of 20-24 messages/turn)
         self.default_limits = {
-            'requests_per_second': 10,
-            'burst_capacity': 100,
+            'requests_per_second': 50,   # Increased from 10 to handle turn-based bursts
+            'burst_capacity': 200,        # Increased from 100 for multi-player games
             'window_seconds': 60
         }
 

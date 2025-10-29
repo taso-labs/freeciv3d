@@ -33,7 +33,7 @@ try:
     from .config import settings, get_cors_origins, get_freeciv_proxy_url, validate_settings
     from .connection_manager import connection_manager, ConnectionInfo
     from .api_endpoints import GameConfig, FreeCivAction
-    from .websocket_handlers import AgentWebSocketHandler, SpectatorWebSocketHandler
+    from .websocket_handlers import AgentWebSocketHandler
     from .request_manager import request_manager
     from .connection_state_manager import connection_state_manager, ConnectionStatus
     from .security.token_manager import secure_token_manager
