@@ -305,17 +305,6 @@
 		<url-pattern>/meta/metaserver</url-pattern>
 	</servlet-mapping>
 
-	<!-- /webclient/spectator -->
-	<servlet>
-		<servlet-name>SpectatorServlet</servlet-name>
-		<servlet-class>org.freeciv.servlet.SpectatorServlet</servlet-class>
-	</servlet>
-
-	<servlet-mapping>
-		<servlet-name>SpectatorServlet</servlet-name>
-		<url-pattern>/webclient/spectator</url-pattern>
-	</servlet-mapping>
-
 	<!-- Server Allocation API for LLM Integration -->
 	<servlet>
 		<servlet-name>ServerAllocator</servlet-name>

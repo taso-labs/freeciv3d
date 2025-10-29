@@ -173,7 +173,6 @@ class TestFastAPIApp:
 
         # Check WebSocket endpoints
         assert "/ws/agent/{agent_id}" in routes
-        assert "/ws/spectator/{game_id}" in routes
 
 
 class TestConnectionManager:

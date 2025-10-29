@@ -74,7 +74,6 @@ class Settings(BaseSettings):
     connection_timeout: float = 10.0  # seconds
 
     # Feature flags
-    enable_spectator_mode: bool = True
     enable_batch_actions: bool = True
     enable_metrics: bool = True
 

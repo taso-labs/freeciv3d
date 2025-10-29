@@ -286,7 +286,6 @@ All messages follow this structure:
 
 #### LLM Gateway (port 8003)
 - **Agent WebSocket**: `ws://localhost:8003/ws/agent/{agent_id}`
-- **Spectator WebSocket**: `ws://localhost:8003/ws/spectator/{game_id}`
 - **REST API**: `http://localhost:8003/api/`
 
 #### FreeCiv Proxy (port 8002)

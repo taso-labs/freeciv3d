@@ -17,7 +17,7 @@
 
 ***********************************************************************/
 
-// SPECTATOR FIX: Don't overwrite observing if already set by spectator.jsp
+// Observer mode flag - set by URL parameter action=observe
 if (typeof observing === 'undefined') {
   var observing = false;
 }
@@ -115,10 +115,9 @@ function update_game_info_pregame()
 ****************************************************************************/
 function update_player_info_pregame()
 {
-  // SPECTATOR FIX: Skip pregame UI updates in spectator mode
-  // Spectator doesn't have pregame lobby UI elements (#pregame_player_list, etc.)
-  // Prevents contextMenu errors when PACKET_PLAYER_INFO arrives before client state is set
-  if (window.isSpectator || window.observing) {
+  // Skip pregame UI updates in observer mode
+  // Observer doesn't interact with pregame lobby UI elements
+  if (window.observing) {
     return;
   }
 

@@ -46,14 +46,6 @@ The LLM Gateway acts as a **pass-through layer** between game_arena LLM agents a
 │          FreeCiv C Server (port 6001)                            │
 │          Game logic, state management                            │
 └─────────────────────────────────────────────────────────────────┘
-
-         ↑
-         │ 5. Spectators watch via browser
-         │
-┌─────────────────────────────────────────────────────────────────┐
-│   SpectatorServlet → /webclient/spectator.jsp                   │
-│   ws://localhost:8003/ws/spectator/{game_id}                   │
-└─────────────────────────────────────────────────────────────────┘
 ```
 
 ## Components
@@ -251,35 +243,6 @@ async with websockets.connect("ws://localhost:8003/ws/agent/my_agent") as ws:
     # 6. Receive action result
     result = json.loads(await ws.recv())
     # {"type": "action_accepted", ...} or {"type": "action_rejected", ...}
-```
-
-#### Spectator Endpoint
-
-**Endpoint**: `ws://localhost:8003/ws/spectator/{game_id}`
-
-**Purpose**: Real-time game viewing for browser clients
-
-**Connection Flow**:
-```javascript
-const ws = new WebSocket('ws://localhost:8003/ws/spectator/game_123');
-
-ws.onopen = () => {
-    ws.send(JSON.stringify({
-        type: 'spectator_join',
-        spectator_id: 'viewer_001'
-    }));
-};
-
-ws.onmessage = (event) => {
-    const msg = JSON.parse(event.data);
-
-    if (msg.type === 'spectator_joined') {
-        console.log('Joined game:', msg.game_id);
-    } else if (msg.type === 'game_state') {
-        // Render game state update
-        renderGameState(msg.data);
-    }
-};
 ```
 
 ### 3. Message Transformation
@@ -566,22 +529,6 @@ cache_key = f"state:{game_id}:{player_id}:{turn}"
 # Cache invalidation: Automatic on turn change, manual on action submit
 # HMAC signature: Prevents cache poisoning
 ```
-
-## SpectatorServlet
-
-**Endpoint**: `GET /freeciv-web/webclient/spectator`
-
-**Purpose**: Provides web UI for viewing LLM games in real-time.
-
-**Usage**:
-```
-http://localhost:8080/freeciv-web/webclient/spectator?game_id=game_123
-```
-
-**Implementation** ([SpectatorServlet.java](../freeciv-web/src/main/java/org/freeciv/servlet/SpectatorServlet.java)):
-- Forwards to `/webclient/spectator.jsp`
-- JSP connects to `ws://localhost:8003/ws/spectator/{game_id}`
-- Receives FreeCiv packet stream for real-time visualization
 
 ## References
 

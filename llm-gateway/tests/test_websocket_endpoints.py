@@ -17,12 +17,11 @@ try:
     import os
     sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
     from main import app
-    from websocket_handlers import AgentWebSocketHandler, SpectatorWebSocketHandler
+    from websocket_handlers import AgentWebSocketHandler
 except ImportError:
     # Will fail initially until we implement the module
     app = None
     AgentWebSocketHandler = None
-    SpectatorWebSocketHandler = None
 
 
 class TestAgentWebSocketEndpoint:
@@ -275,125 +274,6 @@ class TestAgentWebSocketEndpoint:
 
             websocket.send_json(auth_message)
             websocket.receive_json()  # Skip auth response
-
-
-class TestSpectatorWebSocketEndpoint:
-    """Test /ws/spectator/{game_id} WebSocket endpoint"""
-
-    @pytest.mark.asyncio
-    async def test_spectator_connection(self):
-        """Test spectator WebSocket connection"""
-        if app is None:
-            pytest.skip("FastAPI app not implemented yet")
-
-        with TestClient(app) as client:
-            with client.websocket_connect("/ws/spectator/game-123") as websocket:
-                # Should receive welcome message
-                data = websocket.receive_json()
-                assert data["type"] == "spectator_welcome"
-                assert data["game_id"] == "game-123"
-
-    @pytest.mark.asyncio
-    async def test_spectator_game_updates(self):
-        """Test spectator receiving game updates"""
-        if app is None:
-            pytest.skip("FastAPI app not implemented yet")
-
-        with TestClient(app) as client:
-            with client.websocket_connect("/ws/spectator/game-123") as websocket:
-                # Skip welcome message
-                websocket.receive_json()
-
-                # Simulate game update
-                with patch('main.gateway.broadcast_to_spectators') as mock_broadcast:
-                    # This would typically be called from game state changes
-                    update = {
-                        "type": "spectator_update",
-                        "game_id": "game-123",
-                        "data": {
-                            "update_type": "player_action",
-                            "turn": 5,
-                            "action": "unit_move",
-                            "player": 1
-                        }
-                    }
-
-                    # Simulate receiving the update
-                    mock_broadcast.return_value = update
-                    # In real implementation, this would be pushed to spectator
-                    # For testing, we simulate receiving it
-                    data = update
-
-                assert data["type"] == "spectator_update"
-                assert data["game_id"] == "game-123"
-                assert data["data"]["update_type"] == "player_action"
-
-    @pytest.mark.asyncio
-    async def test_spectator_game_not_found(self):
-        """Test spectator connecting to non-existent game"""
-        if app is None:
-            pytest.skip("FastAPI app not implemented yet")
-
-        with TestClient(app) as client:
-            with patch('main.gateway.game_exists') as mock_exists:
-                mock_exists.return_value = False
-
-                try:
-                    with client.websocket_connect("/ws/spectator/invalid-game") as websocket:
-                        data = websocket.receive_json()
-                        assert data["type"] == "error"
-                        assert "not found" in data["message"].lower()
-                except Exception:
-                    # Connection might be closed immediately
-                    pass
-
-    @pytest.mark.asyncio
-    async def test_spectator_multiple_connections(self):
-        """Test multiple spectators for same game"""
-        if app is None:
-            pytest.skip("FastAPI app not implemented yet")
-
-        with TestClient(app) as client:
-            with client.websocket_connect("/ws/spectator/game-123") as ws1:
-                with client.websocket_connect("/ws/spectator/game-123") as ws2:
-                    # Both should receive welcome messages
-                    data1 = ws1.receive_json()
-                    data2 = ws2.receive_json()
-
-                    assert data1["type"] == "spectator_welcome"
-                    assert data2["type"] == "spectator_welcome"
-                    assert data1["game_id"] == "game-123"
-                    assert data2["game_id"] == "game-123"
-
-    @pytest.mark.asyncio
-    async def test_spectator_real_time_updates(self):
-        """Test real-time game updates to spectators"""
-        if app is None:
-            pytest.skip("FastAPI app not implemented yet")
-
-        with TestClient(app) as client:
-            with client.websocket_connect("/ws/spectator/game-123") as websocket:
-                # Skip welcome
-                websocket.receive_json()
-
-                # Test different types of updates
-                update_types = [
-                    "turn_change", "player_action", "game_event", "state_change"
-                ]
-
-                for update_type in update_types:
-                    # Simulate update (in real implementation, would come from game)
-                    update = {
-                        "type": "spectator_update",
-                        "game_id": "game-123",
-                        "data": {
-                            "update_type": update_type,
-                            "timestamp": 1234567890.0
-                        }
-                    }
-
-                    # Test that spectator can process different update types
-                    assert update["data"]["update_type"] in update_types
 
 
 class TestWebSocketConnectionLimits:
