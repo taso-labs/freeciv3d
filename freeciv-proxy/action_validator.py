@@ -4,6 +4,23 @@
 """
 Action validation system for LLM agents in FreeCiv proxy
 Validates actions before forwarding to the C server
+
+## Error Code Scheme
+
+Error codes are organized by action type for easy identification:
+
+- **E001-E005**: General validation errors (structure, type, auth)
+- **E010-E014**: unit_move validation errors
+- **E020-E023**: unit_build_city validation errors
+- **E030-E033**: city_production validation errors
+- **E040-E041**: tech_research validation errors
+- **E050-E052**: unit_fortify validation errors
+- **E060-E062**: unit_sentry validation errors
+- **E070-E074**: unit_build_road validation errors
+- **E080-E084**: unit_build_irrigation validation errors
+- **E090-E094**: unit_build_mine validation errors
+
+This grouping makes it easy to identify which action failed from the error code.
 """
 
 import logging
@@ -11,6 +28,11 @@ from typing import Dict, Any, List, Optional
 from enum import Enum
 
 logger = logging.getLogger("freeciv-proxy")
+
+# Map size limits (standard FreeCiv maximum dimensions)
+# See: https://freeciv.fandom.com/wiki/Map
+DEFAULT_MAP_WIDTH = 200
+DEFAULT_MAP_HEIGHT = 200
 
 class ValidationResult:
     """Result of action validation"""
@@ -308,8 +330,18 @@ class LLMActionValidator:
         if 'unit_id' not in action:
             return self._validation_error('E050', 'Unit fortify requires unit_id field')
 
-        if not isinstance(action['unit_id'], int):
-            return self._validation_error('E051', 'unit_id must be an integer')
+        unit_id = action['unit_id']
+
+        # Validate unit ownership if game state is available
+        if game_state and 'units' in game_state:
+            units = list(game_state['units'].values()) if isinstance(game_state['units'], dict) else game_state['units']
+            for unit in units:
+                if isinstance(unit, dict) and unit.get('id') == unit_id:
+                    if unit.get('owner') != player_id:
+                        return self._validation_error('E052', f'Player does not own unit {unit_id}')
+                    return ValidationResult(True)
+            # Unit not found in game state
+            return self._validation_error('E051', f'Unit not found: {unit_id}')
 
         return ValidationResult(True)
 
@@ -318,8 +350,18 @@ class LLMActionValidator:
         if 'unit_id' not in action:
             return self._validation_error('E060', 'Unit sentry requires unit_id field')
 
-        if not isinstance(action['unit_id'], int):
-            return self._validation_error('E061', 'unit_id must be an integer')
+        unit_id = action['unit_id']
+
+        # Validate unit ownership if game state is available
+        if game_state and 'units' in game_state:
+            units = list(game_state['units'].values()) if isinstance(game_state['units'], dict) else game_state['units']
+            for unit in units:
+                if isinstance(unit, dict) and unit.get('id') == unit_id:
+                    if unit.get('owner') != player_id:
+                        return self._validation_error('E062', f'Player does not own unit {unit_id}')
+                    return ValidationResult(True)
+            # Unit not found in game state
+            return self._validation_error('E061', f'Unit not found: {unit_id}')
 
         return ValidationResult(True)
 
@@ -328,8 +370,34 @@ class LLMActionValidator:
         if 'unit_id' not in action:
             return self._validation_error('E070', 'Unit build road requires unit_id field')
 
-        if not isinstance(action['unit_id'], int):
-            return self._validation_error('E071', 'unit_id must be an integer')
+        # Require coordinates for build road
+        if 'x' not in action or 'y' not in action:
+            return self._validation_error('E070', 'Unit build road requires x and y coordinates')
+
+        unit_id = action['unit_id']
+        x = action['x']
+        y = action['y']
+
+        # Validate coordinates are within bounds
+        try:
+            x = int(x)
+            y = int(y)
+        except (ValueError, TypeError):
+            return self._validation_error('E071', 'Coordinates must be integers')
+
+        if not self._validate_coordinates(x, y, game_state):
+            return self._validation_error('E072', f'Coordinates out of bounds: ({x},{y})')
+
+        # Validate unit ownership if game state is available
+        if game_state and 'units' in game_state:
+            units = list(game_state['units'].values()) if isinstance(game_state['units'], dict) else game_state['units']
+            for unit in units:
+                if isinstance(unit, dict) and unit.get('id') == unit_id:
+                    if unit.get('owner') != player_id:
+                        return self._validation_error('E073', f'Player does not own unit {unit_id}')
+                    return ValidationResult(True)
+            # Unit not found in game state
+            return self._validation_error('E074', f'Unit not found: {unit_id}')
 
         return ValidationResult(True)
 
@@ -338,8 +406,34 @@ class LLMActionValidator:
         if 'unit_id' not in action:
             return self._validation_error('E080', 'Unit build irrigation requires unit_id field')
 
-        if not isinstance(action['unit_id'], int):
-            return self._validation_error('E081', 'unit_id must be an integer')
+        # Require coordinates for build irrigation
+        if 'x' not in action or 'y' not in action:
+            return self._validation_error('E080', 'Unit build irrigation requires x and y coordinates')
+
+        unit_id = action['unit_id']
+        x = action['x']
+        y = action['y']
+
+        # Validate coordinates are within bounds
+        try:
+            x = int(x)
+            y = int(y)
+        except (ValueError, TypeError):
+            return self._validation_error('E081', 'Coordinates must be integers')
+
+        if not self._validate_coordinates(x, y, game_state):
+            return self._validation_error('E082', f'Coordinates out of bounds: ({x},{y})')
+
+        # Validate unit ownership if game state is available
+        if game_state and 'units' in game_state:
+            units = list(game_state['units'].values()) if isinstance(game_state['units'], dict) else game_state['units']
+            for unit in units:
+                if isinstance(unit, dict) and unit.get('id') == unit_id:
+                    if unit.get('owner') != player_id:
+                        return self._validation_error('E083', f'Player does not own unit {unit_id}')
+                    return ValidationResult(True)
+            # Unit not found in game state
+            return self._validation_error('E084', f'Unit not found: {unit_id}')
 
         return ValidationResult(True)
 
@@ -348,8 +442,34 @@ class LLMActionValidator:
         if 'unit_id' not in action:
             return self._validation_error('E090', 'Unit build mine requires unit_id field')
 
-        if not isinstance(action['unit_id'], int):
-            return self._validation_error('E091', 'unit_id must be an integer')
+        # Require coordinates for build mine
+        if 'x' not in action or 'y' not in action:
+            return self._validation_error('E090', 'Unit build mine requires x and y coordinates')
+
+        unit_id = action['unit_id']
+        x = action['x']
+        y = action['y']
+
+        # Validate coordinates are within bounds
+        try:
+            x = int(x)
+            y = int(y)
+        except (ValueError, TypeError):
+            return self._validation_error('E091', 'Coordinates must be integers')
+
+        if not self._validate_coordinates(x, y, game_state):
+            return self._validation_error('E092', f'Coordinates out of bounds: ({x},{y})')
+
+        # Validate unit ownership if game_state is available
+        if game_state and 'units' in game_state:
+            units = list(game_state['units'].values()) if isinstance(game_state['units'], dict) else game_state['units']
+            for unit in units:
+                if isinstance(unit, dict) and unit.get('id') == unit_id:
+                    if unit.get('owner') != player_id:
+                        return self._validation_error('E093', f'Player does not own unit {unit_id}')
+                    return ValidationResult(True)
+            # Unit not found in game state
+            return self._validation_error('E094', f'Unit not found: {unit_id}')
 
         return ValidationResult(True)
 
@@ -381,17 +501,29 @@ class LLMActionValidator:
             self.capabilities.remove(action_type)
 
     def _validate_coordinates(self, x: int, y: int, game_state: Optional[Dict[str, Any]] = None) -> bool:
-        """Enhanced coordinate validation against actual game boundaries"""
+        """Enhanced coordinate validation against actual game boundaries
+
+        Uses module-level constants DEFAULT_MAP_WIDTH and DEFAULT_MAP_HEIGHT.
+        Valid coordinates: 0 to (size-1), so 0-199 for default 200x200 map.
+
+        Args:
+            x: X coordinate to validate
+            y: Y coordinate to validate
+            game_state: Optional game state with map_info
+
+        Returns:
+            bool: True if coordinates are valid, False otherwise
+        """
         if game_state and 'map_info' in game_state:
             map_info = game_state['map_info']
-            max_x = map_info.get('width', 100)  # Default to reasonable bounds
-            max_y = map_info.get('height', 100)
+            max_x = map_info.get('width', DEFAULT_MAP_WIDTH)
+            max_y = map_info.get('height', DEFAULT_MAP_HEIGHT)
 
             if not (0 <= x < max_x and 0 <= y < max_y):
                 return False
-        elif not (0 <= x <= 200 and 0 <= y <= 200):
-            # Fallback to more reasonable coordinate bounds when no game state
-            # Accept coordinates from 0 to 200 (reasonable for most game maps)
+        elif not (0 <= x < DEFAULT_MAP_WIDTH and 0 <= y < DEFAULT_MAP_HEIGHT):
+            # Fallback to default map bounds when no game state
+            # Coordinates from 0 to 199 for default 200x200 map
             return False
 
         return True

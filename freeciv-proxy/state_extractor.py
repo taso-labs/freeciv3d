@@ -3,7 +3,38 @@
 
 """
 State Extraction Service for FreeCiv LLM Integration
-Provides REST API endpoints for game state extraction and optimization
+
+Extracts and formats game state from the FreeCiv server into LLM-friendly JSON.
+Provides REST API endpoints for game state extraction and optimization.
+
+## Collection Format
+
+All collections (units, cities, players) are returned as **dictionaries keyed by ID**:
+
+```python
+{
+    "units": {
+        "123": {"id": 123, "type": "Warrior", "owner": 0},
+        "456": {"id": 456, "type": "Settler", "owner": 0}
+    },
+    "cities": {
+        "1": {"id": 1, "name": "Capital", "owner": 0}
+    }
+}
+```
+
+**Key Design Decisions:**
+- Dictionary keys are strings (not integers) for JSON compatibility
+- Provides O(1) lookups: `units["123"]` instead of filtering lists
+- Consistent structure across all collection types
+
+## Type Normalization
+
+For LLM readability, certain fields use human-readable strings:
+- `nation`: "Romans" instead of integer ID
+- `activity`: "idle" instead of integer enum
+
+See docs/llm_websocket_protocol.md for complete protocol documentation.
 """
 
 import json
@@ -686,15 +717,43 @@ class StateExtractor:
 
         return map_data
 
-    def _ensure_dict(self, data: Any, key_field: str = 'id') -> Dict:
-        """Ensure data is returned as a dict (convert list to dict if needed).
+    def _ensure_dict(self, data: Any, key_field: str = 'id') -> Dict[str, Any]:
+        """Convert collections to dict format for consistent O(1) access patterns.
+
+        This method standardizes all collections (units, cities, players) to use
+        dictionary format keyed by ID, enabling efficient lookups and simpler
+        access patterns for LLM agents.
+
+        IMPORTANT: Dictionary keys are ALWAYS strings for JSON compatibility.
+        Numeric IDs are converted to strings via str(), so ID 123 becomes "123".
 
         Args:
             data: Input data (dict, list, or None)
-            key_field: Field name to use as key when converting list to dict (default: 'id')
+            key_field: Field name to use as dictionary key (default: 'id')
 
         Returns:
-            Dictionary keyed by key_field value (string keys for JSON compatibility)
+            Dict[str, Any]: Dictionary keyed by key_field value (STRING keys)
+
+        Examples:
+            >>> # List to dict conversion with string keys
+            >>> _ensure_dict([{"id": 123, "name": "Warrior"}])
+            {"123": {"id": 123, "name": "Warrior"}}
+
+            >>> # Already a dict passes through
+            >>> _ensure_dict({"1": {"id": 1}})
+            {"1": {"id": 1}}
+
+            >>> # None returns empty dict
+            >>> _ensure_dict(None)
+            {}
+
+            >>> # Custom key field
+            >>> _ensure_dict([{"city_id": 5, "name": "Rome"}], key_field='city_id')
+            {"5": {"city_id": 5, "name": "Rome"}}
+
+        Note:
+            Items missing the key_field or non-dict items are silently skipped.
+            This enables robust handling of malformed data.
         """
         if data is None:
             return {}
@@ -705,7 +764,10 @@ class StateExtractor:
             result = {}
             for item in data:
                 if isinstance(item, dict) and key_field in item:
-                    key = str(item[key_field])  # Ensure key is string for JSON compatibility
+                    # CRITICAL: Always convert to string for JSON serialization
+                    # Browser JSON.parse() requires string keys for objects
+                    # Example: numeric ID 123 becomes string key "123"
+                    key = str(item[key_field])
                     result[key] = item
             return result
         return {}

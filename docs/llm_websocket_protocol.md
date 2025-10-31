@@ -13,6 +13,65 @@ This document specifies the WebSocket protocol for LLM agent communication betwe
 Game Arena → LLM Gateway (port 8003) → FreeCiv Proxy (port 8002) → FreeCiv Server
 ```
 
+## Protocol Design
+
+### Collection Format
+
+All collections (units, cities, players) are returned as **dictionaries keyed by ID** for efficient access:
+
+**Example State Response:**
+```json
+{
+  "status": "success",
+  "data": {
+    "units": {
+      "123": {"id": 123, "type": "Warrior", "owner": 0, "moves_left": 1},
+      "456": {"id": 456, "type": "Settler", "owner": 0, "moves_left": 3}
+    },
+    "cities": {
+      "1": {"id": 1, "name": "Capital", "owner": 0, "size": 5}
+    },
+    "players": {
+      "0": {"id": 0, "name": "player1", "nation": "Romans", "gold": 50}
+    }
+  }
+}
+```
+
+**Key Design Decisions:**
+
+1. **Dictionary Keys are Strings**
+   For JSON compatibility, all keys are strings (not integers).
+   Example: Unit with `id: 123` is accessed via `state.units["123"]`
+
+2. **O(1) Access by ID**
+   Direct lookup by ID instead of O(n) array filtering:
+   ```python
+   # Efficient dictionary access
+   warrior = state['units']['123']
+
+   # vs slow list iteration
+   warrior = next(u for u in state['units'] if u['id'] == 123)
+   ```
+
+3. **Type Normalization**
+   Human-readable strings for LLM comprehension:
+   - `nation`: "Romans" instead of integer ID `5`
+   - `activity`: "idle" instead of enum value `0`
+
+**Accessing Collections:**
+```python
+# Get specific unit
+unit = state['units'].get('123')
+
+# Iterate all units
+for unit_id, unit in state['units'].items():
+    process(unit)
+
+# Get all units as list
+all_units = list(state['units'].values())
+```
+
 ## Connection Flow
 
 1. **Agent Connection**: LLM agent connects to `/ws/agent/{agent_id}` on LLM Gateway
@@ -191,6 +250,11 @@ All messages follow this structure:
 - `unit_attack`: Attack target unit/city
 - `unit_build_city`: Build city at current location
 - `unit_explore`: Set unit to auto-explore
+- `unit_fortify`: Fortify unit for defensive bonus
+- `unit_sentry`: Put unit on sentry mode (skip turn until enemy nearby)
+- `unit_build_road`: Build road at specified coordinates
+- `unit_build_irrigation`: Build irrigation at specified coordinates
+- `unit_build_mine`: Build mine at specified coordinates
 - `city_production`: Set city production
 - `city_build_unit`: Build specific unit type
 - `city_build_improvement`: Build city improvement
@@ -575,6 +639,298 @@ async def submit_action(websocket):
     await websocket.send(json.dumps(action))
     result = await websocket.recv()
     print(f"Action result: {result}")
+```
+
+### New Unit Actions (v2.0)
+
+The following unit actions were added to provide richer gameplay capabilities:
+
+#### unit_fortify
+
+Fortify a unit to increase defensive strength. Fortified units cannot move but receive defense bonuses.
+
+**Request:**
+```json
+{
+  "type": "action",
+  "agent_id": "my-agent",
+  "timestamp": 1234567890.123,
+  "data": {
+    "action_type": "unit_fortify",
+    "unit_id": 123,
+    "player_id": 0
+  }
+}
+```
+
+**Success Response:**
+```json
+{
+  "type": "action_result",
+  "data": {
+    "success": true,
+    "action_type": "unit_fortify",
+    "unit_id": 123
+  }
+}
+```
+
+**Error Codes:**
+- `E050`: Missing required field `unit_id`
+- `E051`: Unit not found
+- `E052`: Player does not own this unit
+
+**Notes:**
+- Unit must have movement points remaining
+- Some unit types cannot fortify (e.g., settlers)
+- Fortified units must be unfortified before moving
+
+#### unit_sentry
+
+Put unit on sentry mode. Unit will skip turns until enemy units are nearby.
+
+**Request:**
+```json
+{
+  "type": "action",
+  "agent_id": "my-agent",
+  "timestamp": 1234567890.123,
+  "data": {
+    "action_type": "unit_sentry",
+    "unit_id": 456,
+    "player_id": 0
+  }
+}
+```
+
+**Error Codes:**
+- `E060`: Missing required field `unit_id`
+- `E061`: Unit not found
+- `E062`: Player does not own this unit
+
+**Notes:**
+- Sentry mode automatically wakes unit when enemies approach
+- Useful for border patrol and defensive positions
+
+#### unit_build_road
+
+Build a road at specified coordinates to improve movement speed.
+
+**Request:**
+```json
+{
+  "type": "action",
+  "agent_id": "my-agent",
+  "timestamp": 1234567890.123,
+  "data": {
+    "action_type": "unit_build_road",
+    "unit_id": 789,
+    "player_id": 0,
+    "x": 10,
+    "y": 15
+  }
+}
+```
+
+**Required Fields:**
+- `unit_id`: ID of the worker/engineer unit
+- `player_id`: Player ID (must match authenticated player)
+- `x`: X coordinate (0-199 for default 200x200 map)
+- `y`: Y coordinate (0-199 for default 200x200 map)
+
+**Error Codes:**
+- `E070`: Missing required field (unit_id, x, or y)
+- `E071`: Coordinates must be integers
+- `E072`: Coordinates out of bounds
+- `E073`: Player does not own this unit
+- `E074`: Unit not found
+
+**Notes:**
+- Only worker/engineer units can build roads
+- Building takes multiple turns depending on terrain
+- Roads increase unit movement speed
+
+#### unit_build_irrigation
+
+Build irrigation at specified coordinates to improve food production.
+
+**Request:**
+```json
+{
+  "type": "action",
+  "agent_id": "my-agent",
+  "timestamp": 1234567890.123,
+  "data": {
+    "action_type": "unit_build_irrigation",
+    "unit_id": 789,
+    "player_id": 0,
+    "x": 12,
+    "y": 18
+  }
+}
+```
+
+**Required Fields:**
+- `unit_id`: ID of the worker/engineer unit
+- `player_id`: Player ID
+- `x`, `y`: Coordinates for irrigation
+
+**Error Codes:**
+- `E080`: Missing required field
+- `E081`: Coordinates must be integers
+- `E082`: Coordinates out of bounds
+- `E083`: Player does not own this unit
+- `E084`: Unit not found
+
+**Notes:**
+- Requires water source nearby (river or ocean)
+- Increases food output of tile
+- Building takes multiple turns
+
+#### unit_build_mine
+
+Build a mine at specified coordinates to improve production.
+
+**Request:**
+```json
+{
+  "type": "action",
+  "agent_id": "my-agent",
+  "timestamp": 1234567890.123,
+  "data": {
+    "action_type": "unit_build_mine",
+    "unit_id": 789,
+    "player_id": 0,
+    "x": 25,
+    "y": 30
+  }
+}
+```
+
+**Required Fields:**
+- `unit_id`: ID of the worker/engineer unit
+- `player_id`: Player ID
+- `x`, `y`: Coordinates for mine
+
+**Error Codes:**
+- `E090`: Missing required field
+- `E091`: Coordinates must be integers
+- `E092`: Coordinates out of bounds
+- `E093`: Player does not own this unit
+- `E094`: Unit not found
+
+**Notes:**
+- Works best on hills and mountains
+- Increases production output of tile
+- Cannot mine ocean tiles
+
+### Complete Multi-Turn Game Flow Example
+
+This example demonstrates a typical LLM agent gameplay session using the new actions:
+
+```python
+import asyncio
+import websockets
+import json
+import time
+
+async def play_game():
+    uri = "ws://localhost:8003/ws/agent/my-agent"
+
+    async with websockets.connect(uri) as ws:
+        # 1. Authenticate
+        await ws.send(json.dumps({
+            "type": "llm_connect",
+            "agent_id": "my-agent",
+            "timestamp": time.time(),
+            "data": {
+                "api_token": "my_secret_key",
+                "game_id": "game-123"
+            }
+        }))
+
+        auth_response = json.loads(await ws.recv())
+        print(f"Authenticated: {auth_response['data']['success']}")
+
+        # 2. Get current state
+        await ws.send(json.dumps({
+            "type": "state_query",
+            "agent_id": "my-agent",
+            "timestamp": time.time(),
+            "data": {"format": "llm_optimized"}
+        }))
+
+        state = json.loads(await ws.recv())
+        units = state['data']['units']  # Dict format: {"123": {...}, "456": {...}}
+
+        # 3. Access specific unit by ID (O(1) lookup)
+        settler = units.get('456')
+        if settler:
+            # Build city with settler
+            await ws.send(json.dumps({
+                "type": "action",
+                "agent_id": "my-agent",
+                "timestamp": time.time(),
+                "data": {
+                    "action_type": "unit_build_city",
+                    "unit_id": 456,
+                    "player_id": 0,
+                    "city_name": "NewCity"
+                }
+            }))
+
+        # 4. Use worker to build road
+        worker = units.get('789')
+        if worker:
+            await ws.send(json.dumps({
+                "type": "action",
+                "agent_id": "my-agent",
+                "timestamp": time.time(),
+                "data": {
+                    "action_type": "unit_build_road",
+                    "unit_id": 789,
+                    "player_id": 0,
+                    "x": 10,
+                    "y": 15
+                }
+            }))
+
+        # 5. Fortify warrior for defense
+        warrior = units.get('123')
+        if warrior:
+            await ws.send(json.dumps({
+                "type": "action",
+                "agent_id": "my-agent",
+                "timestamp": time.time(),
+                "data": {
+                    "action_type": "unit_fortify",
+                    "unit_id": 123,
+                    "player_id": 0
+                }
+            }))
+
+        # 6. End turn
+        await ws.send(json.dumps({
+            "type": "action",
+            "agent_id": "my-agent",
+            "timestamp": time.time(),
+            "data": {
+                "action_type": "end_turn",
+                "player_id": 0
+            }
+        }))
+
+        # 7. Process state updates
+        while True:
+            message = json.loads(await ws.recv())
+            if message['type'] == 'state_update':
+                # Analyze new state (dict format)
+                new_units = message['data']['units']
+                for unit_id, unit in new_units.items():
+                    print(f"Unit {unit_id}: {unit['type']} at ({unit.get('x')}, {unit.get('y')})")
+                break
+
+asyncio.run(play_game())
 ```
 
 ## Security Considerations
