@@ -1310,11 +1310,11 @@ class LLMWSHandler(websocket.WebSocketHandler):
         }
 
     def _ensure_dict(self, data: Any, key_field: str = 'id') -> Dict:
-        """Ensure data is returned as a dict (convert list to dict if needed).
+        """Ensure data is returned as a dict (convert list/dict_values to dict if needed).
 
         Args:
-            data: Input data (dict, list, or None)
-            key_field: Field name to use as key when converting list to dict (default: 'id')
+            data: Input data (dict, list, dict_values, or None)
+            key_field: Field name to use as key when converting iterable to dict (default: 'id')
 
         Returns:
             Dictionary keyed by key_field value (string keys for JSON compatibility)
@@ -1323,14 +1323,20 @@ class LLMWSHandler(websocket.WebSocketHandler):
             return {}
         if isinstance(data, dict):
             return data
-        if isinstance(data, list):
-            # Convert list to dict, keyed by key_field
+        # Handle iterables (list, dict_values, dict_keys, etc.) but not strings/bytes
+        if hasattr(data, '__iter__') and not isinstance(data, (str, bytes)):
+            # Convert iterable to dict, keyed by key_field
             result = {}
-            for item in data:
-                if isinstance(item, dict) and key_field in item:
-                    key = str(item[key_field])  # Ensure key is string for JSON compatibility
-                    result[key] = item
-            return result
+            try:
+                for item in data:
+                    if isinstance(item, dict) and key_field in item:
+                        key = str(item[key_field])  # Ensure key is string for JSON compatibility
+                        result[key] = item
+                return result
+            except (TypeError, AttributeError) as e:
+                # If iteration fails, log warning and return empty dict
+                logger.warning(f"Failed to iterate over {type(data)} in _ensure_dict: {e}")
+                return {}
         # Unexpected type - log warning and return empty dict
         logger.warning(f"Unexpected type {type(data)} in _ensure_dict, returning empty dict")
         return {}
