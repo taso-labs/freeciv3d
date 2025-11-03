@@ -224,6 +224,14 @@ class StateCache:
         if not isinstance(data, dict):
             return data
 
+        # CRITICAL FIX: Dict format state is already optimized by StateExtractor
+        # The optimization logic below only handles list format (legacy)
+        # If units/cities are dicts, skip optimization to preserve structure
+        if isinstance(data.get('units'), dict) or isinstance(data.get('cities'), dict):
+            # Dict format already has efficient O(1) lookups and is properly sized
+            # Return as-is to avoid data loss from list-only optimization logic
+            return data
+
         # Core game state for LLM decisions
         optimized = {
             'turn': data.get('turn', 0),
