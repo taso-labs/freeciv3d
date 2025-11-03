@@ -16,9 +16,9 @@ Error codes are organized by action type for easy identification:
 - **E040-E041**: tech_research validation errors
 - **E050-E052**: unit_fortify validation errors
 - **E060-E062**: unit_sentry validation errors
-- **E070-E074**: unit_build_road validation errors
-- **E080-E084**: unit_build_irrigation validation errors
-- **E090-E094**: unit_build_mine validation errors
+- **E070-E072**: unit_build_road validation errors
+- **E080-E082**: unit_build_irrigation validation errors
+- **E090-E092**: unit_build_mine validation errors
 
 This grouping makes it easy to identify which action failed from the error code.
 """
@@ -195,8 +195,8 @@ class LLMActionValidator:
 
         # If game state is available, validate unit ownership
         if game_state and 'units' in game_state:
-            # Convert dict to list for iteration (game_state returns dicts keyed by ID)
-            units = list(game_state['units'].values()) if isinstance(game_state['units'], dict) else game_state['units']
+            # Iterate directly over dict values (no need to create intermediate list)
+            units = game_state['units'].values() if isinstance(game_state['units'], dict) else game_state['units']
             unit_found = False
             for unit in units:
                 if isinstance(unit, dict) and unit.get('id') == unit_id:
@@ -219,8 +219,8 @@ class LLMActionValidator:
 
         # If game state is available, verify unit can build city (settler)
         if game_state and 'units' in game_state:
-            # Convert dict to list for iteration (game_state returns dicts keyed by ID)
-            units = list(game_state['units'].values()) if isinstance(game_state['units'], dict) else game_state['units']
+            # Iterate directly over dict values (no need to create intermediate list)
+            units = game_state['units'].values() if isinstance(game_state['units'], dict) else game_state['units']
             for unit in units:
                 if isinstance(unit, dict) and unit.get('id') == unit_id:
                     if unit.get('owner') != player_id:
@@ -258,8 +258,8 @@ class LLMActionValidator:
 
         # If game state available, verify city ownership
         if game_state and 'cities' in game_state:
-            # Convert dict to list for iteration (game_state returns dicts keyed by ID)
-            cities = list(game_state['cities'].values()) if isinstance(game_state['cities'], dict) else game_state['cities']
+            # Iterate directly over dict values (no need to create intermediate list)
+            cities = game_state['cities'].values() if isinstance(game_state['cities'], dict) else game_state['cities']
             for city in cities:
                 if isinstance(city, dict) and city.get('id') == city_id:
                     if city.get('owner') != player_id:
@@ -334,7 +334,7 @@ class LLMActionValidator:
 
         # Validate unit ownership if game state is available
         if game_state and 'units' in game_state:
-            units = list(game_state['units'].values()) if isinstance(game_state['units'], dict) else game_state['units']
+            units = game_state['units'].values() if isinstance(game_state['units'], dict) else game_state['units']
             for unit in units:
                 if isinstance(unit, dict) and unit.get('id') == unit_id:
                     if unit.get('owner') != player_id:
@@ -354,7 +354,7 @@ class LLMActionValidator:
 
         # Validate unit ownership if game state is available
         if game_state and 'units' in game_state:
-            units = list(game_state['units'].values()) if isinstance(game_state['units'], dict) else game_state['units']
+            units = game_state['units'].values() if isinstance(game_state['units'], dict) else game_state['units']
             for unit in units:
                 if isinstance(unit, dict) and unit.get('id') == unit_id:
                     if unit.get('owner') != player_id:
@@ -366,110 +366,74 @@ class LLMActionValidator:
         return ValidationResult(True)
 
     def _validate_unit_build_road(self, action: Dict[str, Any], player_id: int, game_state: Optional[Dict[str, Any]]) -> ValidationResult:
-        """Validate unit build road action"""
+        """Validate unit build road action
+
+        Note: Road building uses PACKET_UNIT_CHANGE_ACTIVITY which operates on the unit's
+        current tile. Coordinates are not part of the packet protocol.
+        """
         if 'unit_id' not in action:
             return self._validation_error('E070', 'Unit build road requires unit_id field')
 
-        # Require coordinates for build road
-        if 'x' not in action or 'y' not in action:
-            return self._validation_error('E070', 'Unit build road requires x and y coordinates')
-
         unit_id = action['unit_id']
-        x = action['x']
-        y = action['y']
-
-        # Validate coordinates are within bounds
-        try:
-            x = int(x)
-            y = int(y)
-        except (ValueError, TypeError):
-            return self._validation_error('E071', 'Coordinates must be integers')
-
-        if not self._validate_coordinates(x, y, game_state):
-            return self._validation_error('E072', f'Coordinates out of bounds: ({x},{y})')
 
         # Validate unit ownership if game state is available
         if game_state and 'units' in game_state:
-            units = list(game_state['units'].values()) if isinstance(game_state['units'], dict) else game_state['units']
+            units = game_state['units'].values() if isinstance(game_state['units'], dict) else game_state['units']
             for unit in units:
                 if isinstance(unit, dict) and unit.get('id') == unit_id:
                     if unit.get('owner') != player_id:
-                        return self._validation_error('E073', f'Player does not own unit {unit_id}')
+                        return self._validation_error('E071', f'Player does not own unit {unit_id}')
                     return ValidationResult(True)
             # Unit not found in game state
-            return self._validation_error('E074', f'Unit not found: {unit_id}')
+            return self._validation_error('E072', f'Unit not found: {unit_id}')
 
         return ValidationResult(True)
 
     def _validate_unit_build_irrigation(self, action: Dict[str, Any], player_id: int, game_state: Optional[Dict[str, Any]]) -> ValidationResult:
-        """Validate unit build irrigation action"""
+        """Validate unit build irrigation action
+
+        Note: Irrigation building uses PACKET_UNIT_CHANGE_ACTIVITY which operates on the unit's
+        current tile. Coordinates are not part of the packet protocol.
+        """
         if 'unit_id' not in action:
             return self._validation_error('E080', 'Unit build irrigation requires unit_id field')
 
-        # Require coordinates for build irrigation
-        if 'x' not in action or 'y' not in action:
-            return self._validation_error('E080', 'Unit build irrigation requires x and y coordinates')
-
         unit_id = action['unit_id']
-        x = action['x']
-        y = action['y']
-
-        # Validate coordinates are within bounds
-        try:
-            x = int(x)
-            y = int(y)
-        except (ValueError, TypeError):
-            return self._validation_error('E081', 'Coordinates must be integers')
-
-        if not self._validate_coordinates(x, y, game_state):
-            return self._validation_error('E082', f'Coordinates out of bounds: ({x},{y})')
 
         # Validate unit ownership if game state is available
         if game_state and 'units' in game_state:
-            units = list(game_state['units'].values()) if isinstance(game_state['units'], dict) else game_state['units']
+            units = game_state['units'].values() if isinstance(game_state['units'], dict) else game_state['units']
             for unit in units:
                 if isinstance(unit, dict) and unit.get('id') == unit_id:
                     if unit.get('owner') != player_id:
-                        return self._validation_error('E083', f'Player does not own unit {unit_id}')
+                        return self._validation_error('E081', f'Player does not own unit {unit_id}')
                     return ValidationResult(True)
             # Unit not found in game state
-            return self._validation_error('E084', f'Unit not found: {unit_id}')
+            return self._validation_error('E082', f'Unit not found: {unit_id}')
 
         return ValidationResult(True)
 
     def _validate_unit_build_mine(self, action: Dict[str, Any], player_id: int, game_state: Optional[Dict[str, Any]]) -> ValidationResult:
-        """Validate unit build mine action"""
+        """Validate unit build mine action
+
+        Note: Mine building uses PACKET_UNIT_CHANGE_ACTIVITY which operates on the unit's
+        current tile. Coordinates are not part of the packet protocol.
+        """
         if 'unit_id' not in action:
             return self._validation_error('E090', 'Unit build mine requires unit_id field')
 
-        # Require coordinates for build mine
-        if 'x' not in action or 'y' not in action:
-            return self._validation_error('E090', 'Unit build mine requires x and y coordinates')
-
         unit_id = action['unit_id']
-        x = action['x']
-        y = action['y']
-
-        # Validate coordinates are within bounds
-        try:
-            x = int(x)
-            y = int(y)
-        except (ValueError, TypeError):
-            return self._validation_error('E091', 'Coordinates must be integers')
-
-        if not self._validate_coordinates(x, y, game_state):
-            return self._validation_error('E092', f'Coordinates out of bounds: ({x},{y})')
 
         # Validate unit ownership if game_state is available
         if game_state and 'units' in game_state:
-            units = list(game_state['units'].values()) if isinstance(game_state['units'], dict) else game_state['units']
+            units = game_state['units'].values() if isinstance(game_state['units'], dict) else game_state['units']
             for unit in units:
                 if isinstance(unit, dict) and unit.get('id') == unit_id:
                     if unit.get('owner') != player_id:
-                        return self._validation_error('E093', f'Player does not own unit {unit_id}')
+                        return self._validation_error('E091', f'Player does not own unit {unit_id}')
                     return ValidationResult(True)
             # Unit not found in game state
-            return self._validation_error('E094', f'Unit not found: {unit_id}')
+            return self._validation_error('E092', f'Unit not found: {unit_id}')
 
         return ValidationResult(True)
 

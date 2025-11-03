@@ -1804,33 +1804,38 @@ class LLMWSHandler(websocket.WebSocketHandler):
         # AGE-192: New unit action packet converters
         elif action_type == 'unit_fortify':
             return {
-                'pid': 33,  # PACKET_UNIT_ACTIVITY
+                'pid': 222,  # PACKET_UNIT_CHANGE_ACTIVITY
                 'unit_id': action['unit_id'],
-                'activity': 'fortifying'
+                'activity': 10,  # ACTIVITY_FORTIFYING
+                'target': -1  # EXTRA_NONE (server decides)
             }
         elif action_type == 'unit_sentry':
             return {
-                'pid': 33,  # PACKET_UNIT_ACTIVITY
+                'pid': 222,  # PACKET_UNIT_CHANGE_ACTIVITY
                 'unit_id': action['unit_id'],
-                'activity': 'sentry'
+                'activity': 5,  # ACTIVITY_SENTRY
+                'target': -1  # EXTRA_NONE (server decides)
             }
         elif action_type == 'unit_build_road':
             return {
-                'pid': 33,  # PACKET_UNIT_ACTIVITY
+                'pid': 222,  # PACKET_UNIT_CHANGE_ACTIVITY
                 'unit_id': action['unit_id'],
-                'activity': 'road'
+                'activity': 13,  # ACTIVITY_GEN_ROAD
+                'target': -1  # EXTRA_NONE (server auto-selects Road or Railroad)
             }
         elif action_type == 'unit_build_irrigation':
             return {
-                'pid': 33,  # PACKET_UNIT_ACTIVITY
+                'pid': 222,  # PACKET_UNIT_CHANGE_ACTIVITY
                 'unit_id': action['unit_id'],
-                'activity': 'irrigate'
+                'activity': 3,  # ACTIVITY_IRRIGATE
+                'target': -1  # EXTRA_NONE (server decides irrigation type)
             }
         elif action_type == 'unit_build_mine':
             return {
-                'pid': 33,  # PACKET_UNIT_ACTIVITY
+                'pid': 222,  # PACKET_UNIT_CHANGE_ACTIVITY
                 'unit_id': action['unit_id'],
-                'activity': 'mine'
+                'activity': 2,  # ACTIVITY_MINE
+                'target': -1  # EXTRA_NONE (server decides mine type)
             }
 
         return action  # Fallback
