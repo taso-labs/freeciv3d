@@ -1796,10 +1796,21 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 'turn': self.civcom.game_turn if hasattr(self.civcom, 'game_turn') else 1
             }
         elif action_type == 'unit_build_city':
+            unit_id = action['unit_id']
+
+            # Get the tile where the unit is standing (required for city building)
+            tile_id = self._get_unit_tile(unit_id)
+
+            # Use provided city name or generate default
+            city_name = action.get('name', f'City{unit_id}')
+
             return {
-                'pid': 35,  # PACKET_UNIT_BUILD_CITY
-                'unit_id': action['unit_id'],
-                'player_id': action.get('player_id', self.player_id)
+                'pid': 84,              # PACKET_UNIT_DO_ACTION
+                'action_type': 27,      # ACTION_FOUND_CITY
+                'actor_id': unit_id,
+                'target_id': tile_id,
+                'sub_tgt_id': 0,
+                'name': city_name
             }
         elif action_type == 'unit_explore':
             return {
@@ -1845,6 +1856,60 @@ class LLMWSHandler(websocket.WebSocketHandler):
             }
 
         return action  # Fallback
+
+    def _get_unit_tile(self, unit_id: int) -> int:
+        """Get the tile ID where a unit is currently located.
+
+        This is required for actions like city building that need to know
+        the unit's position on the map.
+
+        Args:
+            unit_id: The unit's ID
+
+        Returns:
+            The tile ID where the unit is standing
+
+        Raises:
+            ValueError: If unit not found or tile information unavailable
+        """
+        game_state = self._get_current_game_state()
+
+        if not game_state or 'units' not in game_state:
+            raise ValueError(f"No game state available to find unit {unit_id}")
+
+        units = game_state['units']
+        unit = None
+
+        # Handle both dict and list formats (state can be in either format)
+        if isinstance(units, dict):
+            # Try both string and int keys
+            unit = units.get(str(unit_id)) or units.get(unit_id)
+        else:
+            # List format - find by ID
+            unit = next((u for u in units if u.get('id') == unit_id), None)
+
+        if not unit:
+            raise ValueError(f"Unit {unit_id} not found in game state")
+
+        if 'tile' not in unit:
+            raise ValueError(f"Unit {unit_id} has no tile information")
+
+        return unit['tile']
+
+    def _get_current_game_state(self) -> Optional[Dict[str, Any]]:
+        """Get the most recent game state from CivCom.
+
+        Returns:
+            Current game state dict, or None if unavailable
+        """
+        # Try to get from civcom instance if available
+        if hasattr(self, 'civcom') and self.civcom:
+            try:
+                return self.civcom.get_full_state()
+            except Exception as e:
+                logger.warning(f"Failed to get game state from civcom: {e}")
+
+        return None
 
     def _get_nation_id(self, nation_name: str) -> int:
         """Get nation ID from nation name using dynamically received nation list.

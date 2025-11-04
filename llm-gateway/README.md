@@ -301,6 +301,48 @@ The gateway transforms messages between game_arena format (nested `data` fields)
 }
 ```
 
+### 4. Supported Actions
+
+The LLM Gateway supports various FreeCiv actions. Below are some key examples:
+
+#### City Building
+
+LLM agents can build cities using the `unit_build_city` action:
+
+```json
+{
+  "type": "action_submit",
+  "data": {
+    "action_type": "unit_build_city",
+    "unit_id": 102,
+    "name": "NewCity"
+  }
+}
+```
+
+**Fields:**
+- `unit_id` (required): ID of the settler/worker unit
+- `name` (optional): Custom city name. Defaults to `City{unit_id}` if not provided
+
+**Note:** The current implementation uses auto-generated city names for simplicity. A future enhancement will support server-suggested culturally-appropriate names based on the civilization (e.g., "Rome", "Antium" for Romans). See Linear issue [AGE-199](https://linear.app/agentclash/issue/AGE-199) for details.
+
+**Protocol Details:**
+- Internally converts to `PACKET_UNIT_DO_ACTION` (pid: 84) with `ACTION_FOUND_CITY` (27)
+- Automatically looks up the unit's tile location from game state
+- Matches FreeCiv web client behavior
+
+#### Other Actions
+
+Other supported action types include:
+- `unit_move`: Move unit to coordinates
+- `unit_fortify`: Fortify unit in place
+- `unit_build_road`: Build road at unit location
+- `unit_build_irrigation`: Build irrigation at unit location
+- `tech_research`: Research a technology
+- `end_turn`: End the current turn
+
+See [freeciv-proxy/llm_handler.py](../freeciv-proxy/llm_handler.py) for complete action list and packet conversions.
+
 ## Port Reference
 
 | Service | Port | Purpose | Access |
