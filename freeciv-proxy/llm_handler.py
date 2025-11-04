@@ -1896,21 +1896,6 @@ class LLMWSHandler(websocket.WebSocketHandler):
 
         return unit['tile']
 
-    def _get_current_game_state(self) -> Optional[Dict[str, Any]]:
-        """Get the most recent game state from CivCom.
-
-        Returns:
-            Current game state dict, or None if unavailable
-        """
-        # Try to get from civcom instance if available
-        if hasattr(self, 'civcom') and self.civcom:
-            try:
-                return self.civcom.get_full_state()
-            except Exception as e:
-                logger.warning(f"Failed to get game state from civcom: {e}")
-
-        return None
-
     def _get_nation_id(self, nation_name: str) -> int:
         """Get nation ID from nation name using dynamically received nation list.
 
