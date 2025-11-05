@@ -59,7 +59,7 @@ class GameSession:
         self._ai_slot_lock = threading.Lock()  # Lock for thread-safe AI slot allocation
 
     def allocate_ai_slot(self) -> int:
-        """Thread-safe AI slot allocation for /take commands
+        """Thread-safe AI slot allocation
 
         Returns the next available AI slot (1, 2, 3, ...) for this game session.
         Each call increments the counter atomically using a threading.Lock, ensuring
@@ -70,8 +70,8 @@ class GameSession:
         at the OS thread level, not just within the asyncio event loop.
 
         For multiplayer servers (ports 6001-6009) with aifill=2:
-          - First call returns 1 (AI*1)
-          - Second call returns 2 (AI*2)
+          - First call returns 1
+          - Second call returns 2
 
         Returns:
             int: AI slot number (1-indexed)
@@ -369,7 +369,7 @@ class GameSessionManager:
         """Allocate a civserver port for a game, reusing existing if available
 
         Multiplayer servers run on ODD ports (6001, 6003, 6005, 6007, 6009) and use
-        pubscript_multiplayer.serv with aifill=2 (exactly 2 AI players for LLM agents to /take).
+        pubscript_multiplayer.serv with aifill=2.
 
         Singleplayer servers run on EVEN ports (6000, 6002, 6004, 6006, 6008) and use
         pubscript_singleplayer.serv with aifill=12.
@@ -397,7 +397,7 @@ class GameSessionManager:
 
             # Allocate next available multiplayer port using round-robin from publite2-created ports
             # IMPORTANT: ONLY allocate ODD ports (6001, 6003, 6005, 6007, 6009)
-            # - ODD ports = multiplayer servers with aifill=2 (AI*1, AI*2 for LLM agents)
+            # - ODD ports = multiplayer servers with aifill=2
             # - EVEN ports = singleplayer servers with aifill=12 (wrong for LLM multiplayer!)
             #
             # Publite2 creates ports dynamically on-demand based on metaserver capacity

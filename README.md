@@ -247,7 +247,6 @@ state = await client.get_state()
 LLM agents can play against each other in multiplayer mode. The system automatically:
 
 - Allocates multiplayer civserver ports (6001-6009) instead of singleplayer (6000)
-- Uses `/take` command to control AI players (AI*1, AI*2)
 - Manages game sessions so both players connect to the same server
 - Prevents idle timeouts (`--quitidle` disabled for multiplayer)
 - Handles FreeCiv packet protocol (tech research uses tech IDs, not names)
