@@ -19,9 +19,9 @@ set ysize 64
 set victories spacerace
 
 set landm 50
-set minplayers 2
-set maxplayers 3
-set aifill 0
+set minplayers 1
+set maxplayers 4
+set aifill 2
 set generator ISLAND
 set landmass 30
 set separatepoles ENABLED
