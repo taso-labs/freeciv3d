@@ -34,6 +34,7 @@ except ImportError:
         WEBSOCKET_PING_INTERVAL, WEBSOCKET_PING_TIMEOUT, WEBSOCKET_CLOSE_TIMEOUT
     )
 
+
 # Gateway will be injected by main.py to avoid circular imports
 gateway = None
 
