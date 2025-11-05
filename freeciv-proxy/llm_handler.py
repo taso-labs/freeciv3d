@@ -26,33 +26,6 @@ from error_handler import error_handler, ErrorSeverity, ErrorCategory
 from game_session_manager import game_session_manager
 from ruleset_mapper import RulesetMapper
 from typing import Dict, Any, Optional, List
-from packet_constants import (
-    PACKET_CHAT_MSG_REQ,
-    PACKET_SERVER_JOIN_REQ,
-    PACKET_UNIT_ORDERS,
-    PACKET_CITY_CHANGE,
-    PACKET_PLAYER_RESEARCH,
-    PACKET_NATION_SELECT_REQ,
-    PACKET_PLAYER_READY,
-    PACKET_PLAYER_PHASE_DONE,
-    PACKET_UNIT_DO_ACTION,
-    PACKET_UNIT_SERVER_SIDE_AGENT_SET,
-    PACKET_UNIT_CHANGE_ACTIVITY,
-    PACKET_CITY_BUY,
-    PACKET_CITY_SELL,
-    PACKET_CITY_RENAME,
-    PACKET_CITY_WORKLIST,
-    PACKET_DIPLOMACY_INIT_MEETING_REQ,
-    PACKET_DIPLOMACY_CANCEL_MEETING_REQ,
-    PACKET_DIPLOMACY_CREATE_CLAUSE_REQ,
-    PACKET_DIPLOMACY_REMOVE_CLAUSE_REQ,
-    PACKET_DIPLOMACY_ACCEPT_TREATY_REQ,
-    PACKET_DIPLOMACY_CANCEL_PACT,
-)
-from action_constants import *
-from activity_constants import *
-from order_constants import *
-from packet_converter import convert_action_to_packet
 
 logger = logging.getLogger("freeciv-proxy")
 
@@ -98,16 +71,13 @@ NATION_MAP = {
 }
 DEFAULT_NATIONS = ["Americans", "Romans", "Chinese", "French", "Germans"]
 
-# Global distributed rate limiter with config from llm_config.json
-distributed_rate_limiter = DistributedRateLimiter(
-    redis_config={
-        'host': llm_config.get('redis.host', 'localhost'),
-        'port': llm_config.get('redis.port', 6379),
-        'password': llm_config.get('redis.password'),
-        'db': llm_config.get('redis.db', 0)
-    },
-    rate_limit_config=llm_config.get('validation.rate_limit', {})
-)
+# Global distributed rate limiter
+distributed_rate_limiter = DistributedRateLimiter({
+    'host': llm_config.get('redis.host', 'localhost'),
+    'port': llm_config.get('redis.port', 6379),
+    'password': llm_config.get('redis.password'),
+    'db': llm_config.get('redis.db', 0)
+})
 
 class LLMWSHandler(websocket.WebSocketHandler):
     """
@@ -119,7 +89,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
     Architecture: game_arena → llm-gateway (port 8003) → LLMWSHandler → GameSession
 
     Player ID assignment uses GameSession.allocate_ai_slot() for sequential, thread-safe
-    allocation (see game_session_manager.py). This integrates with civserver via /take commands.
+    allocation (see game_session_manager.py).
 
     NOTE: WebSocket max message size is configured at the Application level in freeciv-proxy.py
     (websocket_max_message_size=50MB) to handle large FreeCiv game state packets.
@@ -138,9 +108,9 @@ class LLMWSHandler(websocket.WebSocketHandler):
         self.player_id = None
         self.civcom = None
         self.game_id = None
-        self.auto_ready = True
+        self.capabilities = []
         self.last_state_query = 0
-        self.action_validator = LLMActionValidator()
+        self.action_validator = None
         self.connection_time = time.time()
         # Session management
         self.session_id = None
@@ -274,12 +244,6 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 self._handle_ping(msg_data)
             elif msg_type == 'player_ready':
                 self._handle_player_ready(msg_data)
-            elif msg_type == 'unit_actions_query':
-                self._handle_unit_actions_query(msg_data)
-            elif msg_type == 'city_actions_query':
-                self._handle_city_actions_query(msg_data)
-            elif msg_type == 'chat':
-                self._handle_chat(msg_data)
             elif self.is_llm_agent:
                 # Forward other messages to civcom if authenticated
                 self._forward_to_civcom(message)
@@ -319,14 +283,12 @@ class LLMWSHandler(websocket.WebSocketHandler):
         We buffer these packets and flush after auth_success.
         """
         logger.debug(f"_handle_llm_connect called for {self.id}")
-        
-        # Extract correlation_id for request/response matching
-        correlation_id = msg_data.get('correlation_id')
 
         try:
             # Extract agent info
             self.agent_id = msg_data.get('agent_id', f'agent-{self.id[:8]}')
             api_token = msg_data.get('api_token', '')
+            requested_capabilities = msg_data.get('capabilities', [])
 
             # Token validation using config
             if not llm_config.validate_token(api_token):
@@ -336,10 +298,18 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 self.write_message(error_response.to_json())
                 return
 
+            # Set up capabilities
+            capability_set = {cap for cap in requested_capabilities
+                            if cap in [t.value for t in ActionType]}
+
+            if not capability_set:
+                capability_set = {cap.value for cap in LLMActionValidator.DEFAULT_CAPABILITIES}
+
             # Create session
             self.session_info = session_manager.create_session(
                 self.agent_id,
-                api_token
+                api_token,
+                capability_set
             )
 
             if not self.session_info:
@@ -350,6 +320,10 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 return
 
             self.session_id = self.session_info.session_id
+
+            # Set up capabilities for action validator
+            self.capabilities = [ActionType(cap) for cap in capability_set]
+            self.action_validator = LLMActionValidator(self.capabilities)
 
             # Register agent first (needed for player_id calculation)
             llm_agents[self.agent_id] = self
@@ -364,11 +338,10 @@ class LLMWSHandler(websocket.WebSocketHandler):
             # Allocate a multiplayer civserver port (6001-6009) for this game_id
             # First player: allocates new port (e.g., 6001)
             # Second player: reuses the same port (6001)
-            # Players are automatically assigned slots by civserver when they connect
             civserver_port = await game_session_manager.allocate_civserver_port(game_id)
             port_type = (
-                "MULTIPLAYER (6001-6009)" if 6001 <= civserver_port <= 6009
-                else "⚠️ SINGLEPLAYER (6000)" if civserver_port == 6000
+                "MULTIPLAYER (6001-6009, aifill=2)" if 6001 <= civserver_port <= 6009
+                else "⚠️ SINGLEPLAYER (6000, aifill=12)" if civserver_port == 6000
                 else "⚠️ UNKNOWN PORT"
             )
             logger.info(
@@ -411,7 +384,8 @@ class LLMWSHandler(websocket.WebSocketHandler):
             logger.info(
                 f"⏳ Starting player registration and nation selection for {self.agent_id}\n"
                 f"   Session ID: {self.session_id}\n"
-                f"   Game ID: {game_id}"
+                f"   Game ID: {game_id}\n"
+                f"   Capabilities: {list(capability_set)}"
             )
 
             try:
@@ -426,14 +400,13 @@ class LLMWSHandler(websocket.WebSocketHandler):
                     f"   Game started: {game_session.game_started}"
                 )
 
-                # Wait for PACKET_CONN_INFO from server to get assigned player_id
                 logger.info(f"⏳ Waiting for PACKET_CONN_INFO for {self.agent_id}...")
                 waited = 0.0
                 max_wait = 5.0
                 while (not hasattr(self.civcom, 'player_id') or self.civcom.player_id is None) and waited < max_wait:
                     await asyncio.sleep(0.2)
                     waited += 0.2
-                    if waited % 1.0 < 0.3:  # Log every ~1 second
+                    if waited % 1.0 < 0.3:
                         logger.info(f"   {self.agent_id}: Still waiting for PACKET_CONN_INFO... ({waited:.1f}s/{max_wait}s)")
 
                 if not hasattr(self.civcom, 'player_id') or self.civcom.player_id is None:
@@ -444,25 +417,25 @@ class LLMWSHandler(websocket.WebSocketHandler):
                     )
                     raise RuntimeError(f"Failed to receive PACKET_CONN_INFO - civserver not responding")
 
-                # Server automatically assigns player_id when we connect
-                self.player_id = self.civcom.player_id
-                logger.info(f"✅ Received player assignment: {self.agent_id} → player_id={self.player_id}")
+                logger.info(f"✅ Received PACKET_CONN_INFO: {self.agent_id} → player_num={self.civcom.player_id}")
 
-                # Verify we got a valid player slot (not observer)
-                if self.player_id >= 512:
+                ai_slot = game_session.allocate_ai_slot()
+                self.player_id = self.civcom.player_id
+
+                if self.player_id is None or self.player_id >= 512:
                     logger.error(
-                        f"❌ {self.agent_id}: Assigned observer slot (player_id={self.player_id})\n"
-                        f"   This means no player slots are available\n"
-                        f"   Game may already be full or not accepting new players"
+                        f"❌ Invalid player_id received for {self.agent_id}:\n"
+                        f"   Player ID: {self.player_id}\n"
+                        f"   AI Slot: {ai_slot}\n"
+                        f"   This usually means civserver is not responding correctly"
                     )
-                    raise RuntimeError(f"No player slots available - got observer slot {self.player_id}")
+                    raise RuntimeError(f"Invalid player_id={self.player_id} (expected < 512)")
 
                 self.session_info.player_id = self.player_id
-                logger.info(f"✅ {self.agent_id} assigned player_id={self.player_id}")
+                logger.info(f"✅ {self.agent_id} assigned player_id={self.player_id} (AI slot {ai_slot})")
 
-                # Register player with game session using server-assigned player_id
                 game_session.add_player(self.agent_id, self.player_id, self)
-                logger.info(f"Registered agent {self.agent_id} with game session {game_id} (server-assigned player_id={self.player_id})")
+                logger.info(f"Registered agent {self.agent_id} with game session {game_id} (player_id={self.player_id})")
 
                 # Get nation preference from message or use default
                 nation_name = msg_data.get('nation', 'random')
@@ -478,7 +451,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 # Send PACKET_NATION_SELECT_REQ immediately with self-assigned player_id
                 logger.debug(f"Sending PACKET_NATION_SELECT_REQ for {self.agent_id}: nation={nation_name} (id={nation_id})")
                 nation_packet = json.dumps({
-                    "pid": PACKET_NATION_SELECT_REQ,  # PACKET_NATION_SELECT_REQ from packets.def:426
+                    "pid": 10,  # PACKET_NATION_SELECT_REQ from packets.def:426
                     "player_no": self.player_id,
                     "nation_no": nation_id,
                     "is_male": True,
@@ -494,72 +467,46 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 # Wait briefly for nation selection to process
                 await asyncio.sleep(0.5)
 
-                # Check auto_ready flag
-                # When auto_ready=False, agent must explicitly send player_ready message
-                auto_ready = msg_data.get('auto_ready', True)
-                self.auto_ready = auto_ready  # Store for auth_success response
+                # Send PACKET_PLAYER_READY immediately after nation selection
+                logger.info(
+                    f"✅ Nation selected for {self.agent_id} - sending PACKET_PLAYER_READY\n"
+                    f"   Player ID: {self.player_id}"
+                )
 
-                if auto_ready:
-                    # Send PACKET_PLAYER_READY immediately after nation selection
-                    logger.info(
-                        f"✅ Nation selected for {self.agent_id} - sending PACKET_PLAYER_READY (auto_ready=True)\n"
-                        f"   Player ID: {self.player_id}"
-                    )
+                ready_packet = {
+                    "pid": 11,  # PACKET_PLAYER_READY from packets.def:434
+                    "player_no": self.player_id,
+                    "is_ready": True
+                }
 
-                    ready_packet = {
-                        "pid": PACKET_PLAYER_READY,  # PACKET_PLAYER_READY from packets.def:434
-                        "player_no": self.player_id,
-                        "is_ready": True
-                    }
+                # Send PACKET_PLAYER_READY to civserver
+                self.civcom.queue_to_civserver(json.dumps(ready_packet))
+                self.civcom.send_packets_to_civserver()
 
-                    # Send PACKET_PLAYER_READY to civserver
-                    self.civcom.queue_to_civserver(json.dumps(ready_packet))
-                    self.civcom.send_packets_to_civserver()
+                # Mark player as ready in game session (triggers game start when all ready)
+                game_session.mark_player_ready(self.agent_id)
 
-                    # Mark player as ready in game session (triggers game start when all ready)
-                    game_session.mark_player_ready(self.agent_id)
-
-                    logger.info(f"📤 PACKET_PLAYER_READY sent for {self.agent_id} (player_no={self.player_id})")
-                else:
-                    logger.info(
-                        f"⏸️ Nation selected for {self.agent_id} - NOT sending PACKET_PLAYER_READY (auto_ready=False)\n"
-                        f"   Player ID: {self.player_id}\n"
-                        f"   Agent must send 'player_ready' message to mark ready and start game"
-                    )
+                logger.info(f"📤 PACKET_PLAYER_READY sent for {self.agent_id} (player_no={self.player_id})")
 
                 # Send auth_success in FLAT format (Gateway will transform to nested for agent)
                 # Game will start when all players are ready (~5-7 seconds after last player joins)
                 # Architecture: Proxy sends flat → Gateway transforms → Agent receives nested
-                auth_response = {
+                self.write_message(json.dumps({
                     'type': 'auth_success',  # Flat format - Gateway expects this
                     'agent_id': self.agent_id,
                     'session_id': self.session_id,
                     'player_id': self.player_id,
                     'game_id': self.game_id,
                     'civserver_port': game_session.civserver_port,  # SPECTATOR FIX: Port for spectator URL generation
+                    'capabilities': list(capability_set),
                     'session_expires_in': int(self.session_info.expires_at - time.time()),
+                    'message': 'Player authenticated successfully. Waiting for all players to join.',
                     'status': 'authenticated',
-                    'auto_ready': auto_ready,  # Indicates if player was auto-marked ready
                     'game_ready': False,  # Game not started yet
-                }
-
-                if auto_ready:
-                    auth_response.update({
-                        'message': 'Player authenticated successfully. Waiting for all players to join.',
-                        'waiting_for': 'game_ready',  # Signal to wait for
-                        'expected_wait_seconds': '5-7',  # Typical initialization time
-                        'instructions': 'Wait for game_ready message before querying state or submitting actions'
-                    })
-                else:
-                    auth_response.update({
-                        'message': 'Player authenticated successfully. Send player_ready message when ready to start.',
-                        'waiting_for': 'player_ready',  # Signal that agent must send ready
-                        'instructions': 'Send player_ready message to mark ready. Game starts when all players are ready.'
-                    })
-
-                if correlation_id:
-                    auth_response['correlation_id'] = correlation_id
-                self.write_message(json.dumps(auth_response))
+                    'waiting_for': 'game_ready',  # Signal to wait for
+                    'expected_wait_seconds': '5-7',  # Typical initialization time
+                    'instructions': 'Wait for game_ready message before querying state or submitting actions'
+                }))
                 logger.info(f"📤 Sent auth_success with player_id={self.player_id} to agent {self.agent_id}")
 
                 # Flush buffered packets immediately after auth_success
@@ -584,14 +531,11 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 self.packet_buffer.clear()
                 logger.warning(f"🔓 Packet buffering DISABLED due to error for {self.agent_id} - cleared {buffer_count} buffered packets")
 
-                error_response = {
+                self.write_message(json.dumps({
                     'type': 'error',
                     'code': 'E142',
                     'message': 'Failed during player registration or nation selection'
-                }
-                if correlation_id:
-                    error_response['correlation_id'] = correlation_id
-                self.write_message(json.dumps(error_response))
+                }))
                 return
 
             SecurityLogger.log_authentication_attempt(self.agent_id, True)
@@ -621,30 +565,21 @@ class LLMWSHandler(websocket.WebSocketHandler):
             logger.warning(f"🔓 Packet buffering DISABLED due to exception for {self.agent_id} - cleared {buffer_count} buffered packets")
 
             error_response = error_handler.handle_system_error(
-                agent_id=self.agent_id, 
-                operation="authentication", 
-                error=e, 
-                session_id=self.session_id
+                "authentication", e, self.agent_id, self.session_id
             )
             self.write_message(error_response.to_json())
 
     def _handle_state_query(self, msg_data: Dict[str, Any]):
         """Handle optimized state query for LLM"""
         logger.info(f"🔍 STATE_QUERY received from agent {self.agent_id}")
-        
-        # Extract correlation_id for request/response matching
-        correlation_id = msg_data.get('correlation_id')
 
         if not self.is_llm_agent:
             logger.warning(f"❌ Agent {self.agent_id} not authenticated for state_query")
-            error_response = {
+            self.write_message(json.dumps({
                 'type': 'error',
                 'code': 'E120',
                 'message': 'Not authenticated as LLM agent'
-            }
-            if correlation_id:
-                error_response['correlation_id'] = correlation_id
-            self.write_message(json.dumps(error_response))
+            }))
             return
 
         # Update session activity
@@ -660,7 +595,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 f"   Session ID: {self.session_id}\n"
                 f"   This means the civserver hasn't assigned a player slot yet or connection failed"
             )
-            error_response = {
+            self.write_message(json.dumps({
                 'type': 'error',
                 'code': 'E122',
                 'message': 'Player not assigned yet - game not ready. Wait for authentication to complete.',
@@ -670,10 +605,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                     'civcom_connected': self.civcom is not None,
                     'suggestion': 'Retry after receiving auth_success with valid player_id'
                 }
-            }
-            if correlation_id:
-                error_response['correlation_id'] = correlation_id
-            self.write_message(json.dumps(error_response))
+            }))
             return
 
         # Check if civcom is connected
@@ -683,7 +615,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 f"   Player ID: {self.player_id}\n"
                 f"   Civcom stopped: {self.civcom.stopped if self.civcom else 'N/A'}"
             )
-            error_response = {
+            self.write_message(json.dumps({
                 'type': 'error',
                 'code': 'E123',
                 'message': 'Connection to game server lost',
@@ -692,10 +624,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                     'player_id': self.player_id,
                     'suggestion': 'Reconnect to game server'
                 }
-            }
-            if correlation_id:
-                error_response['correlation_id'] = correlation_id
-            self.write_message(json.dumps(error_response))
+            }))
             return
 
         try:
@@ -717,17 +646,14 @@ class LLMWSHandler(websocket.WebSocketHandler):
             cached_state = state_cache.get(cache_key)
             if cached_state:
                 logger.debug(f"✓ Cache hit for agent {self.agent_id}")
-                response = {
+                self.write_message(json.dumps({
                     'type': 'state_response',
                     'format': query_format,
                     'data': cached_state,
                     'cached': True,
                     'session_id': self.session_id,
                     'timestamp': time.time()
-                }
-                if correlation_id:
-                    response['correlation_id'] = correlation_id
-                self.write_message(json.dumps(response))
+                }))
                 return
 
             # Generate fresh state
@@ -741,7 +667,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 f"   Units: {len(state_data.get('units', []))}\n"
                 f"   Cities: {len(state_data.get('cities', []))}\n"
                 f"   Players: {len(state_data.get('players', []))}\n"
-                f"   Legal actions: {sum(len(v) for v in state_data.get('legal_actions', {}).values()) if isinstance(state_data.get('legal_actions'), dict) else len(state_data.get('legal_actions', []))}\n"
+                f"   Legal actions: {len(state_data.get('legal_actions', []))}\n"
                 f"   State keys: {list(state_data.keys())}"
             )
 
@@ -749,16 +675,13 @@ class LLMWSHandler(websocket.WebSocketHandler):
             state_cache.set(cache_key, state_data, self.player_id)
 
             # Send response
-            response = {
+            self.write_message(json.dumps({
                 'type': 'state_response',
                 'format': query_format,
                 'data': state_data,
                 'cached': False,
                 'timestamp': time.time()
-            }
-            if correlation_id:
-                response['correlation_id'] = correlation_id
-            self.write_message(json.dumps(response))
+            }))
 
             self.last_state_query = time.time()
 
@@ -769,7 +692,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 f"   Game ID: {self.game_id}\n"
                 f"   Error: {e}"
             )
-            error_response = {
+            self.write_message(json.dumps({
                 'type': 'error',
                 'code': 'E121',
                 'message': f'State query failed: {str(e)}',
@@ -778,10 +701,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                     'player_id': self.player_id,
                     'error': str(e)
                 }
-            }
-            if correlation_id:
-                error_response['correlation_id'] = correlation_id
-            self.write_message(json.dumps(error_response))
+            }))
 
     def _normalize_game_arena_action(self, action_data: Dict[str, Any]) -> Dict[str, Any]:
         """Normalize game_arena action format to proxy format.
@@ -810,43 +730,16 @@ class LLMWSHandler(websocket.WebSocketHandler):
         # Build normalized action
         normalized = {"type": action_type}
 
-        # Map actor_id based on action type
-        # NOTE: game_arena uses actor_id for different meanings:
-        # - unit actions: actor_id is a unit ID
-        # - city actions: actor_id is a city ID
-        # - player-level actions: actor_id is a player ID
-        # Map to the appropriate normalized key and don't overwrite explicit fields
+        # Map actor_id to player_id if present
         if "actor_id" in action_data:
-            # Prefer explicit unit_id/city_id/player_id if provided
-            if action_data.get("unit_id") is not None:
-                normalized["unit_id"] = action_data["unit_id"]
-            elif action_data.get("city_id") is not None:
-                normalized["city_id"] = action_data["city_id"]
-            elif action_data.get("player_id") is not None:
-                normalized["player_id"] = action_data["player_id"]
-            else:
-                # Heuristics: decide mapping based on action type
-                if action_type.startswith("unit_"):
-                    normalized["unit_id"] = action_data["actor_id"]
-                elif action_type.startswith("city_"):
-                    normalized["city_id"] = action_data["actor_id"]
-                elif action_type in ("tech_research", "end_turn", "diplomacy_message"):
-                    normalized["player_id"] = action_data["actor_id"]
-                else:
-                    # Fallback: if unknown action type, leave as player_id to be conservative
-                    normalized["player_id"] = action_data["actor_id"]
+            normalized["player_id"] = action_data["actor_id"]
 
         # Action-specific field mappings
         if action_type == "tech_research":
             # Extract tech name from target field
-            # Supports multiple formats: {"value": "tech"}, {"tech": "tech"}, {"tech_name": "tech"}, or "tech"
             target = action_data.get("target", {})
             if isinstance(target, dict) and "value" in target:
                 tech_name = target["value"]
-            elif isinstance(target, dict) and "tech" in target:
-                tech_name = target["tech"]
-            elif isinstance(target, dict) and "tech_name" in target:
-                tech_name = target["tech_name"]
             elif isinstance(target, str):
                 tech_name = target
             else:
@@ -882,14 +775,8 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 normalized["city_id"] = action_data["city_id"]
 
             target = action_data.get("target", {})
-            if isinstance(target, dict):
-                # Support multiple field names for production
-                if "value" in target:
-                    production = target["value"]
-                elif "production" in target:
-                    production = target["production"]
-                else:
-                    production = action_data.get("production_type", "")
+            if isinstance(target, dict) and "value" in target:
+                production = target["value"]
             elif isinstance(target, str):
                 production = target
             else:
@@ -1041,20 +928,14 @@ class LLMWSHandler(websocket.WebSocketHandler):
         logger.info(f"🎯 _handle_action ENTRY: agent={self.agent_id}")
         logger.info(f"🎯 msg_data keys: {list(msg_data.keys())}")
         logger.info(f"🎯 msg_data: {msg_data}")
-        
-        # Extract correlation_id for request/response matching
-        correlation_id = msg_data.get('correlation_id')
 
         if not self.is_llm_agent:
             logger.warning(f"❌ Agent {self.agent_id} not authenticated for actions")
-            error_response = {
+            self.write_message(json.dumps({
                 'type': 'error',
                 'code': 'E130',
                 'message': 'Not authenticated as LLM agent'
-            }
-            if correlation_id:
-                error_response['correlation_id'] = correlation_id
-            self.write_message(json.dumps(error_response))
+            }))
             return
 
         # Update session activity for actions
@@ -1077,7 +958,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                     logger.info(f"✅ Parsed to: {action_data}")
                 except Exception as e:
                     logger.error(f"❌ Failed to parse canonical action '{action_data}': {e}")
-                    error_response = {
+                    self.write_message(json.dumps({
                         'type': 'action_rejected',
                         'error_code': 'E134',
                         'error_message': f'Invalid action format: {e}. Expected canonical format like "tech_research_player(1)_target(Alphabet)" or JSON object.',
@@ -1086,10 +967,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                             'canonical': 'tech_research_player(1)_target(Alphabet)',
                             'json': '{"type": "tech_research", "tech_name": "alphabet", "player_id": 1}'
                         }
-                    }
-                    if correlation_id:
-                        error_response['correlation_id'] = correlation_id
-                    self.write_message(json.dumps(error_response))
+                    }))
                     return
 
             # NEW: Handle game_arena dict format with "action_type" instead of "type"
@@ -1103,15 +981,12 @@ class LLMWSHandler(websocket.WebSocketHandler):
                     logger.info(f"✅ Normalized action has 'tech_name': {'tech_name' in action_data if action_data.get('type') == 'tech_research' else 'N/A'}")
                 except Exception as e:
                     logger.error(f"❌ Failed to normalize game_arena action: {e}")
-                    error_response = {
+                    self.write_message(json.dumps({
                         'type': 'action_rejected',
                         'error_code': 'E135',
                         'error_message': f'Failed to normalize action format: {e}',
                         'action': action_data
-                    }
-                    if correlation_id:
-                        error_response['correlation_id'] = correlation_id
-                    self.write_message(json.dumps(error_response))
+                    }))
                     return
 
             # Sanitize action data to prevent injection attacks
@@ -1121,15 +996,12 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 logger.info(f"✓ Sanitized action: {sanitized_action}")
             except SecurityError as e:
                 SecurityLogger.log_security_violation(self.agent_id, "INPUT_SANITIZATION", str(e))
-                error_response = {
+                self.write_message(json.dumps({
                     'type': 'action_rejected',
                     'error_code': 'S001',
                     'error_message': f'Input sanitization failed: {e}',
                     'action': action_data
-                }
-                if correlation_id:
-                    error_response['correlation_id'] = correlation_id
-                self.write_message(json.dumps(error_response))
+                }))
                 return
 
             # Add player_id to action if not present
@@ -1152,7 +1024,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 game_state = self._get_current_game_state()
                 current_turn = game_state.get('turn', 'unknown') if game_state else 'unknown'
 
-                error_response = {
+                self.write_message(json.dumps({
                     'type': 'action_rejected',
                     'error_code': validation_result.error_code,
                     'error_message': validation_result.error_message,
@@ -1161,10 +1033,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                     'player_id': self.player_id,
                     'turn': current_turn,
                     'timestamp': time.time()
-                }
-                if correlation_id:
-                    error_response['correlation_id'] = correlation_id
-                self.write_message(json.dumps(error_response))
+                }))
                 logger.warning(
                     f"❌ Action validation failed for {self.agent_id}:\n"
                     f"   Error Code: {validation_result.error_code}\n"
@@ -1184,196 +1053,53 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 # Without this, actions are queued but never transmitted to civserver
                 self.civcom.send_packets_to_civserver()
 
-                # Reset rate limits on end_turn to give agent fresh quota for next turn
-                # This prevents cumulative rate limiting across turns in turn-based games
-                if sanitized_action.get('type') == 'end_turn' and self.agent_id:
-                    reset_on_turn_end = llm_config.get('validation.rate_limit.reset_on_turn_end', True)
-                    if reset_on_turn_end:
-                        distributed_rate_limiter.reset_limits(self.agent_id)
-                        logger.info(f"Rate limits reset for {self.agent_id} after end_turn")
-
                 SecurityLogger.log_connection_event(self.agent_id, "ACTION_EXECUTED",
                                                   f"type={sanitized_action.get('type')}")
 
-                response = {
+                self.write_message(json.dumps({
                     'type': 'action_accepted',
                     'action': sanitized_action,
                     'timestamp': time.time()
-                }
-                if correlation_id:
-                    response['correlation_id'] = correlation_id
-                self.write_message(json.dumps(response))
+                }))
             else:
-                error_response = {
+                self.write_message(json.dumps({
                     'type': 'error',
                     'code': 'E131',
                     'message': 'No connection to game server'
-                }
-                if correlation_id:
-                    error_response['correlation_id'] = correlation_id
-                self.write_message(json.dumps(error_response))
+                }))
 
         except Exception as e:
             logger.exception(f"Error handling action: {e}")
-            error_response = {
+            self.write_message(json.dumps({
                 'type': 'error',
                 'code': 'E132',
                 'message': 'Action processing failed'
-            }
-            if correlation_id:
-                error_response['correlation_id'] = correlation_id
-            self.write_message(json.dumps(error_response))
+            }))
 
     def _handle_ping(self, msg_data: Dict[str, Any]):
         """Handle ping message"""
-        correlation_id = msg_data.get('correlation_id')
-        response = {
+        self.write_message(json.dumps({
             'type': 'pong',
             'timestamp': time.time(),
             'agent_id': self.agent_id
-        }
-        if correlation_id:
-            response['correlation_id'] = correlation_id
-        self.write_message(json.dumps(response))
-
-    def _handle_chat(self, msg_data: Dict[str, Any]):
-        """Handle chat message from LLM agent
-
-        Sends chat messages/commands to the FreeCiv server via PACKET_CHAT_MSG_REQ (pid=26).
-        Primary use cases:
-        - Server commands: /set mapsize MEDIUM, /save, /start
-        - Player chat: general messages to other players
-
-        The FreeCiv server handles its own command restrictions.
-        """
-        if not self.is_llm_agent:
-            self.write_message(
-                json.dumps(
-                    {
-                        "type": "error",
-                        "code": "E401",
-                        "message": "Not authenticated as LLM agent",
-                    }
-                )
-            )
-            return
-
-        # Extract message from data field or top-level
-        message = None
-        if "data" in msg_data and isinstance(msg_data["data"], dict):
-            message = msg_data["data"].get("message")
-        if message is None:
-            message = msg_data.get("message")
-
-        if not message:
-            self.write_message(
-                json.dumps(
-                    {
-                        "type": "error",
-                        "code": "E220",
-                        "message": "Missing required field: message",
-                    }
-                )
-            )
-            return
-
-        # Validate message length (max 500 characters)
-        if len(message) > 500:
-            self.write_message(
-                json.dumps(
-                    {
-                        "type": "error",
-                        "code": "E170",
-                        "message": f"Chat message too long: {len(message)} characters (max 500)",
-                    }
-                )
-            )
-            return
-
-        # Create PACKET_CHAT_MSG_REQ packet (pid=26)
-        chat_packet = {"pid": PACKET_CHAT_MSG_REQ, "message": message}
-
-        # Send to civcom
-        if self.civcom:
-            try:
-                self.civcom.queue_to_civserver(json.dumps(chat_packet))
-                self.civcom.send_packets_to_civserver()
-
-                # Log command vs chat
-                if message.startswith("/"):
-                    logger.info(f"Agent {self.agent_id} sent command: {message}")
-                else:
-                    logger.debug(
-                        f"Agent {self.agent_id} sent chat: {message[:50]}..."
-                        if len(message) > 50
-                        else f"Agent {self.agent_id} sent chat: {message}"
-                    )
-
-                # Send acknowledgment
-                correlation_id = msg_data.get("correlation_id")
-                response = {
-                    "type": "chat_sent",
-                    "agent_id": self.agent_id,
-                    "timestamp": time.time(),
-                    "data": {
-                        "success": True,
-                        "message": (
-                            message[:100] + "..." if len(message) > 100 else message
-                        ),
-                    },
-                }
-                if correlation_id:
-                    response["correlation_id"] = correlation_id
-
-                self.write_message(json.dumps(response))
-
-            except Exception as e:
-                logger.error(f"Failed to send chat for agent {self.agent_id}: {e}")
-                self.write_message(
-                    json.dumps(
-                        {
-                            "type": "error",
-                            "code": "E171",
-                            "message": f"Failed to send chat message: {str(e)}",
-                        }
-                    )
-                )
-        else:
-            self.write_message(
-                json.dumps(
-                    {
-                        "type": "error",
-                        "code": "E123",
-                        "message": "Not connected to game server",
-                    }
-                )
-            )
+        }))
 
     def _handle_player_ready(self, msg_data: Dict[str, Any]):
         """Handle player ready status from LLM agent"""
-        # Extract correlation_id for request/response matching
-        correlation_id = msg_data.get('correlation_id')
-        
         if not self.is_llm_agent:
-            error_response = {
+            self.write_message(json.dumps({
                 'type': 'error',
                 'code': 'E401',
                 'message': 'Not authenticated as LLM agent'
-            }
-            if correlation_id:
-                error_response['correlation_id'] = correlation_id
-            self.write_message(json.dumps(error_response))
+            }))
             return
 
         if self.player_id is None:
-            error_response = {
+            self.write_message(json.dumps({
                 'type': 'error',
                 'code': 'E402',
                 'message': 'No player ID assigned yet'
-            }
-            if correlation_id:
-                error_response['correlation_id'] = correlation_id
-            self.write_message(json.dumps(error_response))
+            }))
             return
 
         # Get ready status from message (default to True)
@@ -1381,7 +1107,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
 
         # Create PACKET_PLAYER_READY packet
         ready_packet = {
-            "pid": PACKET_PLAYER_READY,  # PACKET_PLAYER_READY from packets.def:434
+            "pid": 11,  # PACKET_PLAYER_READY from packets.def:434
             "player_no": self.player_id,
             "is_ready": is_ready
         }
@@ -1395,437 +1121,25 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 logger.info(f"Agent {self.agent_id} marked ready={is_ready} (player_no={self.player_id})")
 
                 # Send confirmation back to agent
-                response = {
+                self.write_message(json.dumps({
                     'type': 'ready_confirmed',
                     'player_no': self.player_id,
                     'is_ready': is_ready,
                     'message': f'Player {self.player_id} marked {"ready" if is_ready else "not ready"}'
-                }
-                if correlation_id:
-                    response['correlation_id'] = correlation_id
-                self.write_message(json.dumps(response))
+                }))
             except Exception as e:
                 logger.error(f"Failed to send ready packet: {e}")
-                error_response = {
+                self.write_message(json.dumps({
                     'type': 'error',
                     'code': 'E403',
                     'message': f'Failed to send ready packet: {str(e)}'
-                }
-                if correlation_id:
-                    error_response['correlation_id'] = correlation_id
-                self.write_message(json.dumps(error_response))
+                }))
         else:
-            error_response = {
+            self.write_message(json.dumps({
                 'type': 'error',
                 'code': 'E404',
                 'message': 'Not connected to game server'
-            }
-            if correlation_id:
-                error_response['correlation_id'] = correlation_id
-            self.write_message(json.dumps(error_response))
-
-    def _handle_unit_actions_query(self, msg_data: Dict[str, Any]):
-        """Handle batch query for available actions on one or more units
-        
-        Request format (per protocol v2.0.1):
-        {
-            "type": "unit_actions_query",
-            "agent_id": "my-agent",
-            "timestamp": 1234567890.123,
-            "correlation_id": "unit-query-001",
-            "data": {
-                "unit_ids": [42, 43, 44]
-            }
-        }
-        
-        Response format:
-        {
-            "type": "unit_actions_response",
-            "agent_id": "my-agent",
-            "timestamp": 1234567890.125,
-            "correlation_id": "unit-query-001",
-            "data": {
-                "success": true,
-                "units": {
-                    "42": {"unit_id": 42, "success": true, "actions": [...]},
-                    "43": {"unit_id": 43, "success": true, "actions": [...]},
-                    "44": {"unit_id": 44, "success": false, "error": {...}, "actions": []}
-                },
-                "errors": [...]
-            }
-        }
-        """
-        import time as time_module
-        correlation_id = msg_data.get('correlation_id')
-        data = msg_data.get('data', {})
-        unit_ids = data.get('unit_ids', [])
-
-        logger.info(f"🎯 UNIT_ACTIONS_QUERY received from agent {self.agent_id} for units {unit_ids}")
-
-        if not self.is_llm_agent:
-            self.write_message(json.dumps({
-                'type': 'error',
-                'code': 'E120',
-                'message': 'Not authenticated as LLM agent',
-                'correlation_id': correlation_id
             }))
-            return
-
-        if self.player_id is None:
-            self.write_message(json.dumps({
-                'type': 'error',
-                'code': 'E230',
-                'message': 'No player ID assigned - cannot query units',
-                'correlation_id': correlation_id
-            }))
-            return
-
-        if not unit_ids or not isinstance(unit_ids, list):
-            self.write_message(json.dumps({
-                'type': 'error',
-                'code': 'E220',
-                'message': 'Missing or invalid unit_ids array in data',
-                'correlation_id': correlation_id
-            }))
-            return
-
-        try:
-            state_extractor = self._get_state_extractor()
-            if not state_extractor:
-                self.write_message(json.dumps({
-                    'type': 'error',
-                    'code': 'E500',
-                    'message': 'State extractor not available',
-                    'correlation_id': correlation_id
-                }))
-                return
-
-            # Process each unit in batch
-            units_results = {}
-            errors = []
-            any_success = False
-
-            for unit_id in unit_ids:
-                result = state_extractor.get_unit_actions(unit_id, self.player_id)
-                unit_key = str(unit_id)
-
-                if result.get('error'):
-                    error_info = {
-                        'code': result.get('error_code', 'E230'),
-                        'message': result['error']
-                    }
-                    units_results[unit_key] = {
-                        'unit_id': unit_id,
-                        'success': False,
-                        'error': error_info,
-                        'actions': []
-                    }
-                    errors.append({'unit_id': unit_id, **error_info})
-                else:
-                    any_success = True
-                    # Format actions per protocol spec
-                    actions = self._format_unit_actions_for_response(unit_id, result)
-                    units_results[unit_key] = {
-                        'unit_id': unit_id,
-                        'success': True,
-                        'actions': actions
-                    }
-
-            # Build response per protocol spec
-            response = {
-                'type': 'unit_actions_response',
-                'agent_id': self.agent_id,
-                'timestamp': time_module.time(),
-                'data': {
-                    'success': any_success,
-                    'units': units_results,
-                    'errors': errors
-                }
-            }
-            if correlation_id:
-                response['correlation_id'] = correlation_id
-
-            self.write_message(json.dumps(response))
-            num_actions = sum(len(u['actions']) for u in units_results.values() if u['success'])
-            logger.info(f"✓ UNIT_ACTIONS_QUERY SUCCESS for agent {self.agent_id}: {len(unit_ids)} units queried, {len(errors)} errors, {num_actions} actions returned")
-
-        except Exception as e:
-            logger.error(f"❌ UNIT_ACTIONS_QUERY EXCEPTION for agent {self.agent_id}: {e}")
-            self.write_message(json.dumps({
-                'type': 'error',
-                'code': 'E500',
-                'message': f'Internal error: {str(e)}',
-                'correlation_id': correlation_id
-            }))
-
-    def _format_unit_actions_for_response(self, unit_id: int, result: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """Format unit actions to be directly submittable per protocol spec"""
-        formatted_actions = []
-        for action in result.get('actions', []):
-            action_type = action.get('action', '')
-            params = action.get('params', {})
-            is_valid = action.get('is_valid', True)
-            reason = action.get('reason')
-            action_id = action.get('action_id')
-            
-            formatted = {
-                'action_type': self._map_action_type(action_type),
-                'actor_id': unit_id,
-                'is_valid': is_valid
-            }
-            
-            # Add reason if action is invalid
-            if not is_valid and reason:
-                formatted['reason'] = reason
-            
-            # Add FreeCiv action ID if available (useful for debugging)
-            if action_id is not None:
-                formatted['action_id'] = action_id
-            
-            # Add target based on action type and params
-            if params:
-                if 'direction' in params:
-                    formatted['target'] = {'direction': params['direction']}
-                    if 'target' in params and isinstance(params['target'], dict):
-                        formatted['target'].update(params['target'])
-                elif 'target' in params:
-                    formatted['target'] = params['target']
-                elif 'improvement' in params:
-                    formatted['target'] = {'improvement': params['improvement']}
-                elif 'city' in params:
-                    formatted['target'] = {'city': params['city']}
-                elif params:  # Pass through any other params
-                    formatted['target'] = params
-            
-            formatted_actions.append(formatted)
-        return formatted_actions
-
-    def _map_action_type(self, action: str) -> str:
-        """Map internal action names to protocol action_type values"""
-        mapping = {
-            'move': 'unit_move',
-            'fortify': 'unit_fortify',
-            'build_city': 'unit_build_city',
-            'join_city': 'unit_join_city',
-            'build_road': 'unit_build_road',
-            'build_irrigation': 'unit_build_irrigation',
-            'build_mine': 'unit_build_mine',
-            'build_base': 'unit_build_base',
-            'build_improvement': 'unit_build_improvement',
-            'transform': 'unit_transform',
-            'cultivate': 'unit_cultivate',
-            'plant': 'unit_plant',
-            'attack': 'unit_attack',
-            'suicide_attack': 'unit_suicide_attack',
-            'bombard': 'unit_bombard',
-            'capture': 'unit_capture',
-            'conquer_city': 'unit_conquer_city',
-            'nuke': 'unit_nuke',
-            'nuke_city': 'unit_nuke_city',
-            'nuke_units': 'unit_nuke_units',
-            'pillage': 'unit_pillage',
-            'clean': 'unit_clean',
-            'trade_route': 'unit_trade_route',
-            'marketplace': 'unit_marketplace',
-            'help_wonder': 'unit_help_wonder',
-            'establish_embassy': 'unit_establish_embassy',
-            'investigate_city': 'spy_investigate_city',
-            'poison': 'spy_poison',
-            'sabotage_city': 'spy_sabotage_city',
-            'steal_tech': 'spy_steal_tech',
-            'incite_city': 'spy_incite_city',
-            'bribe_unit': 'spy_bribe_unit',
-            'sabotage_unit': 'spy_sabotage_unit',
-            'spy_attack': 'spy_attack',
-            'board': 'unit_board',
-            'deboard': 'unit_deboard',
-            'embark': 'unit_embark',
-            'disembark': 'unit_disembark',
-            'load': 'unit_load',
-            'unload': 'unit_unload',
-            'disband': 'unit_disband',
-            'home_city': 'unit_home_city',
-            'upgrade': 'unit_upgrade',
-            'convert': 'unit_convert',
-            'heal': 'unit_heal',
-            'airlift': 'unit_airlift',
-            'paradrop': 'unit_paradrop',
-            'skip': 'unit_skip',
-            'sentry': 'unit_sentry',
-        }
-        return mapping.get(action, f'unit_{action}')
-
-    def _handle_city_actions_query(self, msg_data: Dict[str, Any]):
-        """Handle batch query for available actions on one or more cities
-        
-        Request format (per protocol v2.0.1):
-        {
-            "type": "city_actions_query",
-            "agent_id": "my-agent",
-            "timestamp": 1234567890.123,
-            "correlation_id": "city-query-001",
-            "data": {
-                "city_ids": [5, 6]
-            }
-        }
-        
-        Response format:
-        {
-            "type": "city_actions_response",
-            "agent_id": "my-agent",
-            "timestamp": 1234567890.125,
-            "correlation_id": "city-query-001",
-            "data": {
-                "success": true,
-                "cities": {
-                    "5": {"city_id": 5, "success": true, "actions": [...]},
-                    "6": {"city_id": 6, "success": true, "actions": [...]}
-                },
-                "errors": []
-            }
-        }
-        """
-        import time as time_module
-        correlation_id = msg_data.get('correlation_id')
-        data = msg_data.get('data', {})
-        city_ids = data.get('city_ids', [])
-
-        logger.info(f"🏙️ CITY_ACTIONS_QUERY received from agent {self.agent_id} for cities {city_ids}")
-
-        if not self.is_llm_agent:
-            self.write_message(json.dumps({
-                'type': 'error',
-                'code': 'E120',
-                'message': 'Not authenticated as LLM agent',
-                'correlation_id': correlation_id
-            }))
-            return
-
-        if self.player_id is None:
-            self.write_message(json.dumps({
-                'type': 'error',
-                'code': 'E240',
-                'message': 'No player ID assigned - cannot query cities',
-                'correlation_id': correlation_id
-            }))
-            return
-
-        if not city_ids or not isinstance(city_ids, list):
-            self.write_message(json.dumps({
-                'type': 'error',
-                'code': 'E220',
-                'message': 'Missing or invalid city_ids array in data',
-                'correlation_id': correlation_id
-            }))
-            return
-
-        try:
-            state_extractor = self._get_state_extractor()
-            if not state_extractor:
-                self.write_message(json.dumps({
-                    'type': 'error',
-                    'code': 'E500',
-                    'message': 'State extractor not available',
-                    'correlation_id': correlation_id
-                }))
-                return
-
-            # Process each city in batch
-            cities_results = {}
-            errors = []
-            any_success = False
-
-            for city_id in city_ids:
-                result = state_extractor.get_city_actions(city_id, self.player_id)
-                city_key = str(city_id)
-
-                if result.get('error'):
-                    error_info = {
-                        'code': result.get('error_code', 'E240'),
-                        'message': result['error']
-                    }
-                    cities_results[city_key] = {
-                        'city_id': city_id,
-                        'success': False,
-                        'error': error_info,
-                        'actions': []
-                    }
-                    errors.append({'city_id': city_id, **error_info})
-                else:
-                    any_success = True
-                    # Format actions per protocol spec
-                    actions = self._format_city_actions_for_response(city_id, result)
-                    cities_results[city_key] = {
-                        'city_id': city_id,
-                        'success': True,
-                        'actions': actions
-                    }
-
-            # Build response per protocol spec
-            response = {
-                'type': 'city_actions_response',
-                'agent_id': self.agent_id,
-                'timestamp': time_module.time(),
-                'data': {
-                    'success': any_success,
-                    'cities': cities_results,
-                    'errors': errors
-                }
-            }
-            if correlation_id:
-                response['correlation_id'] = correlation_id
-
-            self.write_message(json.dumps(response))
-            logger.info(f"✓ CITY_ACTIONS_QUERY SUCCESS for agent {self.agent_id}: {len(city_ids)} cities queried, {len(errors)} errors")
-
-        except Exception as e:
-            logger.error(f"❌ CITY_ACTIONS_QUERY EXCEPTION for agent {self.agent_id}: {e}")
-            self.write_message(json.dumps({
-                'type': 'error',
-                'code': 'E500',
-                'message': f'Internal error: {str(e)}',
-                'correlation_id': correlation_id
-            }))
-
-    def _format_city_actions_for_response(self, city_id: int, result: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """Format city actions to be directly submittable per protocol spec"""
-        formatted_actions = []
-        for action in result.get('actions', []):
-            action_type = action.get('action', '')
-            formatted = {
-                'action_type': self._map_city_action_type(action_type),
-                'actor_id': city_id
-            }
-            # Add target based on action type
-            params = action.get('params', {})
-            if action_type == 'change_production' and 'to' in params:
-                formatted['target'] = {'production': params['to']}
-            elif action_type == 'sell_improvement' and 'improvement' in params:
-                formatted['target'] = {'improvement': params['improvement']}
-            formatted_actions.append(formatted)
-        return formatted_actions
-
-    def _map_city_action_type(self, action: str) -> str:
-        """Map internal city action names to protocol action_type values"""
-        mapping = {
-            'change_production': 'city_production',
-            'buy': 'city_buy',
-            'sell_improvement': 'city_sell_improvement',
-            'add_specialist': 'city_add_specialist'
-        }
-        return mapping.get(action, f'city_{action}')
-
-    def _get_state_extractor(self) -> Optional[StateExtractor]:
-        """Get or create StateExtractor for current civcom connection"""
-        if not self.civcom:
-            return None
-        try:
-            # StateExtractor uses civcom_registry for access
-            # Note: StateExtractor.__init__(civcom, cache, registry) - use named params for clarity
-            return StateExtractor(civcom=None, cache=None, registry=civcom_registry)
-        except Exception as e:
-            logger.error(f"Failed to create StateExtractor: {e}")
-            return None
 
     def _build_optimized_state(self, format_type: str, include_actions: bool) -> Dict[str, Any]:
         """Build optimized game state for LLM consumption using StateExtractor"""
@@ -1912,14 +1226,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
 
             if include_actions:
                 legal_actions = self._get_legal_actions_optimized(full_state)
-                # Log action counts - legal_actions is now dict keyed by actor_id
-                total_actions = sum(len(actions) for actions in legal_actions.values())
-                unit_count = sum(1 for k in legal_actions.keys() if k != 'player')
-                logger.info(
-                    f"✓ Generated {total_actions} legal actions for agent {self.agent_id}\n"
-                    f"   Units with actions: {unit_count}\n"
-                    f"   State keys: {list(state.keys())}"
-                )
+                logger.info(f"✓ Generated {len(legal_actions)} legal actions for agent {self.agent_id}")
                 state['legal_actions'] = legal_actions
 
         # For delta format, add change tracking
@@ -2173,187 +1480,131 @@ class LLMWSHandler(websocket.WebSocketHandler):
 
         return opportunities
 
-    def _get_legal_actions_optimized(self, game_state: Dict[str, Any] = None) -> Dict[str, List[Dict[str, Any]]]:
-        """Get legal actions keyed by actor_id for O(1) lookup.
+    def _get_legal_actions_optimized(self, game_state: Dict[str, Any] = None) -> List[Dict[str, Any]]:
+        """Get top legal actions for LLM (limited to ~20 most important)"""
+        actions = []
 
-        Returns dict structure:
-        {
-            "<unit_id>": [list of actions for that unit],
-            "player": [player-level actions like end_turn, tech_research]
-        }
-
-        Uses state_extractor._generate_unit_actions() which properly validates
-        actions against ruleset data and terrain.
-        """
-        actions_by_actor: Dict[str, List[Dict[str, Any]]] = {}
-
-        # Get game state if not provided
         if not game_state and self.civcom and hasattr(self.civcom, 'get_full_state'):
             try:
                 game_state = self.civcom.get_full_state(self.player_id)
             except Exception as e:
-                logger.warning(f"Failed to get game state from civcom: {e}")
+                logger.warning(f"Failed to get legal actions from civcom: {e}")
                 game_state = {}
 
-        if not game_state:
-            # Return fallback with just player actions
-            actions_by_actor['player'] = self._get_player_level_actions({})
-            return actions_by_actor
-
-        # Get state extractor for proper action generation
-        state_extractor = self._get_state_extractor()
-
-        # Generate actions for each unit using state_extractor
-        units = game_state.get('units', {})
-        # Pre-filter units by owner (performance: avoid unnecessary API calls for enemy units)
-        player_units = {uid: unit for uid, unit in units.items()
-                        if unit.get('owner') == self.player_id}
-
-        if state_extractor:
-            # Use the comprehensive action generation from state_extractor
-            for unit_id_str, unit in player_units.items():
-                try:
-                    unit_id = int(unit_id_str)
-                    result = state_extractor.get_unit_actions(unit_id, self.player_id)
-
-                    if result.get('error'):
-                        error_code = result.get('error_code', '')
-                        # E500 = internal error (warning), others like E230 = expected (debug)
-                        if error_code.startswith('E5'):
-                            logger.warning(f"Error getting actions for unit {unit_id}: {result.get('error')}")
-                        else:
-                            logger.debug(f"Skipping unit {unit_id}: {result.get('error')}")
-                        continue
-
-                    # Format actions for protocol
-                    formatted_actions = self._format_unit_actions_for_response(unit_id, result)
-                    if formatted_actions:
-                        actions_by_actor[unit_id_str] = formatted_actions
-
-                except (ValueError, TypeError) as e:
-                    logger.warning(f"Invalid unit_id '{unit_id_str}': {e}")
-                    continue
-        else:
-            # Fallback: generate basic actions without state_extractor
-            logger.warning("StateExtractor unavailable, using fallback action generation")
-            actions_by_actor = self._get_fallback_unit_actions(game_state)
-
-        # Add player-level actions (tech_research, end_turn, city production)
-        actions_by_actor['player'] = self._get_player_level_actions(game_state)
-
-        # Log action counts for debugging
-        total_actions = sum(len(actions) for actions in actions_by_actor.values())
-        unit_count = len([k for k in actions_by_actor.keys() if k != 'player'])
-        logger.debug(f"Generated {total_actions} legal actions for {unit_count} units + player")
-
-        return actions_by_actor
-
-    def _get_player_level_actions(self, game_state: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """Get player-level actions (tech_research, end_turn, city production)."""
-        actions = []
-
         if game_state:
-            # Tech research action - use civcom's authoritative tech filtering
-            # (civcom.get_researchable_techs properly checks prerequisites via can_research_tech)
-            researchable = self.civcom.get_researchable_techs(self.player_id) if self.civcom else []
-            available_techs = [tech['name'] for tech in researchable]
-            if available_techs:
-                # Only suggest one tech at a time
-                tech = available_techs[0]
-                actions.append({
-                    'action_type': 'tech_research',
-                    'actor_id': self.player_id or 0,
-                    'target': {'tech_name': tech},
-                    'is_valid': True
-                })
+            units_raw = game_state.get('units', {})
+            cities_raw = game_state.get('cities', {})
+            techs = game_state.get('techs', [])
 
-            # City production actions
-            cities = game_state.get('cities', {})
-            for city_id_str, city in cities.items():
-                # Skip cities not owned by this player
-                if city.get('owner') != self.player_id:
-                    continue
-                try:
-                    city_id = int(city_id_str)
-                    # Use per-city buildable options if available
-                    can_build = city.get('can_build', [])
-                    if can_build:
-                        # Limit to first 5 production options
-                        for production in can_build[:5]:
-                            prod_name = production.get('name', production) if isinstance(production, dict) else production
-                            actions.append({
-                                'action_type': 'city_change_production',
-                                'actor_id': city_id,
-                                'target': {'production_type': prod_name},
-                                'is_valid': True
-                            })
-                    else:
-                        # Fallback to common early-game options
-                        for production in ['Warriors', 'Granary']:
-                            actions.append({
-                                'action_type': 'city_change_production',
-                                'actor_id': city_id,
-                                'target': {'production_type': production},
-                                'is_valid': True
-                            })
-                except (ValueError, TypeError):
-                    continue
+            # Convert dicts to lists for iteration
+            units = list(units_raw.values()) if isinstance(units_raw, dict) else units_raw
+            cities = list(cities_raw.values()) if isinstance(cities_raw, dict) else cities_raw
 
-        # ALWAYS add end_turn action - critical for game progression
-        actions.append({
-            'action_type': 'end_turn',
-            'actor_id': self.player_id or 0,
-            'is_valid': True
-        })
+            # Get our units that can move
+            our_units = [u for u in units if u.get('owner') == self.player_id and u.get('moves_left', 0) > 0]
 
-        return actions
+            # Add unit movement actions
+            for unit in our_units[:10]:  # Limit to 10 units
+                # Handle unit type - can be int (type ID) or string (type name)
+                unit_type_raw = unit.get('type', '')
+                if isinstance(unit_type_raw, str):
+                    unit_type = unit_type_raw.lower()
+                else:
+                    # Type is an integer ID - use generic name
+                    unit_type = f"unit_{unit_type_raw}"
 
-    def _get_fallback_unit_actions(self, game_state: Dict[str, Any]) -> Dict[str, List[Dict[str, Any]]]:
-        """Fallback action generation when state_extractor is unavailable."""
-        actions_by_actor: Dict[str, List[Dict[str, Any]]] = {}
+                current_x, current_y = unit.get('x', 0), unit.get('y', 0)
 
-        units = game_state.get('units', {})
-        directions = ['n', 'ne', 'e', 'se', 's', 'sw', 'w', 'nw']
-        direction_offsets = {
-            'n': (0, -1), 'ne': (1, -1), 'e': (1, 0), 'se': (1, 1),
-            's': (0, 1), 'sw': (-1, 1), 'w': (-1, 0), 'nw': (-1, -1)
-        }
-
-        for unit_id_str, unit in units.items():
-            # Skip units not owned by this player
-            if unit.get('owner') != self.player_id:
-                continue
-            unit_actions = []
-            try:
-                unit_id = int(unit_id_str)
-            except (ValueError, TypeError):
-                logger.warning(f"Invalid unit_id in fallback: '{unit_id_str}'")
-                continue
-            x, y = unit.get('x', 0), unit.get('y', 0)
-            moves_left = unit.get('moves_left', 0)
-
-            if moves_left > 0:
-                # Add movement actions for all 8 directions
-                for direction in directions:
-                    dx, dy = direction_offsets[direction]
-                    unit_actions.append({
-                        'action_type': 'unit_move',
-                        'actor_id': unit_id,
-                        'target': {'x': x + dx, 'y': y + dy, 'direction': direction},
-                        'is_valid': True
+                # Check if unit can build cities (type 0 is usually Settlers in FreeCiv)
+                if unit_type in ['settlers', 'engineer'] or unit_type_raw == 0:
+                    # Settlement/construction actions
+                    actions.append({
+                        'type': 'unit_build_city',
+                        'unit_id': unit.get('id'),
+                        'priority': 'high',
+                        'description': f"Build city with {unit_type}"
                     })
 
-                # Add fortify action
-                unit_actions.append({
-                    'action_type': 'unit_fortify',
-                    'actor_id': unit_id,
-                    'is_valid': True
-                })
+                # Movement actions (explore nearby)
+                for dx, dy in [(0, 1), (1, 0), (0, -1), (-1, 0)]:  # Adjacent tiles
+                    actions.append({
+                        'type': 'unit_move',
+                        'unit_id': unit.get('id'),
+                        'dest_x': current_x + dx,
+                        'dest_y': current_y + dy,
+                        'priority': 'medium',
+                        'description': f"Move {unit_type} to explore"
+                    })
 
-            if unit_actions:
-                actions_by_actor[unit_id_str] = unit_actions
+            # Add city production actions
+            our_cities = [c for c in cities if c.get('owner') == self.player_id]
+            for city in our_cities[:5]:  # Limit to 5 cities
+                city_id = city.get('id')
 
-        return actions_by_actor
+                # Basic production options
+                productions = ['Warriors', 'Granary', 'Barracks']
+                if 'Bronze Working' in techs:
+                    productions.append('Spearmen')
+                if 'Pottery' in techs:
+                    productions.append('Granary')
+
+                for production in productions[:3]:  # Limit options
+                    actions.append({
+                        'type': 'city_production',
+                        'city_id': city_id,
+                        'production_type': production,
+                        'priority': 'medium',
+                        'description': f"Produce {production} in {city.get('name', 'city')}"
+                    })
+
+            # Add research actions
+            available_techs = ['Alphabet', 'Bronze Working', 'Pottery', 'Animal Husbandry', 'Agriculture']
+            researched_techs = set(techs)
+
+            for tech in available_techs:
+                if tech not in researched_techs:
+                    actions.append({
+                        'type': 'tech_research',
+                        'tech_name': tech,
+                        'priority': 'medium',
+                        'description': f"Research {tech} technology"
+                    })
+                    break  # Only suggest one tech at a time
+
+        # Fallback actions if no game state
+        if not actions:
+            actions = [
+                {
+                    'type': 'unit_move',
+                    'unit_id': 1,
+                    'dest_x': 10,
+                    'dest_y': 20,
+                    'priority': 'medium',
+                    'description': 'Explore nearby area'
+                },
+                {
+                    'type': 'city_production',
+                    'city_id': 1,
+                    'production_type': 'Warriors',
+                    'priority': 'medium',
+                    'description': 'Build military unit'
+                }
+            ]
+
+        # ALWAYS add end_turn action so agents can signal turn completion
+        # This is critical for game progression - without it, agents can't end their turn
+        # and the game will be stuck on the current turn until timeout
+        actions.append({
+            'type': 'end_turn',
+            'priority': 'high',
+            'description': 'End turn and advance game'
+        })
+
+        # Sort by priority and limit to top 20 actions (increased from 15 to ensure end_turn is included)
+        priority_order = {'high': 3, 'medium': 2, 'low': 1}
+        actions.sort(key=lambda x: priority_order.get(x.get('priority', 'low'), 1), reverse=True)
+
+        return actions[:20]
 
     def _get_current_game_state(self) -> Optional[Dict[str, Any]]:
         """Get current game state for validation"""
@@ -2428,11 +1679,8 @@ class LLMWSHandler(websocket.WebSocketHandler):
         })
 
     def _convert_action_to_packet(self, action: Dict[str, Any]) -> Dict[str, Any]:
-        """Convert LLM action to FreeCiv packet format by delegating to the
-        standalone packet_converter.convert_action_to_packet function.
-        """
-        # Delegate to shared, importable implementation which uses canonical constants
-        return convert_action_to_packet(action, civcom=self.civcom)
+        """Convert LLM action to FreeCiv packet format"""
+        action_type = action.get('type')
 
         if action_type == 'unit_move':
             # CRITICAL FIX: Use correct packet ID 73 (PACKET_UNIT_ORDERS)
@@ -2447,44 +1695,8 @@ class LLMWSHandler(websocket.WebSocketHandler):
             # Get unit's current tile for sanity checking
             src_tile = self._get_unit_tile(action['unit_id'])
 
-            # Calculate direction for unit movement
-            # FreeCiv requires the dir field to contain the actual direction index
-            # Direction indices follow DIR_DX/DIR_DY arrays in map.js:
-            #   0: NW (dx=-1, dy=-1)  1: N  (dx=0, dy=-1)   2: NE (dx=1, dy=-1)
-            #   3: W  (dx=-1, dy=0)                         4: E  (dx=1, dy=0)
-            #   5: SW (dx=-1, dy=1)   6: S  (dx=0, dy=1)    7: SE (dx=1, dy=1)
-            src_x = src_tile % map_width
-            src_y = src_tile // map_width
-            dest_x = action['dest_x']
-            dest_y = action['dest_y']
-            dx = dest_x - src_x
-            dy = dest_y - src_y
-
-            # Clamp to -1, 0, 1 for single-step movement
-            dx = max(-1, min(1, dx))
-            dy = max(-1, min(1, dy))
-
-            # Map (dx, dy) to direction index using FreeCiv's DIR_DX/DIR_DY arrays
-            # DIR_DX = [-1, 0, 1, -1, 1, -1, 0, 1]
-            # DIR_DY = [-1, -1, -1, 0, 0, 1, 1, 1]
-            dir_map = {
-                (-1, -1): 0,  # NW
-                (0, -1): 1,   # N
-                (1, -1): 2,   # NE
-                (-1, 0): 3,   # W
-                (1, 0): 4,    # E
-                (-1, 1): 5,   # SW
-                (0, 1): 6,    # S
-                (1, 1): 7,    # SE
-            }
-            direction = dir_map.get((dx, dy), -1)
-
-            # If no movement or invalid direction, use -1
-            if dx == 0 and dy == 0:
-                direction = -1
-
             return {
-                'pid': PACKET_UNIT_ORDERS,  # PACKET_UNIT_ORDERS (client-to-server)
+                'pid': 73,  # PACKET_UNIT_ORDERS (client-to-server)
                 'unit_id': action['unit_id'],
                 'src_tile': src_tile,  # Origin tile, included for sanity checking
                 'dest_tile': dest_tile,  # Destination tile index
@@ -2493,13 +1705,13 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 'vigilant': False,  # Don't auto-wake on enemy contact
                 'orders': [{
                     # CRITICAL: All 6 fields required by FreeCiv JSON parser (dataio_json.c:597-666)
-                    # Use named constants from order_constants/activity_constants/action_constants
-                    'order': ORDER_ACTION_MOVE,        # ORDER_ACTION_MOVE (web client default for movement)
-                    'activity': ACTIVITY_LAST,    # ACTIVITY_LAST (matching web client control.js:1664)
+                    # Even though some fields are only used for specific order types, all must be present
+                    'order': 0,        # ORDER_MOVE (not ORDER_FULL_MP=2!)
+                    'activity': 18,    # ACTIVITY_LAST (matching web client control.js:1664)
                     'target': 0,       # No specific target
-                    'sub_target': 0,   # FIX: PACKET_UNIT_ORDERS uses 'sub_target' (dataio_json.c:dio_put_unit_order_json)
-                    'action': ACTION_NONE,     # Semantic 'no action' sentinel
-                    'dir': direction   # CRITICAL: Actual direction index, NOT -1!
+                    'sub_target': 0,   # Required field (missing caused "incompatible packet contents")
+                    'action': 116,     # ACTION_COUNT (matching web client, means no action)
+                    'dir': -1          # Direction computed by server from src/dest
                 }]
             }
         elif action_type == 'city_production':
@@ -2534,42 +1746,47 @@ class LLMWSHandler(websocket.WebSocketHandler):
                        f"(kind={kind}, value={value})")
 
             return {
-                'pid': PACKET_CITY_CHANGE,  # PACKET_CITY_CHANGE (NOT 45!)
+                'pid': 35,  # PACKET_CITY_CHANGE (NOT 45!)
                 'city_id': action['city_id'],
                 'production_kind': kind,      # 6 for units (VUT_UTYPE), 3 for buildings (VUT_IMPROVEMENT)
                 'production_value': value     # unit_type_id or building_id
             }
         elif action_type == 'tech_research':
             # PACKET_PLAYER_RESEARCH requires tech ID, not tech name
-            # Use RulesetMapper to dynamically map tech names to IDs from PACKET_RULESET_TECH
-            # This supports all rulesets, not just the default one
-
-            tech_name = action.get('tech_name', '')
-            if not tech_name:
-                raise ValueError("tech_research requires 'tech_name' field")
-
-            # Create mapper on first use (cache per handler instance to avoid recreating)
-            # Mapper reads from civcom.techs which is populated from PACKET_RULESET_TECH packets
-            if not hasattr(self, '_ruleset_mapper'):
-                self._ruleset_mapper = RulesetMapper(self.civcom)
-
-            # Map tech name to ID using dynamic mapping from ruleset packets
-            tech_id = self._ruleset_mapper.get_tech_id(tech_name)
+            # TODO: Load tech IDs dynamically from PACKET_RULESET_TECH packets
+            # Map common tech names to IDs (hardcoded for now)
+            tech_name_to_id = {
+                'alphabet': 1,
+                'pottery': 2,
+                'bronze working': 3,
+                'animal husbandry': 4,
+                'agriculture': 5,
+                'writing': 6,
+                'code of laws': 7,
+                'mysticism': 8,
+                'ceremonial burial': 9,
+                'masonry': 10,
+                'the wheel': 11,
+                'warrior code': 12,
+                'iron working': 13,
+                'horseback riding': 14,
+                'map making': 15
+            }
+            tech_name_lower = action['tech_name'].lower()
+            tech_id = tech_name_to_id.get(tech_name_lower)
 
             if tech_id is None:
-                # Unknown tech name - provide helpful error with available options
-                available_techs = self._ruleset_mapper.get_available_techs()
+                # Unknown tech name - this indicates validator/converter mismatch
+                available_techs = sorted(tech_name_to_id.keys())
                 error_msg = (
-                    f"Unknown technology '{tech_name}' cannot be mapped to FreeCiv tech ID. "
-                    f"Available techs: {', '.join(available_techs[:15])}..."
+                    f"Unknown technology '{action['tech_name']}' cannot be mapped to FreeCiv tech ID. "
+                    f"Available techs: {', '.join(available_techs[:10])}..."
                 )
                 logger.error(f"Tech mapping error: {error_msg}")
                 raise ValueError(error_msg)
 
-            logger.info(f"Research: '{tech_name}' -> tech_id {tech_id}")
-
             return {
-                'pid': PACKET_PLAYER_RESEARCH,  # PACKET_PLAYER_RESEARCH
+                'pid': 55,  # PACKET_PLAYER_RESEARCH
                 'tech': tech_id  # Field name is 'tech', not 'tech_name'!
             }
         elif action_type == 'end_turn':
@@ -2579,7 +1796,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
             # CRITICAL FIX (AGE-192): Must send 'turn' field, not 'player_no'
             # Per packets.def:971-973: PACKET_PLAYER_PHASE_DONE requires TURN turn field
             return {
-                'pid': PACKET_PLAYER_PHASE_DONE,  # PACKET_PLAYER_PHASE_DONE
+                'pid': 52,  # PACKET_PLAYER_PHASE_DONE
                 'turn': self.civcom.game_turn if hasattr(self.civcom, 'game_turn') else 1
             }
         elif action_type == 'unit_build_city':
@@ -2592,12 +1809,11 @@ class LLMWSHandler(websocket.WebSocketHandler):
             city_name = action.get('name', f'City{unit_id}')
 
             return {
-                'pid': PACKET_UNIT_DO_ACTION,              # PACKET_UNIT_DO_ACTION
-                'action_type': ACTION_FOUND_CITY,      # ACTION_FOUND_CITY
+                'pid': 84,              # PACKET_UNIT_DO_ACTION
+                'action_type': 27,      # ACTION_FOUND_CITY
                 'actor_id': unit_id,
                 'target_id': tile_id,
                 'sub_tgt_id': 0,
-                'sub_target': 0,
                 'name': city_name
             }
         elif action_type == 'unit_explore':
@@ -2606,572 +1822,45 @@ class LLMWSHandler(websocket.WebSocketHandler):
             # Should use PACKET_UNIT_SERVER_SIDE_AGENT_SET (pid=74)
             # Matches web client control.js:2459-2467 request_unit_ssa_set()
             return {
-                'pid': PACKET_UNIT_SERVER_SIDE_AGENT_SET,  # PACKET_UNIT_SERVER_SIDE_AGENT_SET
+                'pid': 74,  # PACKET_UNIT_SERVER_SIDE_AGENT_SET
                 'unit_id': action['unit_id'],
                 'agent': 1  # SSA_AUTOEXPLORE
             }
         # AGE-192: New unit action packet converters
         elif action_type == 'unit_fortify':
             return {
-                'pid': PACKET_UNIT_CHANGE_ACTIVITY,  # PACKET_UNIT_CHANGE_ACTIVITY
+                'pid': 222,  # PACKET_UNIT_CHANGE_ACTIVITY
                 'unit_id': action['unit_id'],
-                'activity': ACTIVITY_FORTIFYING,  # ACTIVITY_FORTIFYING
+                'activity': 10,  # ACTIVITY_FORTIFYING
                 'target': -1  # EXTRA_NONE (server decides)
             }
         elif action_type == 'unit_sentry':
             return {
-                'pid': PACKET_UNIT_CHANGE_ACTIVITY,  # PACKET_UNIT_CHANGE_ACTIVITY
+                'pid': 222,  # PACKET_UNIT_CHANGE_ACTIVITY
                 'unit_id': action['unit_id'],
-                'activity': ACTIVITY_SENTRY,  # ACTIVITY_SENTRY
+                'activity': 5,  # ACTIVITY_SENTRY
                 'target': -1  # EXTRA_NONE (server decides)
             }
         elif action_type == 'unit_build_road':
             return {
-                'pid': PACKET_UNIT_CHANGE_ACTIVITY,  # PACKET_UNIT_CHANGE_ACTIVITY
+                'pid': 222,  # PACKET_UNIT_CHANGE_ACTIVITY
                 'unit_id': action['unit_id'],
-                'activity': ACTIVITY_GEN_ROAD,  # ACTIVITY_GEN_ROAD
+                'activity': 13,  # ACTIVITY_GEN_ROAD
                 'target': -1  # EXTRA_NONE (server auto-selects Road or Railroad)
             }
         elif action_type == 'unit_build_irrigation':
             return {
-                'pid': PACKET_UNIT_CHANGE_ACTIVITY,  # PACKET_UNIT_CHANGE_ACTIVITY
+                'pid': 222,  # PACKET_UNIT_CHANGE_ACTIVITY
                 'unit_id': action['unit_id'],
-                'activity': ACTIVITY_IRRIGATE,  # ACTIVITY_IRRIGATE
+                'activity': 3,  # ACTIVITY_IRRIGATE
                 'target': -1  # EXTRA_NONE (server decides irrigation type)
             }
         elif action_type == 'unit_build_mine':
             return {
-                'pid': PACKET_UNIT_CHANGE_ACTIVITY,  # PACKET_UNIT_CHANGE_ACTIVITY
+                'pid': 222,  # PACKET_UNIT_CHANGE_ACTIVITY
                 'unit_id': action['unit_id'],
-                'activity': ACTIVITY_MINE,  # ACTIVITY_MINE
+                'activity': 2,  # ACTIVITY_MINE
                 'target': -1  # EXTRA_NONE (server decides mine type)
-            }
-
-        # =================================================================
-        # Combat Actions
-        # =================================================================
-        elif action_type == 'unit_attack':
-            return {
-                'pid': PACKET_UNIT_DO_ACTION,  # PACKET_UNIT_DO_ACTION
-                'actor_id': action['unit_id'],
-                'target_id': action.get('target_id', -1),
-                'sub_tgt_id': action.get('sub_tgt_id', -1),
-                'sub_target': action.get('sub_tgt_id', -1),
-                'name': '',
-                'action_type': ACTION_ATTACK  # ACTION_ATTACK
-            }
-        elif action_type == 'unit_suicide_attack':
-            return {
-                'pid': PACKET_UNIT_DO_ACTION,
-                'actor_id': action['unit_id'],
-                'target_id': action.get('target_id', -1),
-                'sub_tgt_id': action.get('sub_tgt_id', -1),
-                'sub_target': action.get('sub_tgt_id', -1),
-                'name': '',
-                'action_type': ACTION_SUICIDE_ATTACK
-            }
-        elif action_type == 'unit_bombard':
-            return {
-                'pid': PACKET_UNIT_DO_ACTION,
-                'actor_id': action['unit_id'],
-                'target_id': action.get('target_id', -1),
-                'sub_tgt_id': action.get('sub_tgt_id', -1),
-                'sub_target': action.get('sub_tgt_id', -1),
-                'name': '',
-                'action_type': ACTION_BOMBARD
-            }
-        elif action_type == 'unit_capture':
-            return {
-                'pid': PACKET_UNIT_DO_ACTION,
-                'actor_id': action['unit_id'],
-                'target_id': action.get('target_id', -1),
-                'sub_tgt_id': action.get('sub_tgt_id', -1),
-                'sub_target': action.get('sub_tgt_id', -1),
-                'name': '',
-                'action_type': ACTION_CAPTURE_UNITS
-            }
-        elif action_type == 'unit_conquer_city':
-            return {
-                'pid': PACKET_UNIT_DO_ACTION,
-                'actor_id': action['unit_id'],
-                'target_id': action.get('target_id', -1),
-                'sub_tgt_id': action.get('sub_tgt_id', -1),
-                'name': '',
-                'action_type': ACTION_CONQUER_CITY
-            }
-        elif action_type == 'unit_nuke':
-            return {
-                'pid': PACKET_UNIT_DO_ACTION,
-                'actor_id': action['unit_id'],
-                'target_id': action.get('target_id', -1),
-                'sub_tgt_id': action.get('sub_tgt_id', -1),
-                'name': '',
-                'action_type': ACTION_NUKE
-            }
-        elif action_type == 'unit_nuke_city':
-            return {
-                'pid': PACKET_UNIT_DO_ACTION,
-                'actor_id': action['unit_id'],
-                'target_id': action.get('target_id', -1),
-                'sub_tgt_id': action.get('sub_tgt_id', -1),
-                'name': '',
-                'action_type': ACTION_NUKE_CITY
-            }
-        elif action_type == 'unit_nuke_units':
-            return {
-                'pid': PACKET_UNIT_DO_ACTION,
-                'actor_id': action['unit_id'],
-                'target_id': action.get('target_id', -1),
-                'sub_tgt_id': action.get('sub_tgt_id', -1),
-                'name': '',
-                'action_type': ACTION_NUKE_UNITS
-            }
-        elif action_type == 'unit_expel':
-            return {
-                'pid': PACKET_UNIT_DO_ACTION,
-                'actor_id': action['unit_id'],
-                'target_id': action.get('target_id', -1),
-                'sub_tgt_id': action.get('sub_tgt_id', -1),
-                'name': '',
-                'action_type': ACTION_EXPEL_UNIT
-            }
-        elif action_type == 'unit_heal':
-            return {
-                'pid': PACKET_UNIT_DO_ACTION,
-                'actor_id': action['unit_id'],
-                'target_id': action.get('target_id', -1),
-                'sub_tgt_id': action.get('sub_tgt_id', -1),
-                'name': '',
-                'action_type': ACTION_HEAL_UNIT
-            }
-        elif action_type == 'unit_pillage':
-            return {
-                'pid': PACKET_UNIT_DO_ACTION,
-                'actor_id': action['unit_id'],
-                'target_id': action.get('target_id', action.get('tile_id', -1)),
-                'sub_tgt_id': action.get('extra_id', -1),  # Which improvement to pillage
-                'sub_target': action.get('extra_id', -1),
-                'name': '',
-                'action_type': ACTION_PILLAGE
-            }
-
-        # =================================================================
-        # Transport Actions
-        # =================================================================
-        elif action_type == 'unit_board':
-            return {
-                'pid': PACKET_UNIT_DO_ACTION,  # PACKET_UNIT_DO_ACTION
-                'actor_id': action['unit_id'],
-                'target_id': action.get('transport_id', action.get('target_id', -1)),
-                'sub_tgt_id': action.get('sub_tgt_id', -1),
-                'sub_target': action.get('sub_tgt_id', -1),
-                'name': '',
-                'action_type': ACTION_TRANSPORT_BOARD
-            }
-        elif action_type == 'unit_embark':
-            return {
-                'pid': PACKET_UNIT_DO_ACTION,
-                'actor_id': action['unit_id'],
-                'target_id': action.get('transport_id', action.get('target_id', -1)),
-                'sub_tgt_id': action.get('sub_tgt_id', -1),
-                'sub_target': action.get('sub_tgt_id', -1),
-                'name': '',
-                'action_type': ACTION_TRANSPORT_EMBARK
-            }
-        elif action_type == 'unit_disembark':
-            return {
-                'pid': PACKET_UNIT_DO_ACTION,
-                'actor_id': action['unit_id'],
-                'target_id': action.get('tile_id', action.get('target_id', -1)),
-                'sub_tgt_id': action.get('sub_tgt_id', -1),
-                'sub_target': action.get('sub_tgt_id', -1),
-                'name': '',
-                'action_type': ACTION_TRANSPORT_DISEMBARK1
-            }
-        elif action_type == 'unit_unload':
-            # Unload a unit from transport at current location
-            return {
-                'pid': PACKET_UNIT_DO_ACTION,
-                'actor_id': action.get('transport_id', action['unit_id']),
-                'target_id': action.get('cargo_id', action.get('target_id', -1)),
-                'sub_tgt_id': action.get('sub_tgt_id', -1),
-                'sub_target': action.get('sub_tgt_id', -1),
-                'name': '',
-                'action_type': ACTION_TRANSPORT_UNLOAD
-            }
-        elif action_type == 'unit_airlift':
-            return {
-                'pid': PACKET_UNIT_DO_ACTION,
-                'actor_id': action['unit_id'],
-                'target_id': action.get('city_id', action.get('target_id', -1)),
-                'sub_tgt_id': action.get('sub_tgt_id', -1),
-                'sub_target': action.get('sub_tgt_id', -1),
-                'name': '',
-                'action_type': ACTION_AIRLIFT
-            }
-        elif action_type == 'unit_paradrop':
-            return {
-                'pid': PACKET_UNIT_DO_ACTION,
-                'actor_id': action['unit_id'],
-                'target_id': action.get('tile_id', action.get('target_id', -1)),
-                'sub_tgt_id': action.get('sub_tgt_id', -1),
-                'sub_target': action.get('sub_tgt_id', -1),
-                'name': '',
-                'action_type': ACTION_PARADROP
-            }
-
-        # =================================================================
-        # Espionage Actions
-        # =================================================================
-        elif action_type == 'spy_investigate_city':
-            return {
-                'pid': PACKET_UNIT_DO_ACTION,
-                'actor_id': action['unit_id'],
-                'target_id': action.get('city_id', action.get('target_id', -1)),
-                'sub_tgt_id': action.get('sub_tgt_id', -1),
-                'name': '',
-                'action_type': ACTION_SPY_INVESTIGATE_CITY
-            }
-        elif action_type == 'spy_poison':
-            return {
-                'pid': PACKET_UNIT_DO_ACTION,
-                'actor_id': action['unit_id'],
-                'target_id': action.get('city_id', action.get('target_id', -1)),
-                'sub_tgt_id': action.get('sub_tgt_id', -1),
-                'name': '',
-                'action_type': ACTION_SPY_POISON
-            }
-        elif action_type == 'spy_sabotage_city':
-            # Include both sub_tgt_id and sub_target for compatibility; remove normalization helper usage
-            sub = action.get('building_id', -1)
-            return {
-                'pid': PACKET_UNIT_DO_ACTION,
-                'actor_id': action['unit_id'],
-                'target_id': action.get('city_id', action.get('target_id', -1)),
-                'sub_tgt_id': sub,  # Specific building or -1 for random
-                'sub_target': sub,
-                'name': '',
-                'action_type': ACTION_SPY_SABOTAGE_CITY
-            }
-        elif action_type == 'spy_targeted_sabotage_city':
-            sub = action.get('building_id')
-            return {
-                'pid': PACKET_UNIT_DO_ACTION,
-                'actor_id': action['unit_id'],
-                'target_id': action.get('city_id', action.get('target_id', -1)),
-                'sub_tgt_id': sub,  # Required for targeted sabotage
-                'sub_target': sub,
-                'name': '',
-                'action_type': ACTION_SPY_TARGETED_SABOTAGE_CITY
-            }
-        elif action_type == 'spy_steal_tech':
-            return {
-                'pid': PACKET_UNIT_DO_ACTION,
-                'actor_id': action['unit_id'],
-                'target_id': action.get('city_id', action.get('target_id', -1)),
-                'sub_tgt_id': action.get('sub_tgt_id', -1),
-                'name': '',
-                'action_type': ACTION_SPY_STEAL_TECH
-            }
-        elif action_type == 'spy_targeted_steal_tech':
-            tech = action.get('tech_id')
-            return {
-                'pid': PACKET_UNIT_DO_ACTION,
-                'actor_id': action['unit_id'],
-                'target_id': action.get('city_id', action.get('target_id', -1)),
-                'sub_tgt_id': tech,  # Required - which tech to steal
-                'sub_target': tech,
-                'name': '',
-                'action_type': ACTION_SPY_TARGETED_STEAL_TECH
-            }
-        elif action_type == 'spy_incite_city':
-            return {
-                'pid': PACKET_UNIT_DO_ACTION,
-                'actor_id': action['unit_id'],
-                'target_id': action.get('city_id', action.get('target_id', -1)),
-                'sub_tgt_id': action.get('sub_tgt_id', -1),
-                'name': '',
-                'action_type': ACTION_SPY_INCITE_CITY
-            }
-        elif action_type == 'spy_bribe_unit':
-            return {
-                'pid': PACKET_UNIT_DO_ACTION,
-                'actor_id': action['unit_id'],
-                'target_id': action.get('target_unit_id', action.get('target_id', -1)),
-                'sub_tgt_id': action.get('sub_tgt_id', -1),
-                'name': '',
-                'action_type': ACTION_SPY_BRIBE_UNIT
-            }
-        elif action_type == 'establish_embassy':
-            return {
-                'pid': PACKET_UNIT_DO_ACTION,
-                'actor_id': action['unit_id'],
-                'target_id': action.get('city_id', action.get('target_id', -1)),
-                'sub_tgt_id': action.get('sub_tgt_id', -1),
-                'name': '',
-                'action_type': ACTION_ESTABLISH_EMBASSY
-            }
-        elif action_type == 'spy_steal_gold':
-            return {
-                'pid': PACKET_UNIT_DO_ACTION,
-                'actor_id': action['unit_id'],
-                'target_id': action.get('city_id', action.get('target_id', -1)),
-                'sub_tgt_id': action.get('sub_tgt_id', -1),
-                'name': '',
-                'action_type': ACTION_SPY_STEAL_GOLD
-            }
-        elif action_type == 'spy_spread_plague':
-            return {
-                'pid': PACKET_UNIT_DO_ACTION,
-                'actor_id': action['unit_id'],
-                'target_id': action.get('city_id', action.get('target_id', -1)),
-                'sub_tgt_id': action.get('sub_tgt_id', -1),
-                'name': '',
-                'action_type': ACTION_SPY_SPREAD_PLAGUE
-            }
-        elif action_type == 'spy_nuke_city':
-            return {
-                'pid': PACKET_UNIT_DO_ACTION,
-                'actor_id': action['unit_id'],
-                'target_id': action.get('city_id', action.get('target_id', -1)),
-                'sub_tgt_id': action.get('sub_tgt_id', -1),
-                'name': '',
-                'action_type': ACTION_CONQUER_EXTRAS
-            }
-
-        # =================================================================
-        # Trade Actions
-        # =================================================================
-        elif action_type == 'unit_trade_route':
-            return {
-                'pid': PACKET_UNIT_DO_ACTION,
-                'actor_id': action['unit_id'],
-                'target_id': action.get('city_id', action.get('target_id', -1)),
-                'sub_tgt_id': action.get('sub_tgt_id', -1),
-                'name': '',
-                'action_type': ACTION_TRADE_ROUTE
-            }
-        elif action_type == 'unit_marketplace':
-            return {
-                'pid': PACKET_UNIT_DO_ACTION,
-                'actor_id': action['unit_id'],
-                'target_id': action.get('city_id', action.get('target_id', -1)),
-                'sub_tgt_id': action.get('sub_tgt_id', -1),
-                'name': '',
-                'action_type': ACTION_MARKETPLACE
-            }
-        elif action_type == 'unit_help_wonder':
-            return {
-                'pid': PACKET_UNIT_DO_ACTION,
-                'actor_id': action['unit_id'],
-                'target_id': action.get('city_id', action.get('target_id', -1)),
-                'sub_tgt_id': action.get('sub_tgt_id', -1),
-                'name': '',
-                'action_type': ACTION_HELP_WONDER
-            }
-
-        # =================================================================
-        # Diplomacy Actions
-        # =================================================================
-        elif action_type == 'diplomacy_start_negotiation':
-            return {
-                'pid': PACKET_DIPLOMACY_INIT_MEETING_REQ,
-                'counterpart': action['player_id']
-            }
-        elif action_type == 'diplomacy_cancel_meeting':
-            return {
-                'pid': PACKET_DIPLOMACY_CANCEL_MEETING_REQ,
-                'counterpart': action['player_id']
-            }
-        elif action_type == 'diplomacy_accept_treaty':
-            return {
-                'pid': PACKET_DIPLOMACY_ACCEPT_TREATY_REQ,
-                'counterpart': action['player_id']
-            }
-        elif action_type == 'diplomacy_cancel_pact':
-            # CLAUSE_CEASEFIRE = 5, CLAUSE_PEACE = 6, CLAUSE_ALLIANCE = 7
-            clause_type = action.get('clause_type', 6)  # Default to CLAUSE_PEACE
-            return {
-                'pid': PACKET_DIPLOMACY_CANCEL_PACT,
-                'other_player_id': action['player_id'],
-                'clause': clause_type
-            }
-        elif action_type == 'diplomacy_declare_war':
-            # Cancel all peace clauses to declare war
-            return {
-                'pid': PACKET_DIPLOMACY_CANCEL_PACT,
-                'other_player_id': action['player_id'],
-                'clause': 5  # CLAUSE_CEASEFIRE - canceling to declare war
-            }
-        elif action_type == 'diplomacy_propose_ceasefire':
-            return {
-                'pid': PACKET_DIPLOMACY_CREATE_CLAUSE_REQ,
-                'counterpart': action['player_id'],
-                'giver': action.get('giver', -1),  # Player giving the clause
-                'type': 5,  # CLAUSE_CEASEFIRE
-                'value': 0
-            }
-        elif action_type == 'diplomacy_propose_peace':
-            return {
-                'pid': PACKET_DIPLOMACY_CREATE_CLAUSE_REQ,
-                'counterpart': action['player_id'],
-                'giver': action.get('giver', -1),
-                'type': 6,  # CLAUSE_PEACE
-                'value': 0
-            }
-        elif action_type == 'diplomacy_propose_alliance':
-            return {
-                'pid': PACKET_DIPLOMACY_CREATE_CLAUSE_REQ,
-                'counterpart': action['player_id'],
-                'giver': action.get('giver', -1),
-                'type': 7,  # CLAUSE_ALLIANCE
-                'value': 0
-            }
-        elif action_type == 'diplomacy_share_vision':
-            return {
-                'pid': PACKET_DIPLOMACY_CREATE_CLAUSE_REQ,
-                'counterpart': action['player_id'],
-                'giver': action.get('giver', -1),
-                'type': 8,  # CLAUSE_VISION
-                'value': 0
-            }
-        elif action_type == 'diplomacy_withdraw_vision':
-            return {
-                'pid': PACKET_DIPLOMACY_REMOVE_CLAUSE_REQ,
-                'counterpart': action['player_id'],
-                'giver': action.get('giver', -1),
-                'type': 8,  # CLAUSE_VISION
-                'value': 0
-            }
-
-        # =================================================================
-        # City Actions
-        # =================================================================
-        elif action_type == 'city_buy':
-            return {
-                'pid': PACKET_CITY_BUY,  # PACKET_CITY_BUY
-                'city_id': action['city_id']
-            }
-        elif action_type == 'city_sell_improvement':
-            return {
-                'pid': PACKET_CITY_SELL,  # PACKET_CITY_SELL
-                'city_id': action['city_id'],
-                'build_id': action['improvement_id']
-            }
-        elif action_type == 'city_unload':
-            # Unload all units from city (equivalent to activating them)
-            return {
-                'pid': PACKET_UNIT_CHANGE_ACTIVITY,  # PACKET_UNIT_CHANGE_ACTIVITY
-                'unit_id': action.get('unit_id', -1),
-                'activity': ACTIVITY_IDLE,  # ACTIVITY_IDLE - activate the unit
-                'target': -1
-            }
-        elif action_type == 'city_rename':
-            return {
-                'pid': PACKET_CITY_RENAME,  # PACKET_CITY_RENAME
-                'city_id': action['city_id'],
-                'name': action['name']
-            }
-        elif action_type == 'city_worklist':
-            # Set city worklist - this typically uses multiple packets
-            # For simplicity, we handle the change production case
-            return {
-                'pid': PACKET_CITY_CHANGE,  # PACKET_CITY_CHANGE
-                'city_id': action['city_id'],
-                'production_kind': action.get('production_kind', 0),
-                'production_value': action.get('production_value', 0)
-            }
-
-        # =================================================================
-        # Unit Actions - Additional
-        # =================================================================
-        elif action_type == 'unit_upgrade':
-            return {
-                'pid': PACKET_UNIT_DO_ACTION,
-                'actor_id': action['unit_id'],
-                'target_id': action.get('city_id', action.get('target_id', -1)),
-                'sub_tgt_id': action.get('sub_tgt_id', -1),
-                'name': '',
-                'action_type': ACTION_UPGRADE_UNIT
-            }
-        elif action_type == 'unit_join_city':
-            return {
-                'pid': PACKET_UNIT_DO_ACTION,
-                'actor_id': action['unit_id'],
-                'target_id': action.get('city_id', action.get('target_id', -1)),
-                'sub_tgt_id': action.get('sub_tgt_id', -1),
-                'name': '',
-                'action_type': ACTION_JOIN_CITY
-            }
-        elif action_type == 'unit_clean_pollution':
-            return {
-                'pid': PACKET_UNIT_CHANGE_ACTIVITY,  # PACKET_UNIT_CHANGE_ACTIVITY
-                'unit_id': action['unit_id'],
-                'activity': ACTIVITY_POLLUTION,  # ACTIVITY_POLLUTION (clean pollution)
-                'target': action.get('tile_id', -1)
-            }
-        elif action_type == 'unit_clean_fallout':
-            return {
-                'pid': PACKET_UNIT_CHANGE_ACTIVITY,  # PACKET_UNIT_CHANGE_ACTIVITY
-                'unit_id': action['unit_id'],
-                'activity': ACTIVITY_FALLOUT,  # ACTIVITY_FALLOUT (clean fallout)
-                'target': action.get('tile_id', -1)
-            }
-        elif action_type == 'unit_transform':
-            return {
-                'pid': PACKET_UNIT_CHANGE_ACTIVITY,  # PACKET_UNIT_CHANGE_ACTIVITY
-                'unit_id': action['unit_id'],
-                'activity': ACTIVITY_TRANSFORM,  # ACTIVITY_TRANSFORM
-                'target': -1
-            }
-        elif action_type == 'unit_cultivate':
-            return {
-                'pid': PACKET_UNIT_DO_ACTION,
-                'actor_id': action['unit_id'],
-                'target_id': action.get('tile_id', action.get('target_id', -1)),
-                'sub_tgt_id': action.get('sub_tgt_id', -1),
-                'name': '',
-                'action_type': ACTION_CULTIVATE
-            }
-        elif action_type == 'unit_plant':
-            return {
-                'pid': PACKET_UNIT_DO_ACTION,
-                'actor_id': action['unit_id'],
-                'target_id': action.get('tile_id', action.get('target_id', -1)),
-                'sub_tgt_id': action.get('sub_tgt_id', -1),
-                'name': '',
-                'action_type': ACTION_PLANT
-            }
-        elif action_type == 'unit_disband':
-            return {
-                'pid': PACKET_UNIT_DO_ACTION,
-                'actor_id': action['unit_id'],
-                'target_id': action.get('target_id', -1),
-                'sub_tgt_id': action.get('sub_tgt_id', -1),
-                'name': '',
-                'action_type': ACTION_DISBAND_UNIT
-            }
-        elif action_type == 'unit_home_city':
-            return {
-                'pid': PACKET_UNIT_DO_ACTION,
-                'actor_id': action['unit_id'],
-                'target_id': action.get('city_id', action.get('target_id', -1)),
-                'sub_tgt_id': action.get('sub_tgt_id', -1),
-                'name': '',
-                'action_type': ACTION_HOME_CITY
-            }
-        elif action_type == 'unit_wake':
-            return {
-                'pid': PACKET_UNIT_CHANGE_ACTIVITY,  # PACKET_UNIT_CHANGE_ACTIVITY
-                'unit_id': action['unit_id'],
-                'activity': ACTIVITY_IDLE,  # ACTIVITY_IDLE (wake up/activate)
-                'target': -1
-            }
-        elif action_type == 'unit_auto_worker':
-            return {
-                'pid': PACKET_UNIT_SERVER_SIDE_AGENT_SET,  # PACKET_UNIT_SERVER_SIDE_AGENT_SET
-                'unit_id': action['unit_id'],
-                'agent': 1  # Auto-worker mode
             }
 
         return action  # Fallback
@@ -3179,8 +1868,8 @@ class LLMWSHandler(websocket.WebSocketHandler):
     def _get_unit_tile(self, unit_id: int) -> int:
         """Get the tile ID where a unit is currently located.
 
-        Delegates to civcom.get_unit_tile() which maintains the authoritative
-        unit position data from PACKET_UNIT_INFO packets.
+        This is required for actions like city building that need to know
+        the unit's position on the map.
 
         Args:
             unit_id: The unit's ID
@@ -3191,11 +1880,29 @@ class LLMWSHandler(websocket.WebSocketHandler):
         Raises:
             ValueError: If unit not found or tile information unavailable
         """
-        if self.civcom:
-            tile = self.civcom.get_unit_tile(unit_id)
-            if tile >= 0:
-                return tile
-        raise ValueError(f"Unit {unit_id} not found or tile unavailable")
+        game_state = self._get_current_game_state()
+
+        if not game_state or 'units' not in game_state:
+            raise ValueError(f"No game state available to find unit {unit_id}")
+
+        units = game_state['units']
+        unit = None
+
+        # Handle both dict and list formats (state can be in either format)
+        if isinstance(units, dict):
+            # Try both string and int keys
+            unit = units.get(str(unit_id)) or units.get(unit_id)
+        else:
+            # List format - find by ID
+            unit = next((u for u in units if u.get('id') == unit_id), None)
+
+        if not unit:
+            raise ValueError(f"Unit {unit_id} not found in game state")
+
+        if 'tile' not in unit:
+            raise ValueError(f"Unit {unit_id} has no tile information")
+
+        return unit['tile']
 
     def _get_nation_id(self, nation_name: str) -> int:
         """Get nation ID from nation name using dynamically received nation list.
@@ -3267,21 +1974,16 @@ class LLMWSHandler(websocket.WebSocketHandler):
                     if attempt < int(max_attempts):
                         time.sleep(float(retry_delay))
             else:
-                error_msg = f"Unable to reach civserver at {host}:{port} after {max_attempts} attempts"
+                error_msg = (
+                    f"Unable to reach civserver at {host}:{port} after {max_attempts} attempts"
+                )
                 raise ConnectionError(error_msg) from last_error
 
             # Create proper FreeCiv login packet (PACKET_SERVER_JOIN_REQ)
             # Must include pid=4 and version fields for server to parse it
-            # FreeCiv usernames cannot start with a digit (see is_valid_username in player.c)
-            # Agent IDs like "01JFCQ00..." start with digits, so we prefix with 'a'
-            civserver_username = self.agent_id
-            if civserver_username and civserver_username[0].isdigit():
-                civserver_username = 'a' + civserver_username
-                logger.debug(f"Prefixed agent_id with 'a' for civserver username: {civserver_username}")
-
             login_packet = json.dumps({
-                'pid': PACKET_SERVER_JOIN_REQ,  # PACKET_SERVER_JOIN_REQ
-                'username': civserver_username,
+                'pid': 4,  # PACKET_SERVER_JOIN_REQ
+                'username': self.agent_id,
                 'capability': '+Freeciv.Web.Devel-3.3',
                 'version_label': '-dev',
                 'major_version': 3,
@@ -3440,8 +2142,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
             del llm_agents[self.agent_id]
 
         # Invalidate cache for this player
-        # Note: player_id=0 is valid, so use 'is not None' instead of falsy check
-        if self.player_id is not None:
+        if self.player_id:
             state_cache.invalidate(player_id=self.player_id)
 
         SecurityLogger.log_connection_event(self.agent_id, "DISCONNECTED",
