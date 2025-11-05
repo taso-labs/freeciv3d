@@ -24,6 +24,7 @@ from rate_limiter import DistributedRateLimiter
 from session_manager import session_manager, SessionState
 from error_handler import error_handler, ErrorSeverity, ErrorCategory
 from game_session_manager import game_session_manager
+from ruleset_mapper import RulesetMapper
 from typing import Dict, Any, Optional, List
 
 logger = logging.getLogger("freeciv-proxy")
@@ -1652,11 +1653,20 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 }
             ]
 
-        # Sort by priority and limit to top 15 actions
+        # ALWAYS add end_turn action so agents can signal turn completion
+        # This is critical for game progression - without it, agents can't end their turn
+        # and the game will be stuck on the current turn until timeout
+        actions.append({
+            'type': 'end_turn',
+            'priority': 'high',
+            'description': 'End turn and advance game'
+        })
+
+        # Sort by priority and limit to top 20 actions (increased from 15 to ensure end_turn is included)
         priority_order = {'high': 3, 'medium': 2, 'low': 1}
         actions.sort(key=lambda x: priority_order.get(x.get('priority', 'low'), 1), reverse=True)
 
-        return actions[:15]
+        return actions[:20]
 
     def _get_current_game_state(self) -> Optional[Dict[str, Any]]:
         """Get current game state for validation"""
@@ -1735,17 +1745,75 @@ class LLMWSHandler(websocket.WebSocketHandler):
         action_type = action.get('type')
 
         if action_type == 'unit_move':
+            # CRITICAL FIX: Use correct packet ID 73 (PACKET_UNIT_ORDERS)
+            # Previous code incorrectly used pid=31 (PACKET_CITY_INFO, server-to-client only)
+            # This caused civserver to reject the packet and disconnect with "unsupported packet type"
+
+            # Calculate destination tile index from coordinates
+            # FreeCiv uses tile_index = x + y * map_width
+            map_width = self.civcom.map_info.get('width', 80) if self.civcom and hasattr(self.civcom, 'map_info') else 80
+            dest_tile = action['dest_x'] + action['dest_y'] * map_width
+
+            # Get unit's current tile for sanity checking
+            src_tile = self._get_unit_tile(action['unit_id'])
+
             return {
-                'pid': 31,  # PACKET_UNIT_ORDERS
+                'pid': 73,  # PACKET_UNIT_ORDERS (client-to-server)
                 'unit_id': action['unit_id'],
-                'dest_x': action['dest_x'],
-                'dest_y': action['dest_y']
+                'src_tile': src_tile,  # Origin tile, included for sanity checking
+                'dest_tile': dest_tile,  # Destination tile index
+                'length': 1,  # Number of orders (single move)
+                'repeat': False,  # Don't repeat the move
+                'vigilant': False,  # Don't auto-wake on enemy contact
+                'orders': [{
+                    # CRITICAL: All 6 fields required by FreeCiv JSON parser (dataio_json.c:597-666)
+                    # Even though some fields are only used for specific order types, all must be present
+                    'order': 0,        # ORDER_MOVE (not ORDER_FULL_MP=2!)
+                    'activity': 18,    # ACTIVITY_LAST (matching web client control.js:1664)
+                    'target': 0,       # No specific target
+                    'sub_target': 0,   # Required field (missing caused "incompatible packet contents")
+                    'action': 116,     # ACTION_COUNT (matching web client, means no action)
+                    'dir': -1          # Direction computed by server from src/dest
+                }]
             }
         elif action_type == 'city_production':
+            # FIXED: Use correct packet ID and implement production name→ID mapping
+            # Was using non-existent packet ID 45 with wrong field names
+            # Should use PACKET_CITY_CHANGE (pid=35) with production_kind + production_value
+            # Matches web client city.js:914 send_city_change()
+
+            production_name = action.get('production_type', '')
+
+            if not production_name:
+                raise ValueError("city_production requires 'production_type' field")
+
+            # Create mapper on first use (cache per handler instance to avoid recreating)
+            if not hasattr(self, '_ruleset_mapper'):
+                game_id = getattr(self.civcom.civwebserver, 'game_id', None)
+                if not game_id:
+                    raise RuntimeError("Cannot map production without game_id")
+                self._ruleset_mapper = RulesetMapper(game_id)
+
+            # Map production name (e.g., "Warriors", "Barracks") to (kind, value)
+            kind, value = self._ruleset_mapper.map_production_to_kind_value(production_name)
+
+            if kind is None:
+                # Provide helpful error message with available options
+                available = self._ruleset_mapper.get_available_productions()
+                raise ValueError(
+                    f"Unknown production: '{production_name}'. "
+                    f"Available units: {available['units'][:10]}..., "
+                    f"buildings: {available['buildings'][:10]}..."
+                )
+
+            logger.info(f"City {action['city_id']}: Change production to '{production_name}' "
+                       f"(kind={kind}, value={value})")
+
             return {
-                'pid': 45,  # Example packet ID for city production
+                'pid': 35,  # PACKET_CITY_CHANGE (NOT 45!)
                 'city_id': action['city_id'],
-                'production_type': action['production_type']
+                'production_kind': kind,      # 6 for units (VUT_UTYPE), 3 for buildings (VUT_IMPROVEMENT)
+                'production_value': value     # unit_type_id or building_id
             }
         elif action_type == 'tech_research':
             # PACKET_PLAYER_RESEARCH requires tech ID, not tech name
@@ -1813,10 +1881,14 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 'name': city_name
             }
         elif action_type == 'unit_explore':
+            # FIXED: Use correct packet ID and field structure
+            # Was using non-existent PACKET_UNIT_AUTO (pid=32)
+            # Should use PACKET_UNIT_SERVER_SIDE_AGENT_SET (pid=74)
+            # Matches web client control.js:2459-2467 request_unit_ssa_set()
             return {
-                'pid': 32,  # PACKET_UNIT_AUTO
+                'pid': 74,  # PACKET_UNIT_SERVER_SIDE_AGENT_SET
                 'unit_id': action['unit_id'],
-                'auto_type': 'explore'
+                'agent': 1  # SSA_AUTOEXPLORE
             }
         # AGE-192: New unit action packet converters
         elif action_type == 'unit_fortify':

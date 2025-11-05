@@ -31,7 +31,10 @@ try:
         PACKET_MAP_INFO,
         PACKET_GAME_INFO,
         PACKET_UNIT_INFO,
+        PACKET_UNIT_REMOVE,
+        PACKET_UNIT_SHORT_INFO,
         PACKET_CITY_INFO,
+        PACKET_TILE_INFO,
         PACKET_CHAT_MSG,
         PACKET_RULESET_NATION,
         PACKET_CONN_PING,
@@ -49,7 +52,10 @@ except ImportError as e:
     PACKET_MAP_INFO = -1
     PACKET_GAME_INFO = -1
     PACKET_UNIT_INFO = -1
+    PACKET_UNIT_REMOVE = -1
+    PACKET_UNIT_SHORT_INFO = -1
     PACKET_CITY_INFO = -1
+    PACKET_TILE_INFO = -1
     PACKET_CHAT_MSG = -1
     PACKET_RULESET_NATION = -1
     PACKET_CONN_PING = -1
@@ -732,6 +738,42 @@ class CivCom(Thread):
 
                     self.player_cities[city_id] = city_data
                     logger.info(f"✓ Stored city {city_id} ({city_data['name']}, size={city_data['size']}) for owner {owner}")
+
+            # Unit removal packet - remove unit when consumed or destroyed
+            # This is sent when:
+            # - Settlers build a city (unit is consumed)
+            # - Unit is destroyed in combat
+            # - Unit is disbanded by player
+            elif packet_type == PACKET_UNIT_REMOVE:
+                unit_id = packet.get('unit_id')
+                if unit_id is not None and isinstance(self.player_units, dict):
+                    if unit_id in self.player_units:
+                        removed_unit = self.player_units.pop(unit_id)
+                        unit_type = removed_unit.get('utype', 'unknown')
+                        logger.info(f"✓ Removed unit {unit_id} (type={unit_type}) - consumed/destroyed")
+                    else:
+                        logger.debug(f"Received PACKET_UNIT_REMOVE for unit {unit_id} (not in our tracked units)")
+
+            # Tile info packet - visibility/fog-of-war updates after movement
+            # Sent by server when units move and reveal new tiles
+            # Critical for handling unit_move responses
+            elif packet_type == PACKET_TILE_INFO:
+                tile_x = packet.get('x')
+                tile_y = packet.get('y')
+                terrain = packet.get('terrain')
+                if tile_x is not None and tile_y is not None:
+                    logger.debug(f"Tile update at ({tile_x}, {tile_y}) - terrain={terrain}")
+                    # Could store tile info in self.visible_tiles if needed for state queries
+
+            # Unit short info packet - abbreviated unit updates
+            # Sent by server for units entering/leaving vision range
+            # More efficient than full PACKET_UNIT_INFO for frequent updates
+            elif packet_type == PACKET_UNIT_SHORT_INFO:
+                unit_id = packet.get('id')
+                owner = packet.get('owner')
+                if unit_id is not None:
+                    logger.debug(f"Unit short info for unit {unit_id} (owner={owner})")
+                    # Could update existing unit data in self.player_units if needed
 
             # Ruleset nation packet - stores nation ID to name mappings
             elif packet_type == PACKET_RULESET_NATION:
