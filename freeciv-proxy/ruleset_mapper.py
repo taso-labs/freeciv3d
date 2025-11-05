@@ -6,17 +6,19 @@ This module provides functionality to map human-readable production names
 (e.g., "Warriors", "Barracks") to FreeCiv's internal (kind, value) tuples
 required by PACKET_CITY_CHANGE.
 
-Uses cached RULESET packets to build name→ID mappings for:
-- Unit types (PACKET_RULESET_UNIT, pid=140)
-- Buildings (PACKET_RULESET_BUILDING, pid=150)
+Reads RULESET packets stored in civcom.py during game initialization:
+- Unit types (PACKET_RULESET_UNIT, pid=140) → civcom.unit_types
+- Buildings (PACKET_RULESET_BUILDING, pid=150) → civcom.improvements
 
-The mapping is built from packets cached by ruleset_cache.py during game
-initialization, ensuring compatibility with all rulesets (classic, civ2civ3, etc.).
+Mirrors FreeCiv web client architecture where RULESET packets are stored
+directly in connection objects, ensuring compatibility with all rulesets.
 """
 
-import json
 import logging
-from typing import Optional, Dict, Tuple
+from typing import Optional, Dict, Tuple, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from civcom import CivCom
 
 logger = logging.getLogger("freeciv-proxy")
 
@@ -30,23 +32,23 @@ class RulesetMapper:
     """
     Maps production names to (kind, value) tuples for PACKET_CITY_CHANGE.
 
-    This class reads cached RULESET packets and builds case-insensitive
+    This class reads RULESET packets from civcom and builds case-insensitive
     name→ID mappings for both units and buildings.
 
     Example:
-        mapper = RulesetMapper(game_id)
+        mapper = RulesetMapper(civcom)
         kind, value = mapper.map_production_to_kind_value("Warriors")
         # Returns: (6, 3)  where 6=VUT_UTYPE, 3=Warriors unit_type_id
     """
 
-    def __init__(self, game_id: str):
+    def __init__(self, civcom: 'CivCom'):
         """
-        Initialize mapper for a specific game.
+        Initialize mapper for a specific civcom connection.
 
         Args:
-            game_id: The game identifier used to lookup cached RULESET packets
+            civcom: CivCom instance containing RULESET packets in unit_types and improvements
         """
-        self.game_id = game_id
+        self.civcom = civcom
         self.unit_types: Dict[str, int] = {}      # {name_lower: unit_type_id}
         self.buildings: Dict[str, int] = {}       # {name_lower: building_id}
         self._loaded = False
@@ -54,58 +56,45 @@ class RulesetMapper:
 
     def _load_mappings(self):
         """
-        Load unit and building mappings from ruleset_cache.
+        Load unit and building mappings from civcom RULESET storage.
 
-        Reads cached PACKET_RULESET_UNIT (140) and PACKET_RULESET_BUILDING (150)
-        packets and extracts name→ID mappings.
+        Reads PACKET_RULESET_UNIT (140) and PACKET_RULESET_BUILDING (150)
+        packets stored in civcom.unit_types and civcom.improvements.
 
         This method is called automatically during __init__.
         """
-        # Import here to avoid circular dependency issues
-        # ruleset_cache and packet_constants are available after freeciv-proxy startup
-        try:
-            from ruleset_cache import ruleset_cache
-            from packet_constants import PACKET_RULESET_UNIT, PACKET_RULESET_BUILDING
-        except ImportError as e:
-            logger.error(f"Failed to import dependencies for RulesetMapper: {e}")
-            return
-
-        packets = ruleset_cache.get_packets(self.game_id)
-        if not packets:
-            logger.warning(f"No RULESET cache available for game {self.game_id}. "
+        # Check if civcom has RULESET packets loaded
+        if not hasattr(self.civcom, 'unit_types') or not hasattr(self.civcom, 'improvements'):
+            logger.warning(f"CivCom instance for {self.civcom.username} does not have RULESET storage. "
                           "Production mapping will not work until RULESET packets are received.")
             return
 
-        # Parse each cached RULESET packet and extract relevant mappings
-        for packet_json in packets:
+        # Build unit_types mapping from civcom.unit_types
+        # civcom.unit_types is {unit_type_id: {id, name, ...}}
+        for unit_id, packet in self.civcom.unit_types.items():
             try:
-                packet = json.loads(packet_json)
-                pid = packet.get('pid')
+                name = packet.get('name', '')
+                if name and unit_id is not None:
+                    # Store lowercase for case-insensitive lookup
+                    self.unit_types[name.lower()] = unit_id
+                    logger.debug(f"Mapped unit: '{name}' -> unit_type_id {unit_id}")
+            except (KeyError, TypeError, AttributeError) as e:
+                logger.debug(f"Skipping invalid unit packet (id={unit_id}): {e}")
 
-                if pid == PACKET_RULESET_UNIT:  # 140
-                    # PACKET_RULESET_UNIT contains: {id: <unit_type_id>, name: "Warriors", ...}
-                    name = packet.get('name', '')
-                    unit_id = packet.get('id')
-                    if name and unit_id is not None:
-                        # Store lowercase for case-insensitive lookup
-                        self.unit_types[name.lower()] = unit_id
-                        logger.debug(f"Mapped unit: '{name}' -> unit_type_id {unit_id}")
-
-                elif pid == PACKET_RULESET_BUILDING:  # 150
-                    # PACKET_RULESET_BUILDING contains: {id: <building_id>, name: "Barracks", ...}
-                    name = packet.get('name', '')
-                    building_id = packet.get('id')
-                    if name and building_id is not None:
-                        # Store lowercase for case-insensitive lookup
-                        self.buildings[name.lower()] = building_id
-                        logger.debug(f"Mapped building: '{name}' -> building_id {building_id}")
-
-            except (json.JSONDecodeError, KeyError, TypeError) as e:
-                # Skip malformed packets without crashing
-                logger.debug(f"Skipping invalid RULESET packet: {e}")
+        # Build buildings mapping from civcom.improvements
+        # civcom.improvements is {building_id: {id, name, ...}}
+        for building_id, packet in self.civcom.improvements.items():
+            try:
+                name = packet.get('name', '')
+                if name and building_id is not None:
+                    # Store lowercase for case-insensitive lookup
+                    self.buildings[name.lower()] = building_id
+                    logger.debug(f"Mapped building: '{name}' -> building_id {building_id}")
+            except (KeyError, TypeError, AttributeError) as e:
+                logger.debug(f"Skipping invalid building packet (id={building_id}): {e}")
 
         self._loaded = True
-        logger.info(f"RulesetMapper initialized for game {self.game_id}: "
+        logger.info(f"RulesetMapper initialized for {self.civcom.username}: "
                    f"{len(self.unit_types)} unit types, {len(self.buildings)} buildings")
 
     def map_production_to_kind_value(self, production_name: str) -> Tuple[Optional[int], Optional[int]]:

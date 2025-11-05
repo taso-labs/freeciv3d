@@ -37,6 +37,8 @@ try:
         PACKET_TILE_INFO,
         PACKET_CHAT_MSG,
         PACKET_RULESET_NATION,
+        PACKET_RULESET_UNIT,
+        PACKET_RULESET_BUILDING,
         PACKET_CONN_PING,
         PACKET_CONN_PONG,
         get_packet_name
@@ -58,19 +60,11 @@ except ImportError as e:
     PACKET_TILE_INFO = -1
     PACKET_CHAT_MSG = -1
     PACKET_RULESET_NATION = -1
+    PACKET_RULESET_UNIT = -1
+    PACKET_RULESET_BUILDING = -1
     PACKET_CONN_PING = -1
     PACKET_CONN_PONG = -1
     def get_packet_name(pid): return f"packet_{pid}"
-
-# Import RULESET packet cache for spectator mode support
-try:
-    from ruleset_cache import ruleset_cache
-    RULESET_CACHE_AVAILABLE = True
-    logging.getLogger("freeciv-proxy").info("ruleset_cache module loaded - spectator RULESET caching enabled")
-except ImportError as e:
-    logging.getLogger("freeciv-proxy").warning(f"ruleset_cache not available: {e}. Spectator mode may not work correctly.")
-    RULESET_CACHE_AVAILABLE = False
-    ruleset_cache = None
 
 HOST = '127.0.0.1'
 logger = logging.getLogger("freeciv-proxy")
@@ -209,6 +203,14 @@ class CivCom(Thread):
         self.game_phase = 'movement'
         self.player_id = None  # Will be set from PACKET_PLAYER_INFO
         self.nations = {}  # Will be populated from PACKET_RULESET_NATION (pid=148)
+
+        # RULESET packet storage - mirrors FreeCiv web client architecture
+        # These define immutable game rules (unit types, buildings, techs, terrain, etc.)
+        # Stored directly here instead of separate cache layer for simplicity
+        # Matches web client's unit_types[], improvements[], techs[] pattern
+        self.unit_types = {}      # {unit_type_id: PACKET_RULESET_UNIT data}
+        self.improvements = {}    # {building_id: PACKET_RULESET_BUILDING data}
+        self.techs = {}           # {tech_id: PACKET_RULESET_TECH data}
 
     def _get_nation_name(self, nation_id):
         """Convert nation ID to human-readable name using nations registry.
@@ -569,22 +571,6 @@ class CivCom(Thread):
             packet = json.loads(packet_json)
             packet_type = packet.get('pid')
 
-            # SPECTATOR SUPPORT: Cache RULESET packets for spectators
-            # These packets define game rules, unit types, terrain, extras (EXTRA_MINE, etc.)
-            # Spectators need these to initialize client-side constants
-            if RULESET_CACHE_AVAILABLE and ruleset_cache.is_ruleset_packet(packet_type):
-                # Get game_id from the handler (civwebserver is the LLMWebSocketHandler)
-                game_id = getattr(self.civwebserver, 'game_id', None)
-                if game_id:
-                    ruleset_cache.add_packet(game_id, packet_json)
-                    if not hasattr(self, '_ruleset_packets_cached'):
-                        self._ruleset_packets_cached = 0
-                    self._ruleset_packets_cached += 1
-                    # Log first few RULESET packets for verification
-                    if self._ruleset_packets_cached <= 5:
-                        logger.info(f"🎯 Cached RULESET packet (#{self._ruleset_packets_cached}): "
-                                   f"pid={packet_type}, game={game_id}")
-
             # Configurable packet logging for debugging (set CIVCOM_PACKET_LOG_LIMIT env var)
             if not hasattr(self, '_packet_type_log_count'):
                 self._packet_type_log_count = 0
@@ -783,6 +769,26 @@ class CivCom(Thread):
                 if nation_id is not None and nation_name:
                     self.nations[nation_name] = nation_id
                     logger.debug(f"Registered nation: {nation_name} -> ID {nation_id}")
+
+            # RULESET unit packet - defines unit types (Warriors, Settlers, etc.)
+            # Mirrors FreeCiv web client's unit_types[] storage pattern
+            # Used by RulesetMapper for production name→ID mapping
+            elif packet_type == PACKET_RULESET_UNIT:
+                unit_id = packet.get('id')
+                unit_name = packet.get('name')
+                if unit_id is not None and unit_name:
+                    self.unit_types[unit_id] = packet
+                    logger.debug(f"Registered unit type: {unit_name} (id={unit_id})")
+
+            # RULESET building packet - defines improvements (Barracks, Granary, etc.)
+            # Mirrors FreeCiv web client's improvements[] storage pattern
+            # Used by RulesetMapper for production name→ID mapping
+            elif packet_type == PACKET_RULESET_BUILDING:
+                building_id = packet.get('id')
+                building_name = packet.get('name')
+                if building_id is not None and building_name:
+                    self.improvements[building_id] = packet
+                    logger.debug(f"Registered building: {building_name} (id={building_id})")
 
             # CRITICAL: Connection ping packet - MUST respond with pong to keep connection alive
             # FreeCiv civserver sends PACKET_CONN_PING every ~2 minutes to verify connection health

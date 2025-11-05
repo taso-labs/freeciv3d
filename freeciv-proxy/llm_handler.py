@@ -1788,11 +1788,9 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 raise ValueError("city_production requires 'production_type' field")
 
             # Create mapper on first use (cache per handler instance to avoid recreating)
+            # Mapper reads from civcom.unit_types and civcom.improvements directly
             if not hasattr(self, '_ruleset_mapper'):
-                game_id = getattr(self.civcom.civwebserver, 'game_id', None)
-                if not game_id:
-                    raise RuntimeError("Cannot map production without game_id")
-                self._ruleset_mapper = RulesetMapper(game_id)
+                self._ruleset_mapper = RulesetMapper(self.civcom)
 
             # Map production name (e.g., "Warriors", "Barracks") to (kind, value)
             kind, value = self._ruleset_mapper.map_production_to_kind_value(production_name)
