@@ -301,6 +301,48 @@ The gateway transforms messages between game_arena format (nested `data` fields)
 }
 ```
 
+### 4. Supported Actions
+
+The LLM Gateway supports various FreeCiv actions. Below are some key examples:
+
+#### City Building
+
+LLM agents can build cities using the `unit_build_city` action:
+
+```json
+{
+  "type": "action_submit",
+  "data": {
+    "action_type": "unit_build_city",
+    "unit_id": 102,
+    "name": "NewCity"
+  }
+}
+```
+
+**Fields:**
+- `unit_id` (required): ID of the settler/worker unit
+- `name` (optional): Custom city name. Defaults to `City{unit_id}` if not provided
+
+**Note:** The current implementation uses auto-generated city names for simplicity. A future enhancement will support server-suggested culturally-appropriate names based on the civilization (e.g., "Rome", "Antium" for Romans). See Linear issue [AGE-199](https://linear.app/agentclash/issue/AGE-199) for details.
+
+**Protocol Details:**
+- Internally converts to `PACKET_UNIT_DO_ACTION` (pid: 84) with `ACTION_FOUND_CITY` (27)
+- Automatically looks up the unit's tile location from game state
+- Matches FreeCiv web client behavior
+
+#### Other Actions
+
+Other supported action types include:
+- `unit_move`: Move unit to coordinates
+- `unit_fortify`: Fortify unit in place
+- `unit_build_road`: Build road at unit location
+- `unit_build_irrigation`: Build irrigation at unit location
+- `tech_research`: Research a technology
+- `end_turn`: End the current turn
+
+See [freeciv-proxy/llm_handler.py](../freeciv-proxy/llm_handler.py) for complete action list and packet conversions.
+
 ## Port Reference
 
 | Service | Port | Purpose | Access |
@@ -330,10 +372,16 @@ MAX_LLM_AGENTS=10                    # Max concurrent agents
 MAX_SESSIONS_PER_PLAYER=3            # Sessions per player
 SESSION_TIMEOUT_SECONDS=3600         # 1 hour session timeout
 
-# Rate Limiting
-REQUESTS_PER_SECOND=10               # Per-agent rate limit
-BURST_CAPACITY=100                   # Burst allowance
-MAX_MESSAGE_SIZE_BYTES=1048576       # 1MB message limit
+# Rate Limiting (Updated for 2-4 player concurrent games)
+GATEWAY_RATE_LIMIT_REQUESTS_PER_MINUTE=200  # Increased from 100
+GATEWAY_RATE_LIMIT_BURST_SIZE=40            # Increased from 20
+GATEWAY_RATE_LIMIT_GRACE_PERIOD=30          # Seconds before blocking
+GATEWAY_RATE_LIMIT_MAX_VIOLATIONS=3         # Violations before block
+MAX_MESSAGE_SIZE_BYTES=104857600            # 100MB for large game states
+
+# Session Management (Updated for longer games and reconnection)
+GATEWAY_AGENT_TIMEOUT=600                   # 10 minutes (was 120s)
+GATEWAY_SESSION_RESUMPTION_WINDOW=60        # 60s to resume after disconnect
 
 # Caching
 CACHE_TTL_SECONDS=5                  # State cache TTL
@@ -428,6 +476,37 @@ uvicorn main:app --log-level debug
    - Usually means proxy connection failed
    - Check freeciv-proxy logs: `docker logs fciv-net | grep "freeciv-proxy"`
    - Verify `port` in `llm_connect` message matches allocated server
+
+5. **E429 - Rate Limit Exceeded**
+   - **Symptoms**: `Rate limit exceeded: Request rate limit exceeded` errors
+   - **Cause**: Too many messages per minute/second for concurrent players
+   - **Solution**: Increase `GATEWAY_RATE_LIMIT_REQUESTS_PER_MINUTE` and `GATEWAY_RATE_LIMIT_BURST_SIZE`
+   - **Grace Period**: You get 3 violations within 30 seconds before blocking
+   - **Recovery**: Wait for grace period to reset or block to expire (60s)
+   - **Check status**: Look for `grace_period` details in error response
+
+6. **E120 - Not Authenticated / Session Expired**
+   - **Symptoms**: `Not authenticated - please send llm_connect message first`
+   - **Cause**: Session expired after disconnect or timeout
+   - **Solution**:
+     - Reconnect within 60 seconds to resume session automatically
+     - Otherwise send new `llm_connect` message to reauthenticate
+   - **Prevention**: Increase `GATEWAY_AGENT_TIMEOUT` for longer games (default: 600s)
+
+7. **E123 - Connection to Game Server Lost**
+   - **Symptoms**: `Connection to game server lost`
+   - **Cause**: FreeCiv proxy disconnected or civserver crashed
+   - **Solution**:
+     - Check civserver status: `docker exec fciv-net ps aux | grep civserver`
+     - Check proxy logs: `docker logs fciv-net | grep "freeciv-proxy"`
+     - Reconnect with same agent_id within 60s to resume session
+   - **Prevention**: Monitor civserver health, increase timeouts if network unstable
+
+8. **E999 - Unknown Error**
+   - **Symptoms**: Generic errors with `exception_type` in details
+   - **Cause**: Unexpected exceptions (not E120/E123/E429)
+   - **Solution**: Check error details for `exception_type` and `reason`
+   - **Report**: Include full error response with details when reporting bugs
 
 ## Architecture Details
 

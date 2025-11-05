@@ -14,12 +14,17 @@ HEALTH_CHECK_TIMEOUT = 5.0  # Health check ping timeout
 CLEANUP_CYCLE_SECONDS = 60  # Connection cleanup cycle
 TOKEN_TTL_SECONDS = 86400  # Token time-to-live (24 hours)
 SESSION_TIMEOUT_SECONDS = 3600  # Session timeout (1 hour)
+SESSION_RESUMPTION_WINDOW = 60  # seconds to allow session resume after disconnect
+DEFAULT_AGENT_TIMEOUT = 600  # 10 minutes for longer games
 
 # Rate limiting constants
-DEFAULT_REQUESTS_PER_MINUTE = 100
-DEFAULT_BURST_SIZE = 20
+DEFAULT_REQUESTS_PER_MINUTE = 200  # Increased for 2-4 player concurrent games
+DEFAULT_BURST_SIZE = 40  # Increased to handle turn spikes (20-24 messages/turn)
 RATE_LIMIT_WINDOW_SECONDS = 60
 MAX_TIMED_OUT_REQUESTS_WARNING = 10  # Warning threshold for timed out requests
+RATE_LIMIT_GRACE_PERIOD = 30  # seconds before blocking on violations
+RATE_LIMIT_MAX_VIOLATIONS_BEFORE_BLOCK = 3  # violations before blocking
+RATE_LIMIT_BLOCK_DURATION = 60  # seconds to block after max violations
 
 # Connection constants
 CONNECTION_POOL_MAX = 50  # Maximum connections per pool
@@ -88,6 +93,10 @@ ERROR_CODE_RATE_LIMIT = "E429"
 ERROR_CODE_UNAUTHORIZED = "E403"
 ERROR_CODE_NOT_FOUND = "E404"
 ERROR_CODE_VALIDATION = "E400"
+ERROR_CODE_NOT_AUTHENTICATED = "E120"  # Not authenticated / session expired
+ERROR_CODE_STATE_QUERY_FAILED = "E121"  # State query failed
+ERROR_CODE_CONNECTION_LOST = "E123"  # Connection to game server lost
+ERROR_CODE_UNKNOWN = "E999"  # Unknown error (with context)
 
 # HTTP status codes
 HTTP_OK = 200

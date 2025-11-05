@@ -38,15 +38,6 @@ import uuid
 import gc
 import os
 
-# Import RULESET cache for spectator support
-try:
-    from ruleset_cache import ruleset_cache
-    RULESET_CACHE_AVAILABLE = True
-except ImportError as e:
-    logging.getLogger("freeciv-proxy").warning(f"ruleset_cache not available: {e}")
-    RULESET_CACHE_AVAILABLE = False
-    ruleset_cache = None
-
 PROXY_PORT = 8002
 CONNECTION_LIMIT = 1000
 
@@ -153,117 +144,6 @@ class WSHandler(websocket.WebSocketHandler):
             return civcoms[key]
 
 
-class RulesetCacheHandler(web.RequestHandler):
-    """
-    HTTP API endpoint to retrieve cached RULESET packets for a game.
-
-    This enables spectators to fetch game initialization data (unit types,
-    terrain definitions, EXTRA_MINE constants, etc.) when joining a game.
-
-    GET /api/rulesets/<game_id> - Returns all cached RULESET packets as JSON array
-    """
-    logger = logging.getLogger("freeciv-proxy")
-
-    def _safe_error_response(self, status_code: int, error_message: str,
-                           user_input: str = None) -> None:
-        """
-        Send a safe error response with HTML-escaped user input and proper headers.
-
-        Args:
-            status_code: HTTP status code
-            error_message: Safe error message (no user input)
-            user_input: Optional user-provided input to escape and include
-        """
-        self.set_status(status_code)
-        self.set_header("Content-Type", "application/json")
-
-        response = {
-            'success': False,
-            'error': error_message,
-            'packets': [],
-            'packet_count': 0
-        }
-
-        # If user input is provided, escape it before including
-        if user_input:
-            response['error'] = f"{error_message}: {html.escape(user_input)}"
-
-        self.write(response)
-
-    def set_default_headers(self):
-        """Enable CORS for cross-origin requests from web clients with origin validation"""
-        origin = self.request.headers.get("Origin")
-
-        # Validate origin against ALLOWED_ORIGINS list
-        if origin and origin.strip() in ALLOWED_ORIGINS:
-            self.set_header("Access-Control-Allow-Origin", origin.strip())
-        elif not origin:
-            # Allow requests with no origin (e.g., same-origin or server-to-server)
-            self.set_header("Access-Control-Allow-Origin", ALLOWED_ORIGINS[0])
-        # If origin is present but not in allowed list, no CORS header is set (request will fail)
-
-        self.set_header("Access-Control-Allow-Methods", "GET, OPTIONS")
-        self.set_header("Access-Control-Allow-Headers", "Content-Type")
-
-    def options(self, game_id):
-        """Handle CORS preflight"""
-        self.set_status(204)
-        self.finish()
-
-    def get(self, game_id):
-        """
-        Get cached RULESET packets for a game
-
-        Args:
-            game_id: Game identifier from URL path
-
-        Returns:
-            JSON response with:
-            - success: boolean
-            - packets: array of JSON packet strings
-            - packet_count: number of packets
-            - cache_info: cache metadata
-        """
-        if not RULESET_CACHE_AVAILABLE or ruleset_cache is None:
-            self._safe_error_response(503, 'RULESET cache not available')
-            return
-
-        try:
-            # Get cached packets (validation happens inside get_packets)
-            packets = ruleset_cache.get_packets(game_id)
-
-            if packets is None:
-                self.logger.warning(f"No cached RULESET packets found for game: {game_id}")
-                # Escape game_id to prevent XSS in error response
-                self._safe_error_response(404, 'No cached packets for game', user_input=game_id)
-                return
-
-            # Get cache metadata
-            cache_info = ruleset_cache.get_cache_info(game_id)
-
-            self.logger.info(f"✓ Serving {len(packets)} cached RULESET packets for game: {game_id}")
-
-            self.set_header("Content-Type", "application/json")
-            self.write({
-                'success': True,
-                'packets': packets,
-                'packet_count': len(packets),
-                'cache_info': cache_info
-            })
-
-        except ValueError as e:
-            # game_id validation failed - log full details but hide from user
-            self.logger.warning(f"Invalid game_id format: {game_id} - {e}")
-            # Don't expose internal validation error details to prevent information leakage
-            self._safe_error_response(400, 'Invalid game_id format')
-
-        except Exception as e:
-            # Log full exception details for debugging, but hide from user
-            self.logger.exception(f"Error retrieving cached RULESET packets for game {game_id}: {e}")
-            # Don't expose internal error details to prevent information leakage
-            self._safe_error_response(500, 'Internal server error')
-
-
 def validate_username(name):
     if (name is None or len(name) <= 2 or len(name) >= 32):
         return False
@@ -305,7 +185,6 @@ if __name__ == "__main__":
             (r'/llmsocket/' + str(PROXY_PORT), LLMWSHandler),  # New endpoint for LLM agents
             (r"/api/game/([^/]+)/state", StateExtractorHandler),  # REST API for state extraction
             (r"/api/game/([^/]+)/legal_actions", LegalActionsHandler),  # REST API for legal actions
-            (r"/api/rulesets/([^/]+)", RulesetCacheHandler),  # RULESET cache API for spectators
             (r"/health", HealthCheckHandler),  # Health check endpoint
             (r"/metrics", MetricsHandler),  # Prometheus metrics endpoint
             (r"/stats", StatsHandler),  # JSON stats endpoint

@@ -3,7 +3,38 @@
 
 """
 State Extraction Service for FreeCiv LLM Integration
-Provides REST API endpoints for game state extraction and optimization
+
+Extracts and formats game state from the FreeCiv server into LLM-friendly JSON.
+Provides REST API endpoints for game state extraction and optimization.
+
+## Collection Format
+
+All collections (units, cities, players) are returned as **dictionaries keyed by ID**:
+
+```python
+{
+    "units": {
+        "123": {"id": 123, "type": "Warrior", "owner": 0},
+        "456": {"id": 456, "type": "Settler", "owner": 0}
+    },
+    "cities": {
+        "1": {"id": 1, "name": "Capital", "owner": 0}
+    }
+}
+```
+
+**Key Design Decisions:**
+- Dictionary keys are strings (not integers) for JSON compatibility
+- Provides O(1) lookups: `units["123"]` instead of filtering lists
+- Consistent structure across all collection types
+
+## Type Normalization
+
+For LLM readability, certain fields use human-readable strings:
+- `nation`: "Romans" instead of integer ID
+- `activity`: "idle" instead of integer enum
+
+See docs/llm_websocket_protocol.md for complete protocol documentation.
 """
 
 import json
@@ -574,8 +605,11 @@ class StateExtractor:
         changes = {}
 
         # Track unit changes - O(n) complexity
-        prev_units = {u['id']: u for u in previous.get('units', [])}
-        curr_units = {u['id']: u for u in current.get('units', [])}
+        # Units are now dicts keyed by ID, not lists
+        prev_units_data = previous.get('units', {})
+        prev_units = prev_units_data if isinstance(prev_units_data, dict) else {u['id']: u for u in prev_units_data}
+        curr_units_data = current.get('units', {})
+        curr_units = curr_units_data if isinstance(curr_units_data, dict) else {u['id']: u for u in curr_units_data}
 
         # Use sets for efficient difference operations
         prev_unit_ids = set(prev_units.keys())
@@ -622,8 +656,11 @@ class StateExtractor:
             changes['units'] = unit_changes
 
         # Track city changes - same optimization pattern
-        prev_cities = {c['id']: c for c in previous.get('cities', [])}
-        curr_cities = {c['id']: c for c in current.get('cities', [])}
+        # Cities are now dicts keyed by ID, not lists
+        prev_cities_data = previous.get('cities', {})
+        prev_cities = prev_cities_data if isinstance(prev_cities_data, dict) else {c['id']: c for c in prev_cities_data}
+        curr_cities_data = current.get('cities', {})
+        curr_cities = curr_cities_data if isinstance(curr_cities_data, dict) else {c['id']: c for c in curr_cities_data}
 
         prev_city_ids = set(prev_cities.keys())
         curr_city_ids = set(curr_cities.keys())
@@ -680,8 +717,78 @@ class StateExtractor:
 
         return map_data
 
-    def _ensure_list(self, data: Any) -> List:
-        """Ensure data is returned as a list (convert dict to list if needed)."""
+    def _ensure_dict(self, data: Any, key_field: str = 'id') -> Dict[str, Any]:
+        """Convert collections to dict format for consistent O(1) access patterns.
+
+        This method standardizes all collections (units, cities, players) to use
+        dictionary format keyed by ID, enabling efficient lookups and simpler
+        access patterns for LLM agents.
+
+        IMPORTANT: Dictionary keys are ALWAYS strings for JSON compatibility.
+        Numeric IDs are converted to strings via str(), so ID 123 becomes "123".
+
+        Args:
+            data: Input data (dict, list, or None)
+            key_field: Field name to use as dictionary key (default: 'id')
+
+        Returns:
+            Dict[str, Any]: Dictionary keyed by key_field value (STRING keys)
+
+        Examples:
+            >>> # List to dict conversion with string keys
+            >>> _ensure_dict([{"id": 123, "name": "Warrior"}])
+            {"123": {"id": 123, "name": "Warrior"}}
+
+            >>> # Already a dict passes through
+            >>> _ensure_dict({"1": {"id": 1}})
+            {"1": {"id": 1}}
+
+            >>> # None returns empty dict
+            >>> _ensure_dict(None)
+            {}
+
+            >>> # Custom key field
+            >>> _ensure_dict([{"city_id": 5, "name": "Rome"}], key_field='city_id')
+            {"5": {"city_id": 5, "name": "Rome"}}
+
+        Note:
+            Items missing the key_field or non-dict items are silently skipped.
+            This enables robust handling of malformed data.
+        """
+        if data is None:
+            return {}
+        if isinstance(data, dict):
+            return data
+        # Handle iterables (list, dict_values, dict_keys, etc.) but not strings/bytes
+        if hasattr(data, '__iter__') and not isinstance(data, (str, bytes)):
+            # Convert iterable to dict, keyed by key_field
+            result = {}
+            try:
+                for item in data:
+                    if isinstance(item, dict) and key_field in item:
+                        # CRITICAL: Always convert to string for JSON serialization
+                        # Browser JSON.parse() requires string keys for objects
+                        # Example: numeric ID 123 becomes string key "123"
+                        key = str(item[key_field])
+                        result[key] = item
+                return result
+            except (TypeError, AttributeError) as e:
+                # If iteration fails, log warning and return empty dict
+                logger.warning(f"Failed to iterate over {type(data)} in _ensure_dict: {e}")
+                return {}
+        # Fallback for unexpected types
+        logger.warning(f"Unexpected type {type(data)} in _ensure_dict, returning empty dict")
+        return {}
+
+    def _dict_to_list(self, data: Any) -> List:
+        """Convert dict or list to list for iteration.
+
+        Args:
+            data: Input data (dict, list, or None)
+
+        Returns:
+            List of items
+        """
         if data is None:
             return []
         if isinstance(data, list):
@@ -706,9 +813,9 @@ class StateExtractor:
             'phase': raw_state.get('phase'),
             'map': self._ensure_valid_map(raw_state.get('map', {})),
             'game': game_dict,
-            'units': self._ensure_list(raw_state.get('units')),
-            'cities': self._ensure_list(raw_state.get('cities')),
-            'players': self._ensure_list(raw_state.get('players')),
+            'units': self._ensure_dict(raw_state.get('units')),
+            'cities': self._ensure_dict(raw_state.get('cities')),
+            'players': self._ensure_dict(raw_state.get('players')),
             'techs': raw_state.get('techs', {}),
             'timestamp': time.time(),
             'player_perspective': player_id
@@ -747,9 +854,9 @@ class StateExtractor:
             # Required fields for game_arena FreeCivState compatibility
             'game': game_dict,
             'map': self._ensure_valid_map(raw_state.get('map', {})),
-            'players': self._ensure_list(raw_state.get('players')),
-            'units': self._ensure_list(raw_state.get('units')),
-            'cities': self._ensure_list(raw_state.get('cities')),
+            'players': self._ensure_dict(raw_state.get('players')),
+            'units': self._ensure_dict(raw_state.get('units')),
+            'cities': self._ensure_dict(raw_state.get('cities')),
             'timestamp': time.time(),
             'player_perspective': player_id
         }
@@ -776,7 +883,7 @@ class StateExtractor:
 
     def _build_strategic_view(self, state: Dict[str, Any], player_id: int) -> Dict[str, Any]:
         """Build strategic layer focusing on long-term game position"""
-        players = state.get('players', [])
+        players = self._dict_to_list(state.get('players', {}))
         player = next((p for p in players if p['id'] == player_id), None)
 
         if not player:
@@ -802,8 +909,8 @@ class StateExtractor:
 
     def _build_tactical_view(self, state: Dict[str, Any], player_id: int) -> Dict[str, Any]:
         """Build tactical layer focusing on immediate military situation"""
-        units = [u for u in state.get('units', []) if u['owner'] == player_id]
-        enemy_units = [u for u in state.get('units', []) if u['owner'] != player_id]
+        units = [u for u in self._dict_to_list(state.get('units', {})) if u['owner'] == player_id]
+        enemy_units = [u for u in self._dict_to_list(state.get('units', {})) if u['owner'] != player_id]
 
         # Group similar units
         unit_groups = {}
@@ -834,8 +941,8 @@ class StateExtractor:
 
     def _build_economic_view(self, state: Dict[str, Any], player_id: int) -> Dict[str, Any]:
         """Build economic layer focusing on resource management"""
-        cities = [c for c in state.get('cities', []) if c['owner'] == player_id]
-        players = state.get('players', [])
+        cities = [c for c in self._dict_to_list(state.get('cities', {})) if c['owner'] == player_id]
+        players = self._dict_to_list(state.get('players', {}))
         player = next((p for p in players if p['id'] == player_id), None)
 
         return {
@@ -857,8 +964,8 @@ class StateExtractor:
 
     def _calculate_player_score(self, state: Dict[str, Any], player_id: int) -> int:
         """Calculate simple score for player ranking"""
-        cities = [c for c in state.get('cities', []) if c['owner'] == player_id]
-        units = [u for u in state.get('units', []) if u['owner'] == player_id]
+        cities = [c for c in self._dict_to_list(state.get('cities', {})) if c['owner'] == player_id]
+        units = [u for u in self._dict_to_list(state.get('units', {})) if u['owner'] == player_id]
 
         # Simple scoring: cities worth more than units
         return len(cities) * 10 + len(units) * 2
@@ -870,8 +977,8 @@ class StateExtractor:
     def _assess_relative_strength(self, state: Dict[str, Any], player_id: int) -> str:
         """Assess military strength relative to others"""
         # Simplified assessment based on unit count
-        player_units = len([u for u in state.get('units', []) if u['owner'] == player_id])
-        total_units = len(state.get('units', []))
+        player_units = len([u for u in self._dict_to_list(state.get('units', {})) if u['owner'] == player_id])
+        total_units = len(self._dict_to_list(state.get('units', {})))
 
         if total_units == 0:
             return "unknown"
@@ -944,8 +1051,8 @@ class StateExtractor:
         try:
             # Get actual map data if available
             tiles = state.get('tiles', [])
-            existing_cities = state.get('cities', [])
-            player_units = [u for u in state.get('units', []) if u.get('owner') == player_id]
+            existing_cities = self._dict_to_list(state.get('cities', {}))
+            player_units = [u for u in self._dict_to_list(state.get('units', {})) if u.get('owner') == player_id]
 
             if not tiles:
                 # Fallback: estimate based on units and cities
@@ -1047,12 +1154,13 @@ class StateExtractor:
         logger.debug("Using fallback action generation")
 
         # Get player's units and cities
-        units = [u for u in state.get('units', []) if u.get('owner') == player_id]
-        cities = [c for c in state.get('cities', []) if c.get('owner') == player_id]
+        units = [u for u in self._dict_to_list(state.get('units', {})) if u.get('owner') == player_id]
+        cities = [c for c in self._dict_to_list(state.get('cities', {})) if c.get('owner') == player_id]
 
-        # Generate realistic unit movement actions (only if unit has moves left)
+        # Generate realistic unit movement actions (only if unit hasn't finished moving)
+        # Use done_moving flag instead of moves_left to handle Turn 1 correctly
         for unit in units:
-            if unit.get('moves_left', 0) > 0:
+            if not unit.get('done_moving', False):
                 unit_type = unit.get('type', 'unknown')
                 # Check adjacent tiles for valid moves
                 for dx, dy in [(0, 1), (1, 0), (0, -1), (-1, 0), (1, 1), (-1, -1), (1, -1), (-1, 1)]:
@@ -1069,6 +1177,55 @@ class StateExtractor:
                             'unit_type': unit_type,
                             'priority': 5 + (2 if unit_type == 'settler' else 1 if unit_type == 'explorer' else 0)
                         })
+
+                # Add non-movement unit actions
+                # Fortify action for military units
+                if unit_type in ['warrior', 'archer', 'phalanx', 'legion', 'musketeer', 'riflemen', 'cavalry']:
+                    actions.append({
+                        'type': 'unit_fortify',
+                        'unit_id': unit['id'],
+                        'priority': 4
+                    })
+
+                # Build city action for settlers
+                if unit_type in ['settler', 'settlers']:
+                    actions.append({
+                        'type': 'unit_build_city',
+                        'unit_id': unit['id'],
+                        'location': {'x': unit['x'], 'y': unit['y']},
+                        'priority': 8
+                    })
+
+                # Worker/engineer improvement actions
+                if unit_type in ['worker', 'workers', 'engineer', 'engineers']:
+                    # Build road
+                    actions.append({
+                        'type': 'unit_build_road',
+                        'unit_id': unit['id'],
+                        'location': {'x': unit['x'], 'y': unit['y']},
+                        'priority': 6
+                    })
+                    # Build irrigation
+                    actions.append({
+                        'type': 'unit_build_irrigation',
+                        'unit_id': unit['id'],
+                        'location': {'x': unit['x'], 'y': unit['y']},
+                        'priority': 5
+                    })
+                    # Build mine
+                    actions.append({
+                        'type': 'unit_build_mine',
+                        'unit_id': unit['id'],
+                        'location': {'x': unit['x'], 'y': unit['y']},
+                        'priority': 5
+                    })
+
+                # Sentry action for all units
+                actions.append({
+                    'type': 'unit_sentry',
+                    'unit_id': unit['id'],
+                    'priority': 3
+                })
 
         # Generate city production actions based on what cities can actually build
         for city in cities:

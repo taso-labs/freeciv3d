@@ -26,6 +26,9 @@ class MessageType(Enum):
     STATE_QUERY = "state_query"
     ACTION = "action"
     PING = "ping"
+    PLAYER_READY = "player_ready"
+    CONN_PING = "conn_ping"  # FreeCiv keepalive ping from civserver
+    CONN_PONG = "conn_pong"  # FreeCiv keepalive pong response
 
 class MessageValidator:
     """
@@ -97,6 +100,27 @@ class MessageValidator:
             'field_types': {
                 'type': str,
                 'timestamp': (int, float)
+            }
+        },
+        MessageType.PLAYER_READY: {
+            'required_fields': ['type'],
+            'optional_fields': [],
+            'field_types': {
+                'type': str
+            }
+        },
+        MessageType.CONN_PING: {
+            'required_fields': ['type'],
+            'optional_fields': [],
+            'field_types': {
+                'type': str
+            }
+        },
+        MessageType.CONN_PONG: {
+            'required_fields': ['type'],
+            'optional_fields': [],
+            'field_types': {
+                'type': str
             }
         }
     }

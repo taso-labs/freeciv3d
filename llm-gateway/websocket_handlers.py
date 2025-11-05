@@ -18,15 +18,22 @@ try:
     from .config import settings
     from .utils.origin_validator import validate_websocket_origin, get_websocket_origin_info, create_origin_rejection_response
     from .utils.rate_limiter import comprehensive_rate_limiter
-    from .utils.constants import (MAX_MESSAGE_SIZE_BYTES, ERROR_CODE_VALIDATION,
-                                   WEBSOCKET_PING_INTERVAL, WEBSOCKET_PING_TIMEOUT, WEBSOCKET_CLOSE_TIMEOUT)
+    from .utils.constants import (
+        MAX_MESSAGE_SIZE_BYTES, ERROR_CODE_VALIDATION, ERROR_CODE_RATE_LIMIT,
+        ERROR_CODE_NOT_AUTHENTICATED, ERROR_CODE_CONNECTION_LOST, ERROR_CODE_UNKNOWN,
+        WEBSOCKET_PING_INTERVAL, WEBSOCKET_PING_TIMEOUT, WEBSOCKET_CLOSE_TIMEOUT
+    )
 except ImportError:
     from connection_manager import connection_manager
     from config import settings
     from utils.origin_validator import validate_websocket_origin, get_websocket_origin_info, create_origin_rejection_response
     from utils.rate_limiter import comprehensive_rate_limiter
-    from utils.constants import (MAX_MESSAGE_SIZE_BYTES, ERROR_CODE_VALIDATION,
-                                  WEBSOCKET_PING_INTERVAL, WEBSOCKET_PING_TIMEOUT, WEBSOCKET_CLOSE_TIMEOUT)
+    from utils.constants import (
+        MAX_MESSAGE_SIZE_BYTES, ERROR_CODE_VALIDATION, ERROR_CODE_RATE_LIMIT,
+        ERROR_CODE_NOT_AUTHENTICATED, ERROR_CODE_CONNECTION_LOST, ERROR_CODE_UNKNOWN,
+        WEBSOCKET_PING_INTERVAL, WEBSOCKET_PING_TIMEOUT, WEBSOCKET_CLOSE_TIMEOUT
+    )
+
 
 # Gateway will be injected by main.py to avoid circular imports
 gateway = None
@@ -155,7 +162,16 @@ class AgentWebSocketHandler:
             # Handle pings locally for connection health
             await self._handle_ping(message)
         else:
-            await self._send_error("Not connected to proxy")
+            # Not authenticated or not connected
+            await self._send_error(
+                "Not authenticated - please send llm_connect message first",
+                error_code=ERROR_CODE_NOT_AUTHENTICATED,
+                details={
+                    "authenticated": self.authenticated,
+                    "proxy_connected": self.proxy_connection is not None,
+                    "can_retry": True
+                }
+            )
 
     async def _connect_to_proxy_and_forward(self, message: Dict[str, Any]):
         """Connect to proxy LLM handler and forward the connect message"""
@@ -195,9 +211,33 @@ class AgentWebSocketHandler:
             if "data" in message:
                 self.game_id = message["data"].get("game_id")
 
+        except websockets.ConnectionClosed as e:
+            logger.error(f"Proxy connection closed during connection for agent {self.agent_id}: {e}")
+            await self._send_error(
+                "Failed to establish connection to game server - connection closed",
+                error_code=ERROR_CODE_CONNECTION_LOST,
+                details={
+                    "session_valid": False,
+                    "civserver_connected": False,
+                    "player_id": None,
+                    "reason": "proxy_connection_failed",
+                    "can_retry": True
+                }
+            )
         except Exception as e:
             logger.error(f"Failed to connect to proxy for agent {self.agent_id}: {e}")
-            await self._send_error(f"Failed to connect to game server: {e}")
+            await self._send_error(
+                f"Failed to connect to game server: {str(e)}",
+                error_code=ERROR_CODE_UNKNOWN,
+                details={
+                    "session_valid": False,
+                    "civserver_connected": False,
+                    "player_id": None,
+                    "reason": "proxy_connection_exception",
+                    "exception_type": type(e).__name__,
+                    "can_retry": True
+                }
+            )
 
     async def _listen_to_proxy(self):
         """Listen for messages from proxy and forward to agent"""
@@ -214,7 +254,21 @@ class AgentWebSocketHandler:
 
                         # Handle both single objects and arrays of packets from FreeCiv protocol
                         if isinstance(msg_data, list):
-                            # Raw FreeCiv packet array - forward as-is (agent handles raw packets)
+                            # Check for PACKET_CONN_PING (pid:88) and transform it
+                            # Civserver sends pings as raw packets, but agents expect {"type": "conn_ping"}
+                            has_ping = any(packet.get("pid") == 88 for packet in msg_data if isinstance(packet, dict))
+
+                            if has_ping:
+                                logger.info(f"🏓 PING: Detected pid:88 in packet array for agent {self.agent_id} - sending transformed conn_ping")
+                                # Send transformed ping message that agent can handle
+                                ping_message = {"type": "conn_ping"}
+                                await self.websocket.send_text(json.dumps(ping_message))
+                                # Also forward raw packets for compatibility with other packet handlers
+                                await self.websocket.send_text(proxy_message)
+                                logger.debug(f"📤 Forwarded both conn_ping and raw packets to agent {self.agent_id}")
+                                continue
+
+                            # Raw FreeCiv packet array (no ping) - forward as-is
                             logger.debug(f"📦 Forwarding packet array ({len(msg_data)} packets) to agent {self.agent_id}")
                             await self.websocket.send_text(proxy_message)
                             logger.debug(f"📤 Forwarded packet array to agent {self.agent_id}")
@@ -229,8 +283,18 @@ class AgentWebSocketHandler:
 
                         # Transform auth_success from proxy to agent format
                         if msg_type == "auth_success":
-                            # SPECTATOR BROADCAST FIX: Extract player_id for packet routing
+                            # Extract player_id from auth_success for packet routing
                             self.player_id = msg_data.get('player_id')
+
+                            # CRITICAL FIX (AGE-192): Update ConnectionInfo with player_id for session persistence
+                            # This enables session resumption to work correctly after disconnects
+                            game_id = msg_data.get('game_id')
+                            if self.player_id is not None:
+                                await connection_manager.update_agent_auth(
+                                    self.agent_id,
+                                    self.player_id,
+                                    game_id
+                                )
 
                             logger.info(
                                 f"🔑 Transforming auth_success for agent {self.agent_id}:\n"
@@ -291,6 +355,18 @@ class AgentWebSocketHandler:
                                 "data": msg_data
                             }
                             proxy_message = json.dumps(agent_message)
+                        # Handle conn_ping - critical for keepalive
+                        elif msg_type == "conn_ping":
+                            logger.info(f"🏓 PING: Received conn_ping from proxy for agent {self.agent_id} - forwarding to agent")
+                            # Forward as-is (no transformation needed)
+                            # Agent must respond with conn_pong to keep connection alive
+                        # Handle conn_pong - should not come from proxy, but log if it does
+                        elif msg_type == "conn_pong":
+                            logger.warning(f"🏓 PONG: Unexpected conn_pong from proxy for agent {self.agent_id} (pongs should come from agent)")
+                        # Handle game_ready - important initialization signal
+                        elif msg_type == "game_ready":
+                            logger.info(f"🎮 GAME_READY: Received game_ready signal for agent {self.agent_id} - forwarding to agent")
+                            # Forward as-is
                         # Transform state_response to state_update
                         elif msg_type == "state_response":
                             # Proxy sends: {type: "state_response", data: {...state...}, format: "llm_optimized", ...}
@@ -348,15 +424,66 @@ class AgentWebSocketHandler:
         """Forward message from agent to proxy"""
         try:
             if self.proxy_connection:
+                msg_type = message.get("type")
+
+                # Add diagnostic logging for critical message types
+                if msg_type == "conn_pong":
+                    logger.info(f"🏓 PONG: Agent {self.agent_id} responding to ping - forwarding conn_pong to proxy")
+                elif msg_type == "action":
+                    action_data = message.get("action", {})
+                    action_type = action_data.get("action_type", "unknown")
+                    actor_id = action_data.get("actor_id", "unknown")
+                    target = action_data.get("target", "none")
+                    logger.info(
+                        f"🎮 ACTION: Agent {self.agent_id} sending action:\n"
+                        f"   Type: {action_type}\n"
+                        f"   Actor: {actor_id}\n"
+                        f"   Target: {target}"
+                    )
+
                 # Transform message format for proxy
                 proxy_message = self._transform_to_proxy_format(message)
                 await self.proxy_connection.send(json.dumps(proxy_message))
-                logger.debug(f"Forwarded agent message to proxy: {message.get('type')}")
+                logger.debug(f"Forwarded agent message to proxy: {msg_type}")
             else:
-                await self._send_error("Proxy connection lost")
+                await self._send_error(
+                    "Connection to game server lost",
+                    error_code=ERROR_CODE_CONNECTION_LOST,
+                    details={
+                        "session_valid": self.authenticated,
+                        "civserver_connected": False,
+                        "player_id": self.player_id,
+                        "reason": "proxy_connection_closed",
+                        "can_retry": True
+                    }
+                )
+        except websockets.ConnectionClosed as e:
+            logger.error(f"Proxy connection closed while forwarding: {e}")
+            await self._send_error(
+                "Connection to game server lost",
+                error_code=ERROR_CODE_CONNECTION_LOST,
+                details={
+                    "session_valid": self.authenticated,
+                    "civserver_connected": False,
+                    "player_id": self.player_id,
+                    "reason": "connection_closed_during_send",
+                    "can_retry": True
+                }
+            )
         except Exception as e:
             logger.error(f"Failed to forward message to proxy: {e}")
-            await self._send_error(f"Failed to forward message: {e}")
+            await self._send_error(
+                f"Failed to forward message: {str(e)}",
+                error_code=ERROR_CODE_UNKNOWN,
+                details={
+                    "session_valid": self.authenticated,
+                    "civserver_connected": self.proxy_connection is not None,
+                    "player_id": self.player_id,
+                    "reason": "message_forward_exception",
+                    "exception_type": type(e).__name__,
+                    "can_retry": False
+                }
+            )
 
     def _transform_to_proxy_format(self, message: Dict[str, Any]) -> Dict[str, Any]:
         """Transform agent message format to proxy format by flattening 'data' fields"""
@@ -447,23 +574,67 @@ class AgentWebSocketHandler:
         }
         await self.websocket.send_text(json.dumps(pong))
 
-    async def _send_error(self, error_message: str, error_code: str = "E500"):
-        """Send error message"""
+    async def _send_error(
+        self,
+        error_message: str,
+        error_code: str = "E500",
+        details: Optional[Dict[str, Any]] = None
+    ):
+        """
+        Send detailed error message with optional context
+
+        Args:
+            error_message: Human-readable error description
+            error_code: Specific error code (E120, E123, E999, etc.)
+            details: Additional context about the error
+        """
+        error_data = {
+            "type": "error",
+            "success": False,
+            "code": error_code,
+            "message": error_message
+        }
+
+        # Add details if provided
+        if details:
+            error_data["details"] = details
+
         error = {
             "type": "error",
             "agent_id": self.agent_id,
             "timestamp": time.time(),
-            "data": {
-                "type": "error",
-                "success": False,
-                "error_code": error_code,
-                "error_message": error_message
-            }
+            "data": error_data
         }
         await self.websocket.send_text(json.dumps(error))
 
     async def _send_rate_limit_error(self, reason: str):
-        """Send rate limit error message"""
+        """Send rate limit error message with grace period info"""
+        # Get detailed rate limit status
+        rate_limit_status = await comprehensive_rate_limiter.get_identifier_status(self.agent_id)
+
+        # Build detailed error response
+        details = {
+            "reason": reason,
+            "retry_after": 1.0,  # Suggest 1 second backoff
+            "active_connections": rate_limit_status.get("active_connections", 0),
+            "is_blocked": rate_limit_status.get("is_blocked", False)
+        }
+
+        # Add grace period info if available
+        grace_period_info = rate_limit_status.get("grace_period", {})
+        if grace_period_info:
+            details["grace_period"] = {
+                "violations": grace_period_info.get("violations", 0),
+                "max_violations": grace_period_info.get("max_violations", 3),
+                "remaining_violations": grace_period_info.get("remaining_violations", 0),
+                "will_reset_in": grace_period_info.get("will_reset_in", 0)
+            }
+
+        # Add remaining limits info
+        remaining_limits = rate_limit_status.get("remaining_limits", {})
+        if remaining_limits:
+            details["remaining_limits"] = remaining_limits
+
         error = {
             "type": "rate_limit_error",
             "agent_id": self.agent_id,
@@ -471,8 +642,9 @@ class AgentWebSocketHandler:
             "data": {
                 "type": "error",
                 "success": False,
-                "error_code": "E429",
-                "error_message": f"Rate limit exceeded: {reason}"
+                "code": ERROR_CODE_RATE_LIMIT,
+                "message": f"Rate limit exceeded: {reason}",
+                "details": details
             }
         }
         await self.websocket.send_text(json.dumps(error))

@@ -24,15 +24,21 @@ logger = logging.getLogger("llm-gateway")
 class ConnectionInfo:
     """Information about a WebSocket connection"""
 
-    def __init__(self, websocket: WebSocket, connection_type: str, identifier: str):
+    def __init__(self, websocket: WebSocket, connection_type: str, identifier: str, session_id: Optional[str] = None):
         self.websocket = websocket
         self.connection_type = connection_type  # "agent" or "spectator"
         self.identifier = identifier  # agent_id or game_id
         self.connection_id = str(uuid.uuid4())
+        self.session_id = session_id or str(uuid.uuid4())  # Persistent session ID
         self.connected_at = time.time()
         self.last_seen = time.time()
         self.authenticated = False
         self.metadata: Dict[str, Any] = {}
+
+        # Session persistence fields
+        self.player_id: Optional[int] = None
+        self.game_id: Optional[str] = None
+        self.disconnected_at: Optional[float] = None
 
     def update_activity(self):
         """Update last seen timestamp"""
@@ -46,12 +52,16 @@ class ConnectionInfo:
         """Convert to dictionary for logging/monitoring"""
         return {
             "connection_id": self.connection_id,
+            "session_id": self.session_id,
             "type": self.connection_type,
             "identifier": self.identifier,
             "connected_at": self.connected_at,
             "last_seen": self.last_seen,
             "authenticated": self.authenticated,
-            "duration": time.time() - self.connected_at
+            "duration": time.time() - self.connected_at,
+            "player_id": self.player_id,
+            "game_id": self.game_id,
+            "disconnected_at": self.disconnected_at
         }
 
 
@@ -62,7 +72,9 @@ class ConnectionManager:
         self.connections: Dict[str, ConnectionInfo] = {}
         self.agent_connections: Dict[str, Set[str]] = {}  # agent_id -> set of connection_ids
         self.spectator_connections: Dict[str, Set[str]] = {}  # game_id -> set of connection_ids
+        self.disconnected_sessions: Dict[str, ConnectionInfo] = {}  # agent_id -> last ConnectionInfo for session resumption
         self.heartbeat_interval = settings.heartbeat_interval
+        self.session_resumption_window = settings.session_resumption_window
         self._heartbeat_task: Optional[asyncio.Task] = None
         self._running = False
 
@@ -86,9 +98,71 @@ class ConnectionManager:
         await self._close_all_connections()
         logger.info("Connection manager stopped")
 
+    async def check_resumable_session(self, identifier: str) -> Optional[ConnectionInfo]:
+        """
+        Check if a resumable session exists for the identifier
+
+        Returns:
+            ConnectionInfo if session can be resumed, None otherwise
+        """
+        if identifier not in self.disconnected_sessions:
+            return None
+
+        cached_session = self.disconnected_sessions[identifier]
+
+        # Check if within resumption window
+        if cached_session.disconnected_at is None:
+            return None
+
+        time_since_disconnect = time.time() - cached_session.disconnected_at
+
+        if time_since_disconnect <= self.session_resumption_window:
+            logger.info(
+                f"Found resumable session for {identifier}: "
+                f"session_id={cached_session.session_id}, "
+                f"player_id={cached_session.player_id}, "
+                f"disconnected {time_since_disconnect:.1f}s ago"
+            )
+            return cached_session
+        else:
+            # Session expired, clean it up
+            logger.info(
+                f"Cached session for {identifier} expired "
+                f"({time_since_disconnect:.1f}s > {self.session_resumption_window}s)"
+            )
+            del self.disconnected_sessions[identifier]
+            return None
+
     async def add_connection(self, websocket: WebSocket, connection_type: str, identifier: str) -> str:
-        """Add a new WebSocket connection"""
-        connection_info = ConnectionInfo(websocket, connection_type, identifier)
+        """Add a new WebSocket connection, potentially resuming a session"""
+        # Check for resumable session
+        cached_session = await self.check_resumable_session(identifier)
+
+        if cached_session:
+            # Resume existing session
+            connection_info = ConnectionInfo(
+                websocket, connection_type, identifier,
+                session_id=cached_session.session_id  # Reuse session ID
+            )
+            connection_info.player_id = cached_session.player_id
+            connection_info.game_id = cached_session.game_id
+            connection_info.authenticated = cached_session.authenticated
+
+            # Remove from disconnected cache
+            del self.disconnected_sessions[identifier]
+
+            logger.info(
+                f"Resuming session for {connection_type} {identifier}: "
+                f"session_id={connection_info.session_id}, player_id={connection_info.player_id}"
+            )
+        else:
+            # Create new session
+            connection_info = ConnectionInfo(websocket, connection_type, identifier)
+            logger.info(
+                f"Creating new session for {connection_type} {identifier}: "
+                f"session_id={connection_info.session_id}"
+            )
+
         connection_id = connection_info.connection_id
 
         # Check connection limits
@@ -155,7 +229,7 @@ class ConnectionManager:
             await self.remove_connection(connection_id)
 
     async def maintain_connections(self):
-        """Perform connection maintenance (heartbeat, cleanup)"""
+        """Perform connection maintenance (heartbeat, cleanup, session cache cleanup)"""
         expired_connections = []
 
         for connection_id, connection_info in self.connections.items():
@@ -176,6 +250,22 @@ class ConnectionManager:
         # Remove expired connections
         for connection_id in expired_connections:
             await self.handle_disconnect(connection_id)
+
+        # Clean up expired cached sessions
+        now = time.time()
+        expired_sessions = [
+            agent_id for agent_id, session_info in self.disconnected_sessions.items()
+            if session_info.disconnected_at and (now - session_info.disconnected_at) > self.session_resumption_window
+        ]
+
+        for agent_id in expired_sessions:
+            session_info = self.disconnected_sessions[agent_id]
+            logger.info(
+                f"Removing expired cached session for {agent_id}: "
+                f"session_id={session_info.session_id}, "
+                f"disconnected {now - session_info.disconnected_at:.1f}s ago"
+            )
+            del self.disconnected_sessions[agent_id]
 
     async def get_agent_connections(self, agent_id: str) -> List[ConnectionInfo]:
         """Get all connections for a specific agent"""
@@ -247,6 +337,28 @@ class ConnectionManager:
         if successful_broadcasts > 0:
             logger.debug(f"Broadcasted to {successful_broadcasts} spectators of game {game_id}")
 
+    async def update_agent_auth(self, agent_id: str, player_id: int, game_id: Optional[str] = None):
+        """Update agent authentication info after receiving auth_success from proxy
+
+        Args:
+            agent_id: Agent identifier
+            player_id: Player ID from civserver
+            game_id: Optional game ID
+        """
+        agent_connections = await self.get_agent_connections(agent_id)
+
+        for connection_info in agent_connections:
+            connection_info.player_id = player_id
+            connection_info.authenticated = True
+            if game_id:
+                connection_info.game_id = game_id
+
+            logger.info(
+                f"✅ Updated auth for agent {agent_id}: "
+                f"player_id={player_id}, game_id={game_id}, "
+                f"session_id={connection_info.session_id}"
+            )
+
     def get_connection_stats(self) -> Dict[str, Any]:
         """Get connection statistics"""
         total_connections = len(self.connections)
@@ -292,14 +404,25 @@ class ConnectionManager:
             raise
 
     async def _cleanup_agent_disconnect(self, connection_info: ConnectionInfo):
-        """Cleanup when an agent disconnects"""
+        """Cleanup when an agent disconnects - cache session for potential resumption"""
         agent_id = connection_info.identifier
 
         # Log agent disconnection
-        logger.info(f"Agent {agent_id} disconnected after {time.time() - connection_info.connected_at:.1f}s")
+        duration = time.time() - connection_info.connected_at
+        logger.info(
+            f"Agent {agent_id} disconnected after {duration:.1f}s "
+            f"(session_id={connection_info.session_id}, player_id={connection_info.player_id})"
+        )
 
-        # Additional agent-specific cleanup can be added here
-        # e.g., save game state, notify other players, etc.
+        # Cache ALL sessions for resumption (even if not fully authenticated)
+        # This allows agents to recover from early disconnects before auth completes
+        connection_info.disconnected_at = time.time()
+        self.disconnected_sessions[agent_id] = connection_info
+        logger.info(
+            f"Cached session for agent {agent_id} (will expire in {self.session_resumption_window}s): "
+            f"session_id={connection_info.session_id}, player_id={connection_info.player_id}, "
+            f"authenticated={connection_info.authenticated}"
+        )
 
     async def _cleanup_spectator_disconnect(self, connection_info: ConnectionInfo):
         """Cleanup when a spectator disconnects"""

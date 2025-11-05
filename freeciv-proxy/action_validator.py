@@ -4,6 +4,23 @@
 """
 Action validation system for LLM agents in FreeCiv proxy
 Validates actions before forwarding to the C server
+
+## Error Code Scheme
+
+Error codes are organized by action type for easy identification:
+
+- **E001-E005**: General validation errors (structure, type, auth)
+- **E010-E014**: unit_move validation errors
+- **E020-E023**: unit_build_city validation errors
+- **E030-E033**: city_production validation errors
+- **E040-E041**: tech_research validation errors
+- **E050-E052**: unit_fortify validation errors
+- **E060-E062**: unit_sentry validation errors
+- **E070-E072**: unit_build_road validation errors
+- **E080-E082**: unit_build_irrigation validation errors
+- **E090-E092**: unit_build_mine validation errors
+
+This grouping makes it easy to identify which action failed from the error code.
 """
 
 import logging
@@ -11,6 +28,11 @@ from typing import Dict, Any, List, Optional
 from enum import Enum
 
 logger = logging.getLogger("freeciv-proxy")
+
+# Map size limits (standard FreeCiv maximum dimensions)
+# See: https://freeciv.fandom.com/wiki/Map
+DEFAULT_MAP_WIDTH = 200
+DEFAULT_MAP_HEIGHT = 200
 
 class ValidationResult:
     """Result of action validation"""
@@ -28,6 +50,13 @@ class ActionType(Enum):
     CITY_BUY = "city_buy"
     TECH_RESEARCH = "tech_research"
     TRADE_ROUTE = "trade_route"
+    END_TURN = "end_turn"
+    # AGE-192: New action types for richer gameplay
+    UNIT_FORTIFY = "unit_fortify"
+    UNIT_SENTRY = "unit_sentry"
+    UNIT_BUILD_ROAD = "unit_build_road"
+    UNIT_BUILD_IRRIGATION = "unit_build_irrigation"
+    UNIT_BUILD_MINE = "unit_build_mine"
 
 class LLMActionValidator:
     """
@@ -41,7 +70,14 @@ class LLMActionValidator:
         ActionType.UNIT_BUILD_CITY,
         ActionType.UNIT_EXPLORE,
         ActionType.CITY_PRODUCTION,
-        ActionType.TECH_RESEARCH
+        ActionType.TECH_RESEARCH,
+        ActionType.END_TURN,
+        # AGE-192: Additional unit actions for richer gameplay
+        ActionType.UNIT_FORTIFY,
+        ActionType.UNIT_SENTRY,
+        ActionType.UNIT_BUILD_ROAD,
+        ActionType.UNIT_BUILD_IRRIGATION,
+        ActionType.UNIT_BUILD_MINE
     ]
 
     # Restricted actions that require special permissions
@@ -106,6 +142,19 @@ class LLMActionValidator:
             result = self._validate_city_production(action, player_id, game_state)
         elif action_type == ActionType.TECH_RESEARCH:
             result = self._validate_tech_research(action, player_id, game_state)
+        elif action_type == ActionType.END_TURN:
+            result = self._validate_end_turn(action, player_id, game_state)
+        # AGE-192: New unit action validators
+        elif action_type == ActionType.UNIT_FORTIFY:
+            result = self._validate_unit_fortify(action, player_id, game_state)
+        elif action_type == ActionType.UNIT_SENTRY:
+            result = self._validate_unit_sentry(action, player_id, game_state)
+        elif action_type == ActionType.UNIT_BUILD_ROAD:
+            result = self._validate_unit_build_road(action, player_id, game_state)
+        elif action_type == ActionType.UNIT_BUILD_IRRIGATION:
+            result = self._validate_unit_build_irrigation(action, player_id, game_state)
+        elif action_type == ActionType.UNIT_BUILD_MINE:
+            result = self._validate_unit_build_mine(action, player_id, game_state)
         else:
             # Default validation for other action types
             result = self._validate_basic_action(action, player_id, game_state)
@@ -146,8 +195,10 @@ class LLMActionValidator:
 
         # If game state is available, validate unit ownership
         if game_state and 'units' in game_state:
+            # Iterate directly over dict values (no need to create intermediate list)
+            units = game_state['units'].values() if isinstance(game_state['units'], dict) else game_state['units']
             unit_found = False
-            for unit in game_state['units']:
+            for unit in units:
                 if isinstance(unit, dict) and unit.get('id') == unit_id:
                     unit_found = True
                     if unit.get('owner') != player_id:
@@ -168,7 +219,9 @@ class LLMActionValidator:
 
         # If game state is available, verify unit can build city (settler)
         if game_state and 'units' in game_state:
-            for unit in game_state['units']:
+            # Iterate directly over dict values (no need to create intermediate list)
+            units = game_state['units'].values() if isinstance(game_state['units'], dict) else game_state['units']
+            for unit in units:
                 if isinstance(unit, dict) and unit.get('id') == unit_id:
                     if unit.get('owner') != player_id:
                         return self._validation_error('E021', 'Player does not own this unit')
@@ -205,7 +258,9 @@ class LLMActionValidator:
 
         # If game state available, verify city ownership
         if game_state and 'cities' in game_state:
-            for city in game_state['cities']:
+            # Iterate directly over dict values (no need to create intermediate list)
+            cities = game_state['cities'].values() if isinstance(game_state['cities'], dict) else game_state['cities']
+            for city in cities:
                 if isinstance(city, dict) and city.get('id') == city_id:
                     if city.get('owner') != player_id:
                         return self._validation_error('E032', 'Player does not own this city')
@@ -255,6 +310,133 @@ class LLMActionValidator:
 
         return ValidationResult(True)
 
+    def _validate_end_turn(self, action: Dict[str, Any], player_id: int, game_state: Optional[Dict[str, Any]]) -> ValidationResult:
+        """Validate end turn action
+
+        end_turn is the simplest action - it just requires player_id validation
+        which is already done at the top level. This method exists for completeness
+        and future extension (e.g., checking if player can actually end turn).
+        """
+        # end_turn has no required fields beyond type and player_id (already validated)
+        # In the future, could add validation like:
+        # - Check if it's actually this player's turn
+        # - Check if player has pending actions that must be resolved
+        # For now, always allow end_turn
+        return ValidationResult(True)
+
+    # AGE-192: New unit action validators
+    def _validate_unit_fortify(self, action: Dict[str, Any], player_id: int, game_state: Optional[Dict[str, Any]]) -> ValidationResult:
+        """Validate unit fortify action"""
+        if 'unit_id' not in action:
+            return self._validation_error('E050', 'Unit fortify requires unit_id field')
+
+        unit_id = action['unit_id']
+
+        # Validate unit ownership if game state is available
+        if game_state and 'units' in game_state:
+            units = game_state['units'].values() if isinstance(game_state['units'], dict) else game_state['units']
+            for unit in units:
+                if isinstance(unit, dict) and unit.get('id') == unit_id:
+                    if unit.get('owner') != player_id:
+                        return self._validation_error('E052', f'Player does not own unit {unit_id}')
+                    return ValidationResult(True)
+            # Unit not found in game state
+            return self._validation_error('E051', f'Unit not found: {unit_id}')
+
+        return ValidationResult(True)
+
+    def _validate_unit_sentry(self, action: Dict[str, Any], player_id: int, game_state: Optional[Dict[str, Any]]) -> ValidationResult:
+        """Validate unit sentry action"""
+        if 'unit_id' not in action:
+            return self._validation_error('E060', 'Unit sentry requires unit_id field')
+
+        unit_id = action['unit_id']
+
+        # Validate unit ownership if game state is available
+        if game_state and 'units' in game_state:
+            units = game_state['units'].values() if isinstance(game_state['units'], dict) else game_state['units']
+            for unit in units:
+                if isinstance(unit, dict) and unit.get('id') == unit_id:
+                    if unit.get('owner') != player_id:
+                        return self._validation_error('E062', f'Player does not own unit {unit_id}')
+                    return ValidationResult(True)
+            # Unit not found in game state
+            return self._validation_error('E061', f'Unit not found: {unit_id}')
+
+        return ValidationResult(True)
+
+    def _validate_unit_build_road(self, action: Dict[str, Any], player_id: int, game_state: Optional[Dict[str, Any]]) -> ValidationResult:
+        """Validate unit build road action
+
+        Note: Road building uses PACKET_UNIT_CHANGE_ACTIVITY which operates on the unit's
+        current tile. Coordinates are not part of the packet protocol.
+        """
+        if 'unit_id' not in action:
+            return self._validation_error('E070', 'Unit build road requires unit_id field')
+
+        unit_id = action['unit_id']
+
+        # Validate unit ownership if game state is available
+        if game_state and 'units' in game_state:
+            units = game_state['units'].values() if isinstance(game_state['units'], dict) else game_state['units']
+            for unit in units:
+                if isinstance(unit, dict) and unit.get('id') == unit_id:
+                    if unit.get('owner') != player_id:
+                        return self._validation_error('E071', f'Player does not own unit {unit_id}')
+                    return ValidationResult(True)
+            # Unit not found in game state
+            return self._validation_error('E072', f'Unit not found: {unit_id}')
+
+        return ValidationResult(True)
+
+    def _validate_unit_build_irrigation(self, action: Dict[str, Any], player_id: int, game_state: Optional[Dict[str, Any]]) -> ValidationResult:
+        """Validate unit build irrigation action
+
+        Note: Irrigation building uses PACKET_UNIT_CHANGE_ACTIVITY which operates on the unit's
+        current tile. Coordinates are not part of the packet protocol.
+        """
+        if 'unit_id' not in action:
+            return self._validation_error('E080', 'Unit build irrigation requires unit_id field')
+
+        unit_id = action['unit_id']
+
+        # Validate unit ownership if game state is available
+        if game_state and 'units' in game_state:
+            units = game_state['units'].values() if isinstance(game_state['units'], dict) else game_state['units']
+            for unit in units:
+                if isinstance(unit, dict) and unit.get('id') == unit_id:
+                    if unit.get('owner') != player_id:
+                        return self._validation_error('E081', f'Player does not own unit {unit_id}')
+                    return ValidationResult(True)
+            # Unit not found in game state
+            return self._validation_error('E082', f'Unit not found: {unit_id}')
+
+        return ValidationResult(True)
+
+    def _validate_unit_build_mine(self, action: Dict[str, Any], player_id: int, game_state: Optional[Dict[str, Any]]) -> ValidationResult:
+        """Validate unit build mine action
+
+        Note: Mine building uses PACKET_UNIT_CHANGE_ACTIVITY which operates on the unit's
+        current tile. Coordinates are not part of the packet protocol.
+        """
+        if 'unit_id' not in action:
+            return self._validation_error('E090', 'Unit build mine requires unit_id field')
+
+        unit_id = action['unit_id']
+
+        # Validate unit ownership if game_state is available
+        if game_state and 'units' in game_state:
+            units = game_state['units'].values() if isinstance(game_state['units'], dict) else game_state['units']
+            for unit in units:
+                if isinstance(unit, dict) and unit.get('id') == unit_id:
+                    if unit.get('owner') != player_id:
+                        return self._validation_error('E091', f'Player does not own unit {unit_id}')
+                    return ValidationResult(True)
+            # Unit not found in game state
+            return self._validation_error('E092', f'Unit not found: {unit_id}')
+
+        return ValidationResult(True)
+
     def _validate_basic_action(self, action: Dict[str, Any], player_id: int, game_state: Optional[Dict[str, Any]]) -> ValidationResult:
         """Basic validation for other action types"""
         # Ensure action has reasonable structure
@@ -283,17 +465,29 @@ class LLMActionValidator:
             self.capabilities.remove(action_type)
 
     def _validate_coordinates(self, x: int, y: int, game_state: Optional[Dict[str, Any]] = None) -> bool:
-        """Enhanced coordinate validation against actual game boundaries"""
+        """Enhanced coordinate validation against actual game boundaries
+
+        Uses module-level constants DEFAULT_MAP_WIDTH and DEFAULT_MAP_HEIGHT.
+        Valid coordinates: 0 to (size-1), so 0-199 for default 200x200 map.
+
+        Args:
+            x: X coordinate to validate
+            y: Y coordinate to validate
+            game_state: Optional game state with map_info
+
+        Returns:
+            bool: True if coordinates are valid, False otherwise
+        """
         if game_state and 'map_info' in game_state:
             map_info = game_state['map_info']
-            max_x = map_info.get('width', 100)  # Default to reasonable bounds
-            max_y = map_info.get('height', 100)
+            max_x = map_info.get('width', DEFAULT_MAP_WIDTH)
+            max_y = map_info.get('height', DEFAULT_MAP_HEIGHT)
 
             if not (0 <= x < max_x and 0 <= y < max_y):
                 return False
-        elif not (0 <= x <= 200 and 0 <= y <= 200):
-            # Fallback to more reasonable coordinate bounds when no game state
-            # Accept coordinates from 0 to 200 (reasonable for most game maps)
+        elif not (0 <= x < DEFAULT_MAP_WIDTH and 0 <= y < DEFAULT_MAP_HEIGHT):
+            # Fallback to default map bounds when no game state
+            # Coordinates from 0 to 199 for default 200x200 map
             return False
 
         return True

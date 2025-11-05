@@ -44,9 +44,10 @@ class Settings(BaseSettings):
     max_agents_per_game: int = 8
 
     # Agent connection settings
-    agent_timeout: int = 120  # seconds
+    agent_timeout: int = 600  # seconds (10 minutes for longer games)
     max_connections_per_agent: int = 2
     heartbeat_interval: int = 30  # seconds
+    session_resumption_window: int = 60  # seconds to allow session resume after disconnect
 
     # Security settings
     allowed_origins: List[str] = [
@@ -58,9 +59,11 @@ class Settings(BaseSettings):
     api_key_header: str = "Authorization"
     require_api_key: bool = True
 
-    # Rate limiting
-    rate_limit_requests_per_minute: int = 100
-    rate_limit_burst_size: int = 20
+    # Rate limiting - optimized for turn-based gameplay
+    rate_limit_requests_per_minute: int = 300  # Increased from 200 for concurrent multi-player games
+    rate_limit_burst_size: int = 80  # Increased from 40 - allows ~20 actions per turn for 4 players
+    rate_limit_grace_period: int = 30  # seconds before blocking on violations
+    rate_limit_max_violations: int = 3  # violations before blocking
 
     # Logging
     log_level: str = "INFO"
@@ -113,6 +116,10 @@ def validate_settings() -> bool:
         if not (MIN_AGENT_TIMEOUT <= settings.agent_timeout <= MAX_AGENT_TIMEOUT):
             errors.append(f"Invalid agent_timeout: {settings.agent_timeout} (must be {MIN_AGENT_TIMEOUT}-{MAX_AGENT_TIMEOUT})")
 
+        # Validate session resumption window
+        if not (0 <= settings.session_resumption_window <= 300):
+            errors.append(f"Invalid session_resumption_window: {settings.session_resumption_window} (must be 0-300)")
+
         # Validate game and connection limits
         if not (MIN_CONCURRENT_GAMES <= settings.max_concurrent_games <= MAX_CONCURRENT_GAMES):
             errors.append(f"Invalid max_concurrent_games: {settings.max_concurrent_games} (must be {MIN_CONCURRENT_GAMES}-{MAX_CONCURRENT_GAMES})")
@@ -130,6 +137,13 @@ def validate_settings() -> bool:
 
         if not (1 <= settings.rate_limit_burst_size <= settings.rate_limit_requests_per_minute):
             errors.append(f"Invalid rate_limit_burst_size: {settings.rate_limit_burst_size} (must be 1-{settings.rate_limit_requests_per_minute})")
+
+        # Validate rate limit grace period and violations
+        if not (0 <= settings.rate_limit_grace_period <= 300):
+            errors.append(f"Invalid rate_limit_grace_period: {settings.rate_limit_grace_period} (must be 0-300)")
+
+        if not (1 <= settings.rate_limit_max_violations <= 10):
+            errors.append(f"Invalid rate_limit_max_violations: {settings.rate_limit_max_violations} (must be 1-10)")
 
         # Validate retry settings
         if not (1 <= settings.max_retry_attempts <= 10):
