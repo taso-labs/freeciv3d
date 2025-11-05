@@ -681,7 +681,7 @@ class CivCom(Thread):
                         'type_id': unit_type_raw,  # Preserve original integer for debugging/reference
                         'tile': tile_idx,
                         'homecity': packet.get('homecity', 0),
-                        'moves_left': packet.get('movesleft', 0),  # CRITICAL FIX: FreeCiv protocol uses 'movesleft' not 'moves_left'
+                        'moves_left': packet.get('movesleft', 0), 
                         'hp': packet.get('hp', 0),
                         'veteran': packet.get('veteran', 0),
                         'transported': packet.get('transported', False),
