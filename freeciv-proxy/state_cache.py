@@ -27,7 +27,7 @@ MAX_CITIES_FOR_OPTIMIZATION = int(os.getenv('MAX_CITIES_FOR_OPTIMIZATION', '5'))
 @dataclass
 class CacheEntry:
     """Represents a cached state entry with metadata"""
-    data: Dict[str, Any]
+    data: Optional[Dict[str, Any]]
     timestamp: float
     size_bytes: int
     player_id: int
@@ -36,6 +36,7 @@ class CacheEntry:
     is_compressed: bool = False  # Whether data is compressed
     compressed_data: Optional[bytes] = None  # Compressed data if applicable
     last_accessed: float = 0.0  # For LRU tracking
+    signature_message: str = ""  # Pre-serialized message used for HMAC (supports compressed entries)
 
 class StateCache:
     """
@@ -43,7 +44,7 @@ class StateCache:
     Optimizes game state queries to meet < 4KB and < 50ms requirements
     """
 
-    def __init__(self, ttl: int = None, max_size_kb: int = 4, enable_compression: bool = True,
+    def __init__(self, ttl: Optional[int] = None, max_size_kb: int = 4, enable_compression: bool = True,
                  max_cache_size_mb: int = 100, max_entries: int = 1000):
         # Make TTL configurable via environment variable
         if ttl is None:
@@ -69,17 +70,19 @@ class StateCache:
         # TODO: Add thread-safe metrics in future version
 
         # HMAC secret for cache integrity - required for security
-        self.hmac_secret = os.getenv('CACHE_HMAC_SECRET')
-        if not self.hmac_secret:
+        secret = os.getenv('CACHE_HMAC_SECRET')
+        if not secret:
             raise ValueError(
                 "CACHE_HMAC_SECRET environment variable must be set for cache integrity. "
                 "Generate with: python -c \"import secrets; print(secrets.token_hex(32))\""
             )
-        if len(self.hmac_secret) < 64:
+        if len(secret) < 64:
             raise ValueError(
                 "CACHE_HMAC_SECRET must be at least 64 characters long for security (512 bits). "
                 "Generate with: python -c \"import secrets; print(secrets.token_hex(32))\""
             )
+        # After validation, assign with a concrete str type for type checkers
+        self.hmac_secret: str = secret
 
         # Check for weak secrets using Shannon entropy
         entropy = self._calculate_shannon_entropy(self.hmac_secret)
@@ -168,8 +171,9 @@ class StateCache:
             logger.warning(f"State too large for cache: {final_size} bytes (max: {self.max_size_bytes})")
             return False
 
-        # Generate HMAC signature for integrity
-        signature = self._generate_signature(optimized, player_id, key)
+        # Generate HMAC signature for integrity (sign canonical JSON string regardless of compression)
+        signature_message = json.dumps(optimized, sort_keys=True, separators=(',', ':'))
+        signature = self._generate_signature_from_string(signature_message, player_id, key)
         current_time = time.time()
 
         # Store in cache with signature (thread-safe)
@@ -186,7 +190,8 @@ class StateCache:
                 signature=signature,
                 is_compressed=compressed_data is not None,
                 compressed_data=compressed_data,
-                last_accessed=current_time
+                last_accessed=current_time,
+                signature_message=signature_message
             )
 
             self.cache[key] = entry
@@ -196,7 +201,7 @@ class StateCache:
         logger.debug(f"Cached state for key: {key}, size: {final_size} bytes")
         return True
 
-    def invalidate(self, pattern: str = None, player_id: int = None):
+    def invalidate(self, pattern: Optional[str] = None, player_id: Optional[int] = None):
         """Invalidate cache entries matching pattern or player"""
         with self._lock:
             keys_to_remove = []
@@ -356,14 +361,13 @@ class StateCache:
         """Calculate total cache size in bytes"""
         return sum(entry.size_bytes for entry in self.cache.values())
 
-    def _generate_signature(self, data: Dict[str, Any], player_id: int, cache_key: str) -> str:
-        """Generate HMAC signature for cache entry integrity"""
-        # Create message to sign (data + metadata)
+    def _generate_signature_from_string(self, json_str: str, player_id: int, cache_key: str) -> str:
+        """Generate HMAC signature given a canonical JSON string (works for compressed storage)."""
         message_parts = [
-            json.dumps(data, sort_keys=True, separators=(',', ':')),
+            json_str,
             str(player_id),
             cache_key,
-            str(int(time.time() // 300))  # 5-minute time window for replay protection
+            str(int(time.time() // 300))
         ]
         message = '|'.join(message_parts)
 
@@ -383,7 +387,9 @@ class StateCache:
             return True
 
         # Generate expected signature using the stored cache key
-        expected_signature = self._generate_signature(entry.data, entry.player_id, entry.cache_key)
+        # Prefer signature_message if present (compressed entries)
+        base_message = entry.signature_message if entry.signature_message else json.dumps(entry.data, sort_keys=True, separators=(',', ':'))
+        expected_signature = self._generate_signature_from_string(base_message, entry.player_id, entry.cache_key)
 
         # Compare signatures using constant-time comparison
         try:

@@ -212,6 +212,10 @@ class CivCom(Thread):
         self.improvements = {}    # {building_id: PACKET_RULESET_BUILDING data}
         self.techs = {}           # {tech_id: PACKET_RULESET_TECH data}
 
+        # Goto path cache: maps (unit_id, dest_tile) -> {'length': int, 'dir': [int,...]}
+        self._goto_paths = {}
+        self._goto_paths_lock = None  # Lazy init to avoid threading issues
+
     def _get_nation_name(self, nation_id):
         """Convert nation ID to human-readable name using nations registry.
 
@@ -800,6 +804,31 @@ class CivCom(Thread):
                 logger.debug(f"[PING] Received PACKET_CONN_PING from civserver, responding with PACKET_CONN_PONG for {self.username}")
                 self.queue_to_civserver(pong_packet)
 
+            # Web goto path (server-provided directions for movement)
+            elif packet_type == 288:  # PACKET_WEB_GOTO_PATH
+                try:
+                    unit_id = packet.get('unit_id') or packet.get('actor_id') or packet.get('unit')
+                    # Server sends destination as 'dest' for PACKET_WEB_GOTO_PATH
+                    dest_tile = (packet.get('dest') or packet.get('dest_tile')
+                                 or packet.get('target') or packet.get('tile'))
+                    length = packet.get('length') or (len(packet.get('dir', [])) if isinstance(packet.get('dir'), list) else 0)
+                    dirs = packet.get('dir') or packet.get('dirs') or []
+                    if unit_id is not None and dest_tile is not None and isinstance(dirs, list):
+                        if self._goto_paths_lock is None:
+                            # simple lock substitute; not critical if absent
+                            import threading
+                            self._goto_paths_lock = threading.RLock()
+                        with self._goto_paths_lock:
+                            self._goto_paths[(unit_id, dest_tile)] = {
+                                'length': int(length) if length is not None else len(dirs),
+                                'dir': dirs
+                            }
+                        logger.debug(f"Stored WEB_GOTO_PATH for unit {unit_id} to {dest_tile}: length={length}, dir_count={len(dirs)}")
+                    else:
+                        logger.debug(f"WEB_GOTO_PATH missing fields: {packet}")
+                except Exception as e:
+                    logger.debug(f"Failed to parse WEB_GOTO_PATH: {e}")
+
             # Default handler for unknown/unhandled packet types
             # This prevents "unsupported packet type" disconnects from civserver
             else:
@@ -938,6 +967,36 @@ class CivCom(Thread):
 
         # Score and filter actions to top 20
         return self._score_and_filter_actions(actions, 20)
+
+    # --- Goto path utilities for LLM movement ---
+    def request_goto_path(self, unit_id: int, dest_tile: int):
+        """Request server-computed path for a unit to destination tile.
+
+        Stores the result in internal cache when the server responds with PACKET_WEB_GOTO_PATH.
+        """
+        packet = json.dumps({
+            'pid': 287,  # PACKET_WEB_GOTO_PATH_REQ
+            'unit_id': unit_id,
+            # Freeciv expects field name 'goal' for destination tile id
+            'goal': dest_tile
+        })
+        self.queue_to_civserver(packet)
+
+    def get_goto_path(self, unit_id: int, dest_tile: int, timeout_sec: float = 1.0):
+        """Wait briefly for a goto path response and return it if available."""
+        start = time.time()
+        # ensure messages are flushed so request is sent
+        self.send_packets_to_civserver()
+        while time.time() - start < timeout_sec:
+            if self._goto_paths_lock is None:
+                import threading
+                self._goto_paths_lock = threading.RLock()
+            with self._goto_paths_lock:
+                key = (unit_id, dest_tile)
+                if key in self._goto_paths:
+                    return self._goto_paths.pop(key)
+            time.sleep(0.01)
+        return None
 
     def _score_and_filter_actions(self, actions, max_actions):
         """Score actions and return top N most important"""

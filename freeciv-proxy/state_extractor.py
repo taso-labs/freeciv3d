@@ -948,8 +948,9 @@ class StateExtractor:
         return {
             'cities': {
                 'count': len(cities),
-                'total_population': sum(c['population'] for c in cities),
-                'production_focus': [c['production'] for c in cities],
+                # Freeciv Python CivCom stores city size in 'size'; some sources may use 'population'
+                'total_population': sum(c.get('population', c.get('size', 1)) for c in cities),
+                'production_focus': [c.get('production') for c in cities],
                 'growth_potential': self._assess_growth_potential(cities)
             },
             'resources': {
@@ -1035,7 +1036,7 @@ class StateExtractor:
         if not cities:
             return "none"
 
-        avg_pop = sum(c['population'] for c in cities) / len(cities) if len(cities) > 0 else 0
+        avg_pop = sum(c.get('population', c.get('size', 1)) for c in cities) / len(cities) if len(cities) > 0 else 0
         return "high" if avg_pop < 5 else "moderate" if avg_pop < 10 else "limited"
 
     def _assess_development_level(self, cities: List[Dict]) -> str:
@@ -1043,7 +1044,7 @@ class StateExtractor:
         if not cities:
             return "none"
 
-        total_pop = sum(c['population'] for c in cities)
+        total_pop = sum(c.get('population', c.get('size', 1)) for c in cities)
         return "developed" if total_pop > 20 else "developing" if total_pop > 10 else "early"
 
     def _get_expansion_sites(self, state: Dict[str, Any], player_id: int) -> int:
