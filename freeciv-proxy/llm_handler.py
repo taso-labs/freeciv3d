@@ -402,7 +402,9 @@ class LLMWSHandler(websocket.WebSocketHandler):
 
                 logger.info(f"⏳ Waiting for PACKET_CONN_INFO for {self.agent_id}...")
                 waited = 0.0
-                max_wait = 5.0
+                # Increase wait time to accommodate slow civserver initialization under load
+                # Previously 5.0s; empirically, second player can take >5s to receive PACKET_CONN_INFO
+                max_wait = 15.0
                 while (not hasattr(self.civcom, 'player_id') or self.civcom.player_id is None) and waited < max_wait:
                     await asyncio.sleep(0.2)
                     waited += 0.2
@@ -467,26 +469,12 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 # Wait briefly for nation selection to process
                 await asyncio.sleep(0.5)
 
-                # Send PACKET_PLAYER_READY immediately after nation selection
+                # DEFER PLAYER READY: Do not immediately ready up the first player.
+                # We will send PACKET_PLAYER_READY only when both players have connected,
+                # or after a short grace period if starting vs AI is intended.
                 logger.info(
-                    f"✅ Nation selected for {self.agent_id} - sending PACKET_PLAYER_READY\n"
-                    f"   Player ID: {self.player_id}"
+                    f"✅ Nation selected for {self.agent_id} - deferring PACKET_PLAYER_READY until session conditions met"
                 )
-
-                ready_packet = {
-                    "pid": 11,  # PACKET_PLAYER_READY from packets.def:434
-                    "player_no": self.player_id,
-                    "is_ready": True
-                }
-
-                # Send PACKET_PLAYER_READY to civserver
-                self.civcom.queue_to_civserver(json.dumps(ready_packet))
-                self.civcom.send_packets_to_civserver()
-
-                # Mark player as ready in game session (triggers game start when all ready)
-                game_session.mark_player_ready(self.agent_id)
-
-                logger.info(f"📤 PACKET_PLAYER_READY sent for {self.agent_id} (player_no={self.player_id})")
 
                 # Send auth_success in FLAT format (Gateway will transform to nested for agent)
                 # Game will start when all players are ready (~5-7 seconds after last player joins)
@@ -520,6 +508,103 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 logger.info(f"🔓 Packet buffering DISABLED for {self.agent_id} - flushing {buffer_count} packets")
                 self._flush_packet_buffer()
                 self.packet_buffer.clear()  # Ensure buffer is empty after flush
+
+                # CONDITIONAL AUTO-READY LOGIC
+                try:
+                    # Defensive fetch of session state
+                    session_players = getattr(game_session, 'players', {}) or {}
+                    players_count = len(session_players)
+                    min_players = getattr(game_session, 'min_players', 2) or 2
+
+                    if players_count >= min_players:
+                        # Cancel any pending auto-ready timers and send ready for all not-yet-ready players
+                        logger.info(
+                            f"🟢 Session ready to start: players={players_count}/{min_players}. Sending PACKET_PLAYER_READY for all."
+                        )
+
+                        # Helper to send ready for a handler if not already marked
+                        def _send_ready_for_handler(handler):
+                            info = session_players.get(getattr(handler, 'agent_id', None))
+                            already_ready = getattr(info, 'marked_ready', False) if info else False
+                            if not info or already_ready:
+                                return
+                            ready_packet_local = {
+                                "pid": 11,
+                                "player_no": getattr(handler, 'player_id', None),
+                                "is_ready": True
+                            }
+                            handler.civcom.queue_to_civserver(json.dumps(ready_packet_local))
+                            handler.civcom.send_packets_to_civserver()
+                            game_session.mark_player_ready(handler.agent_id)
+                            logger.info(f"📤 PACKET_PLAYER_READY sent for {handler.agent_id} (player_no={handler.player_id})")
+
+                            # Cancel any pending timer on the handler
+                            if hasattr(handler, "_auto_ready_timer") and handler._auto_ready_timer:
+                                try:
+                                    handler._auto_ready_timer.cancel()
+                                except Exception:
+                                    pass
+                                handler._auto_ready_timer = None
+
+                        # Send ready for this handler
+                        _send_ready_for_handler(self)
+
+                        # And for any other players not yet marked
+                        for pinfo in list(session_players.values()):
+                            try:
+                                if getattr(pinfo, 'agent_id', None) != self.agent_id and hasattr(pinfo, 'handler'):
+                                    _send_ready_for_handler(pinfo.handler)
+                            except Exception as e_loop:
+                                logger.debug(f"Skip ready for other handler due to: {e_loop}")
+                    else:
+                        # Defer: schedule auto-ready after a grace period if no second agent joins
+                        # Support both flat and nested config keys, sanitize to int
+                        cfg_val = (
+                            llm_config.get('autostart.wait_for_second_agent_seconds')
+                            or llm_config.get('autostart_wait_for_second_agent_seconds')
+                            or 12
+                        )
+                        try:
+                            wait_seconds = int(cfg_val)  # type: ignore[arg-type]
+                        except Exception:
+                            wait_seconds = 12
+                        logger.info(
+                            f"⏳ Waiting up to {wait_seconds}s for second agent before auto-ready: "
+                            f"players={players_count}/{min_players}"
+                        )
+
+                        async def _auto_ready_after_delay(handler_self, session_obj, delay_s: int):
+                            try:
+                                await asyncio.sleep(delay_s)
+                                # If still not enough players and not ready, start vs AI by marking ready
+                                cur_players = getattr(session_obj, 'players', {}) or {}
+                                cur_info = cur_players.get(getattr(handler_self, 'agent_id', None))
+                                cur_min_players = getattr(session_obj, 'min_players', 2) or 2
+                                already_ready = getattr(cur_info, 'marked_ready', False) if cur_info else False
+                                if (cur_info and not already_ready and len(cur_players) < cur_min_players):
+                                    logger.info(
+                                        f"🟡 Auto-readying {handler_self.agent_id} after {delay_s}s (starting vs AI)."
+                                    )
+                                    ready_packet_local = {
+                                        "pid": 11,
+                                        "player_no": getattr(handler_self, 'player_id', None),
+                                        "is_ready": True
+                                    }
+                                    handler_self.civcom.queue_to_civserver(json.dumps(ready_packet_local))
+                                    handler_self.civcom.send_packets_to_civserver()
+                                    session_obj.mark_player_ready(handler_self.agent_id)
+                                    logger.info(
+                                        f"📤 PACKET_PLAYER_READY sent (auto) for {handler_self.agent_id} (player_no={handler_self.player_id})"
+                                    )
+                            except asyncio.CancelledError:
+                                logger.debug(f"Auto-ready timer cancelled for {handler_self.agent_id}")
+                            except Exception as e2:
+                                logger.error(f"Auto-ready timer error for {handler_self.agent_id}: {e2}")
+
+                        # Store and start timer on handler
+                        self._auto_ready_timer = asyncio.create_task(_auto_ready_after_delay(self, game_session, int(wait_seconds)))
+                except Exception as ready_err:
+                    logger.error(f"Conditional ready logic failed: {ready_err}")
 
             except Exception as e:
                 logger.exception(f"Error in player registration and nation selection: {e}")
@@ -1683,36 +1768,62 @@ class LLMWSHandler(websocket.WebSocketHandler):
         action_type = action.get('type')
 
         if action_type == 'unit_move':
-            # CRITICAL FIX: Use correct packet ID 73 (PACKET_UNIT_ORDERS)
-            # Previous code incorrectly used pid=31 (PACKET_CITY_INFO, server-to-client only)
-            # This caused civserver to reject the packet and disconnect with "unsupported packet type"
-
-            # Calculate destination tile index from coordinates
-            # FreeCiv uses tile_index = x + y * map_width
+            # Use PACKET_UNIT_ORDERS (pid=73) and request server-computed goto path
             map_width = self.civcom.map_info.get('width', 80) if self.civcom and hasattr(self.civcom, 'map_info') else 80
             dest_tile = action['dest_x'] + action['dest_y'] * map_width
-
-            # Get unit's current tile for sanity checking
             src_tile = self._get_unit_tile(action['unit_id'])
 
-            return {
-                'pid': 73,  # PACKET_UNIT_ORDERS (client-to-server)
-                'unit_id': action['unit_id'],
-                'src_tile': src_tile,  # Origin tile, included for sanity checking
-                'dest_tile': dest_tile,  # Destination tile index
-                'length': 1,  # Number of orders (single move)
-                'repeat': False,  # Don't repeat the move
-                'vigilant': False,  # Don't auto-wake on enemy contact
-                'orders': [{
-                    # CRITICAL: All 6 fields required by FreeCiv JSON parser (dataio_json.c:597-666)
-                    # Even though some fields are only used for specific order types, all must be present
-                    'order': 0,        # ORDER_MOVE (not ORDER_FULL_MP=2!)
-                    'activity': 18,    # ACTIVITY_LAST (matching web client control.js:1664)
-                    'target': 0,       # No specific target
-                    'sub_target': 0,   # Required field (missing caused "incompatible packet contents")
-                    'action': 116,     # ACTION_COUNT (matching web client, means no action)
-                    'dir': -1          # Direction computed by server from src/dest
+            # Ask server to compute path and wait briefly for response
+            path_dirs = []
+            try:
+                if self.civcom and hasattr(self.civcom, 'request_goto_path'):
+                    self.civcom.request_goto_path(action['unit_id'], dest_tile)
+                    # wait up to configured time for path
+                    wait_s = 0.8
+                    path = self.civcom.get_goto_path(action['unit_id'], dest_tile, timeout_sec=wait_s)
+                    if path and isinstance(path.get('dir'), list) and len(path['dir']) > 0:
+                        path_dirs = path['dir']
+                        logger.info(f"Using server-provided goto path for unit {action['unit_id']}: steps={len(path_dirs)}")
+                    else:
+                        logger.info(f"No goto path received within {wait_s}s for unit {action['unit_id']}; falling back to single-order move")
+            except Exception as e:
+                logger.debug(f"Goto path request failed or unavailable: {e}")
+
+            # Build orders list
+            orders = []
+            if path_dirs:
+                for i, d in enumerate(path_dirs):
+                    orders.append({
+                        'order': 0,      # ORDER_MOVE for each step
+                        'activity': 18,  # ACTIVITY_LAST
+                        'target': 0,
+                        'sub_target': 0,
+                        'action': 116,   # ACTION_COUNT (no action)
+                        'dir': int(d) if isinstance(d, (int, float)) else -1
+                    })
+                length = len(orders)
+            else:
+                # Fallback: send single order; server may refuse without dir but keeps protocol safe
+                orders = [{
+                    'order': 0,
+                    'activity': 18,
+                    'target': 0,
+                    'sub_target': 0,
+                    'action': 116,
+                    'dir': -1
                 }]
+                length = 1
+
+            return {
+                'pid': 73,
+                'unit_id': action['unit_id'],
+                'src_tile': src_tile,
+                'dest_tile': dest_tile,
+                'length': length,
+                # Use numeric 0/1 for BOOL fields to match Freeciv expectations
+                'repeat': 0,
+                'vigilant': 0,
+                'orders': orders
             }
         elif action_type == 'city_production':
             # FIXED: Use correct packet ID and implement production name→ID mapping
