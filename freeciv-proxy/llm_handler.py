@@ -330,25 +330,40 @@ class LLMWSHandler(websocket.WebSocketHandler):
             self.is_llm_agent = True
 
             # Get game_id FIRST, then allocate/lookup civserver port
-            # This ensures both players in the same game connect to the SAME multiplayer server
+            # This ensures both players in the same game connect to the SAME server
             # LLM Gateway flattens nested 'data' field to top level before sending to proxy
             game_id = msg_data.get('game_id', f'game_{uuid.uuid4().hex[:8]}')
             self.game_id = game_id
 
-            # Allocate a multiplayer civserver port (6001-6009) for this game_id
-            # First player: allocates new port (e.g., 6001)
+            # Allocate a multiplayer civserver port via metaserver query
+            # Strategy: Query metaserver for pregame servers with 0 players, select lowest port
+            # First player: allocates new pregame server (e.g., port 6001)
             # Second player: reuses the same port (6001)
-            civserver_port = await game_session_manager.allocate_civserver_port(game_id)
-            port_type = (
-                "MULTIPLAYER (6001-6009, aifill=2)" if 6001 <= civserver_port <= 6009
-                else "⚠️ SINGLEPLAYER (6000, aifill=12)" if civserver_port == 6000
-                else "⚠️ UNKNOWN PORT"
-            )
+            # See game_session_manager.py for detailed allocation logic and fallback strategies
+            try:
+                civserver_port = await game_session_manager.allocate_civserver_port(game_id)
+            except Exception as alloc_err:
+                logger.error(
+                    f"❌ Agent {self.agent_id}: failed to allocate civserver port via metaserver: {alloc_err}\n"
+                    f"   Game ID: {game_id}"
+                )
+                self.write_message(json.dumps({
+                    'type': 'error',
+                    'code': 'E140',
+                    'message': 'Failed to connect to game server',
+                    'details': {
+                        'reason': 'no_multiplayer_server_available'
+                    }
+                }))
+                # Cleanup partial registration state
+                if self.agent_id in llm_agents:
+                    del llm_agents[self.agent_id]
+                self.is_llm_agent = False
+                return
             logger.info(
                 f"🎮 Agent {self.agent_id} assigned to civserver:\n"
                 f"   Game ID: {game_id}\n"
                 f"   Civserver Port: {civserver_port}\n"
-                f"   Port Type: {port_type}"
             )
 
             # Enable packet buffering IMMEDIATELY before connecting to civserver
@@ -2031,7 +2046,6 @@ class LLMWSHandler(websocket.WebSocketHandler):
             logger.info(f"Auto-selecting random nation: {nation_name}")
 
         # Wait for civcom to receive nation list from PACKET_RULESET_NATION (pid=148)
-        import time
         max_wait = 2.0  # 2 second timeout
         waited = 0.0
         while (not hasattr(self.civcom, 'nations') or not self.civcom.nations) and waited < max_wait:

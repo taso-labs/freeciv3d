@@ -243,7 +243,6 @@ class TestRateLimiting(unittest.TestCase):
         self.assertFalse(self.rate_limiter.check_limit(key, limit, window))
 
         # Wait for refill (simulate time passage)
-        import time
         time.sleep(1.1)
 
         # Should allow requests again
@@ -690,7 +689,6 @@ class TestAuthenticationBypassPrevention(unittest.TestCase):
         from admin_handlers import validate_admin_token
 
         # Create a valid token structure but with wrong signature
-        import time
         timestamp = int(time.time())
         valid_timestamp = str(timestamp)
         tampered_signature = "tampered_signature_12345"

@@ -16,6 +16,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 
 from state_extractor import civcom_registry
+from metaserver_client import get_metaserver_client
+from config_loader import llm_config
 
 logger = logging.getLogger("freeciv-proxy")
 
@@ -69,7 +71,7 @@ class GameSession:
         is called from async contexts but the increment operation must be atomic
         at the OS thread level, not just within the asyncio event loop.
 
-        For multiplayer servers (ports 6001-6009) with aifill=2:
+        For multiplayer servers with aifill=2:
           - First call returns 1
           - Second call returns 2
 
@@ -362,77 +364,72 @@ class GameSessionManager:
     def __init__(self):
         self.sessions: Dict[str, GameSession] = {}
         self._lock = asyncio.Lock()
-        self._next_multiplayer_port = 6001  # Start with first multiplayer server
         self._port_lock = asyncio.Lock()  # Separate lock for port allocation
 
     async def allocate_civserver_port(self, game_id: str) -> int:
         """Allocate a civserver port for a game, reusing existing if available
 
-        Multiplayer servers run on ODD ports (6001, 6003, 6005, 6007, 6009) and use
-        pubscript_multiplayer.serv with aifill=2.
+        Queries the metaserver to find available multiplayer pregame servers with 0 players.
+        Prefers the lowest port number to ensure consistent allocation across runs.
 
-        Singleplayer servers run on EVEN ports (6000, 6002, 6004, 6006, 6008) and use
-        pubscript_singleplayer.serv with aifill=12.
-
-        CRITICAL: Only allocate ODD ports for LLM multiplayer games!
+        Selection strategy:
+        1. Check if game_id already has an allocated port (for second+ player) → reuse
+        2. Query metaserver /game/list?v=multiplayer for pregame servers with 0 players
+        3. Select lowest port from available servers
+        4. Fail fast if metaserver unavailable or no suitable servers (avoid accidental singleplayer)
+        5. Cache metaserver results for 10s to reduce query load
 
         THREAD-SAFETY: Creates placeholder session immediately to prevent race condition
         where two players with same game_id could get different ports if allocation
         happens before session creation.
         """
         async with self._port_lock:
-            # Check if game already has an allocated port (for second+ player)
+            # REUSE EXISTING SESSION PORT IF GAME ALREADY REGISTERED
             if game_id in self.sessions:
                 port = self.sessions[game_id].civserver_port
                 existing_session = self.sessions[game_id]
                 player_count = len(existing_session.players)
-                is_multiplayer = port % 2 == 1  # Odd ports are multiplayer
                 logger.info(
                     f"🔄 Game {game_id}: REUSING existing port {port}\n"
                     f"   Current players in session: {player_count}\n"
-                    f"   Session phase: {existing_session.phase.value}\n"
-                    f"   Port type: {'MULTIPLAYER (odd port)' if is_multiplayer else '⚠️ SINGLEPLAYER (even port) - WRONG!'}"
+                    f"   Session phase: {existing_session.phase.value}"
                 )
                 return port
 
-            # Allocate next available multiplayer port using round-robin from publite2-created ports
-            # IMPORTANT: ONLY allocate ODD ports (6001, 6003, 6005, 6007, 6009)
-            # - ODD ports = multiplayer servers with aifill=2
-            # - EVEN ports = singleplayer servers with aifill=12 (wrong for LLM multiplayer!)
-            #
-            # Publite2 creates ports dynamically on-demand based on metaserver capacity
-            # If allocated port doesn't exist yet, connection will fail with E140
-            # This is acceptable - the port will be created by publite2 on next metaserver check
-            port = self._next_multiplayer_port
-            total_sessions = len(self.sessions)
+            # STRATEGY 1: Query metaserver for available pregame servers
+            try:
+                ms_host = str(llm_config.get('metaserver.host', 'localhost') or 'localhost')
+                _ms_port_raw = llm_config.get('metaserver.port', 8080)
+                # Defensive conversion: only accept basic int-like values
+                if isinstance(_ms_port_raw, (int, float)):
+                    ms_port = int(_ms_port_raw)
+                elif isinstance(_ms_port_raw, str) and _ms_port_raw.isdigit():
+                    ms_port = int(_ms_port_raw)
+                else:
+                    ms_port = 8080
+                metaserver = get_metaserver_client(host=ms_host, port=ms_port)
+                port = metaserver.find_pregame_server(min_players=0, max_players=0)
 
-            # Increment by 2 to skip singleplayer ports and only use multiplayer ports
-            # Multiplayer ports are ODD (6001, 6003, 6005, 6007, 6009) with aifill=2
-            # Singleplayer ports are EVEN (6000, 6002, 6004, 6006, 6008) with aifill=12
-            next_port = port + 2
-            if next_port > 6009:
-                next_port = 6001  # Wrap to first multiplayer port
-
-            is_multiplayer = port % 2 == 1
-            logger.info(
-                f"🆕 Game {game_id}: Allocated multiplayer server port {port}\n"
-                f"   Total active sessions: {total_sessions}\n"
-                f"   Next port will be: {next_port}\n"
-                f"   Port type: {'MULTIPLAYER (odd)' if is_multiplayer else 'singleplayer (even)'}\n"
-                f"   ⚠️ WARNING: Port allocation is best-effort. Port may not exist yet!"
-            )
-
-            # Create placeholder session immediately to reserve this port for this game_id
-            # This prevents race condition where Player 2 could allocate different port
-            # before Player 1 creates the session via get_or_create_session()
-            session = GameSession(game_id, port, min_players=2)
-            self.sessions[game_id] = session
-            logger.debug(f"Game {game_id}: Created placeholder session to reserve port {port}")
-
-            # Increment for next game (simple sequential)
-            self._next_multiplayer_port = next_port
-
-            return port
+                if port:
+                    logger.info(
+                        f"🆕 Game {game_id}: Allocated port {port} from metaserver\n"
+                        f"   Strategy: metaserver query for pregame servers with 0 players\n"
+                        f"   Total active sessions: {len(self.sessions)}"
+                    )
+                    session = GameSession(game_id, port, min_players=2)
+                    self.sessions[game_id] = session
+                    logger.debug(f"Game {game_id}: Created placeholder session at port {port}")
+                    return port
+                else:
+                    logger.error(
+                        f"❌ Game {game_id}: No suitable multiplayer pregame servers found via metaserver"
+                    )
+                    raise RuntimeError("No multiplayer pregame servers available")
+            except Exception as e:
+                logger.error(
+                    f"❌ Game {game_id}: Metaserver query failed: {e}"
+                )
+                raise
 
     async def get_or_create_session(self, game_id: str, civserver_port: int,
                                    min_players: int = 2) -> GameSession:
