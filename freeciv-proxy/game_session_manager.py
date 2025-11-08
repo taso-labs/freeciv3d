@@ -189,11 +189,6 @@ class GameSession:
         """Initiate the game start sequence (called once when all players ready)"""
         logger.debug(f"Game {self.game_id}: Initiating game start sequence")
         try:
-            # Brief delay to ensure PACKET_PLAYER_READY packets have been fully processed by civserver
-            # This is minimal (0.5s) to avoid race conditions but not waste time
-            logger.debug(f"Game {self.game_id}: Waiting 0.5s for packet processing")
-            await asyncio.sleep(0.5)
-
             # Double-check we're still ready
             ready_count = self._count_players_ready()
             logger.debug(f"Game {self.game_id}: Double-checking readiness ({ready_count}/{len(self.players)})")
@@ -246,26 +241,24 @@ class GameSession:
                 logger.error(f"Game {self.game_id}: civcom connection is dead!")
                 return
 
-            # DO NOT send /set commands here!
-            # Each /set command triggers reset_all_start_commands() in civserver,
-            # which RESETS all players' is_ready flags to FALSE.
-            # This undoes the PACKET_PLAYER_READY that players already sent!
+            # DO NOT send /set commands OR /start command!
+            #
+            # Reason 1: /set commands trigger reset_all_start_commands() in civserver,
+            #           which RESETS all players' is_ready flags to FALSE.
+            #           This undoes the PACKET_PLAYER_READY that players already sent!
+            #
+            # Reason 2: With 'autotoggle enabled' in pubscript_multiplayer.serv,
+            #           civserver AUTOMATICALLY starts when all players send PACKET_PLAYER_READY.
+            #           Sending /start after auto-start causes "game already running" error.
             #
             # All settings (minplayers, maxplayers, aifill, autotoggle, timeout)
             # are already configured in pubscript_multiplayer.serv BEFORE players connect.
             #
-            # GameSessionManager's ONLY job is to send /start when all players are ready.
+            # GameSessionManager's ONLY job is to wait for auto-start and broadcast game_ready.
             logger.info(f"Game {self.game_id}: All settings pre-configured in pubscript_multiplayer.serv")
+            logger.info(f"Game {self.game_id}: All {len(self.players)} players ready - civserver will auto-start")
 
-            # Send explicit /start command to start the game
-            # Multi-player games require /start command - they don't auto-start like single-player
-            # All players have sent PACKET_PLAYER_READY, now we initiate the game
-            logger.info(f"Game {self.game_id}: All {len(self.players)} players ready - sending /start command")
-            civcom.queue_to_civserver(json.dumps({"pid": 26, "message": "/start"}))
-            civcom.send_packets_to_civserver()
-            logger.info(f"Game {self.game_id}: ✅ /start command sent to civserver")
-
-            # Mark as started
+            # Mark as started immediately (civserver auto-starts on PACKET_PLAYER_READY)
             self.game_started = True
 
             # Verify game actually started instead of blindly waiting
@@ -311,6 +304,9 @@ class GameSession:
             # Broadcast game_ready to all agents now that game has started
             # This notifies agents that the game is fully initialized and ready for state queries
             logger.info(f"Game {self.game_id}: Broadcasting game_ready signal to all {len(self.players)} players")
+
+            broadcast_success = 0
+            broadcast_failed = 0
             for player_info in self.players.values():
                 try:
                     # Send game_ready message to each player's handler
@@ -325,12 +321,32 @@ class GameSession:
                         'message': 'Game fully initialized - ready to accept state queries and actions',
                         'timestamp': time.time()
                     }
+
+                    # CRITICAL FIX: Tornado's write_message() may buffer the message
+                    # We need to ensure it's actually flushed to the client immediately
                     player_info.handler.write_message(json.dumps(game_ready_msg))
+
+                    # Force flush the WebSocket buffer to ensure immediate delivery
+                    # This prevents game_ready from being buffered and delayed
+                    if hasattr(player_info.handler.ws_connection, 'ping'):
+                        # Ping forces flush of buffered messages in Tornado WebSockets
+                        try:
+                            await player_info.handler.ws_connection.ping()
+                        except Exception as ping_err:
+                            logger.debug(f"Ping to flush buffer failed (non-critical): {ping_err}")
+
+                    broadcast_success += 1
                     logger.info(f"✅ Sent game_ready to {player_info.agent_id} (player_id={player_info.player_id})")
                 except Exception as e:
+                    broadcast_failed += 1
                     logger.error(f"❌ Failed to send game_ready to {player_info.agent_id}: {e}")
                     import traceback
                     logger.error(f"Traceback: {traceback.format_exc()}")
+
+            logger.info(f"Game {self.game_id}: Broadcast summary - success: {broadcast_success}/{len(self.players)}, failed: {broadcast_failed}")
+
+            if broadcast_failed > 0:
+                logger.warning(f"Game {self.game_id}: {broadcast_failed} players did not receive game_ready signal")
 
         except Exception as e:
             logger.exception(f"Game {self.game_id}: Error starting game: {e}")
