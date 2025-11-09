@@ -22,7 +22,10 @@ set landm 50
 set minplayers 1
 set maxplayers 4
 set aifill 2
-set generator ISLAND
+## Map generator changed from ISLAND (high fragmentation & naval bias)
+## to CONTINENTS for more balanced LLM vs LLM play: larger landmasses,
+## clearer expansion paths, fewer early randomness swings.
+set generator CONTINENTS
 set landmass 30
 set separatepoles ENABLED
 
