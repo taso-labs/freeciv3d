@@ -23,9 +23,9 @@ set minplayers 1
 set maxplayers 4
 set aifill 2
 ## Map generator changed from ISLAND (high fragmentation & naval bias)
-## to CONTINENTS for more balanced LLM vs LLM play: larger landmasses,
+## to FRACTAL for more balanced LLM vs LLM play: larger landmasses,
 ## clearer expansion paths, fewer early randomness swings.
-set generator CONTINENTS
+set generator FRACTAL
 set landmass 30
 set separatepoles ENABLED
 
