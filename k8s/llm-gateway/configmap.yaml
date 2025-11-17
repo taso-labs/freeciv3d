@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: llm-gateway-config
+  namespace: freeciv3d
+  labels:
+    app: llm-gateway
+    component: game-integration
+data:
+  # FreeCiv server connection
+  freeciv-server-host: "fciv-net.freeciv3d.svc.cluster.local"
+  freeciv-server-port: "5556"
+
+  # Gateway configuration
+  websocket-port: "8003"
+  grpc-port: "9000"
+  max-concurrent-games: "10"
+
+  # Application configuration
+  log-level: "debug"
+  environment: "staging"

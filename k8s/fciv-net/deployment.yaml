@@ -1,0 +1,116 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fciv-net
+  namespace: freeciv3d
+  labels:
+    app: fciv-net
+    component: game-server
+    version: v1
+  annotations:
+    description: "FreeCiv 3D game server - forked version with bot integration"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: fciv-net
+  template:
+    metadata:
+      labels:
+        app: fciv-net
+        component: game-server
+        version: v1
+    spec:
+      serviceAccountName: fciv-net-sa
+
+      containers:
+      - name: fciv-net
+        # This should be replaced with actual FreeCiv server image when available
+        # For now, using a placeholder that would contain the forked FreeCiv server
+        image: us-central1-docker.pkg.dev/clashai-staging/clashai-staging-registry/fciv-net:latest
+        imagePullPolicy: Always
+
+        ports:
+        - name: game
+          containerPort: 5556
+          protocol: TCP
+        - name: web
+          containerPort: 8080
+          protocol: TCP
+
+        env:
+        # Game server configuration
+        - name: FREECIV_PORT
+          value: "5556"
+        - name: FREECIV_WEB_PORT
+          value: "8080"
+        - name: FREECIV_GAME_MODE
+          value: "bot-competition"
+        - name: FREECIV_MAX_PLAYERS
+          value: "4"
+        - name: FREECIV_TURN_TIMEOUT
+          value: "300"  # 5 minutes per turn
+
+        # Database for game state persistence
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: db-credentials
+              key: connection-string
+
+        # Application configuration
+        - name: LOG_LEVEL
+          value: "info"
+        - name: ENABLE_BOT_API
+          value: "true"
+
+        resources:
+          requests:
+            cpu: 200m
+            memory: 512Mi
+          limits:
+            cpu: 1000m
+            memory: 2Gi
+
+        # Health probes
+        livenessProbe:
+          tcpSocket:
+            port: game
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+
+        readinessProbe:
+          tcpSocket:
+            port: game
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 2
+
+        # Volume mounts for game data
+        volumeMounts:
+        - name: game-data
+          mountPath: /var/lib/freeciv
+        - name: game-logs
+          mountPath: /var/log/freeciv
+
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 1001
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: false
+          capabilities:
+            drop:
+            - ALL
+
+      volumes:
+      - name: game-data
+        emptyDir: {}  # For staging - use PVC for production
+      - name: game-logs
+        emptyDir: {}
+
+      dnsPolicy: ClusterFirst
+      restartPolicy: Always
+      terminationGracePeriodSeconds: 60  # Allow games to finish gracefully

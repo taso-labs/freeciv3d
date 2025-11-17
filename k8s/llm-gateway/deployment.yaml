@@ -1,0 +1,102 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: llm-gateway
+  namespace: freeciv3d
+  labels:
+    app: llm-gateway
+    component: game-integration
+    version: v1
+  annotations:
+    description: "LLM Gateway for FreeCiv bot communication - stub implementation"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: llm-gateway
+  template:
+    metadata:
+      labels:
+        app: llm-gateway
+        component: game-integration
+        version: v1
+    spec:
+      serviceAccountName: llm-gateway-sa
+
+      containers:
+      - name: llm-gateway
+        # This is a placeholder image - replace with actual FreeCiv LLM gateway when available
+        image: us-central1-docker.pkg.dev/clashai-staging/clashai-staging-registry/llm-gateway:latest
+        imagePullPolicy: Always
+
+        ports:
+        - name: websocket
+          containerPort: 8003
+          protocol: TCP
+        - name: grpc
+          containerPort: 9000
+          protocol: TCP
+
+        env:
+        # FreeCiv server connection
+        - name: FREECIV_SERVER_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: llm-gateway-config
+              key: freeciv-server-host
+        - name: FREECIV_SERVER_PORT
+          valueFrom:
+            configMapKeyRef:
+              name: llm-gateway-config
+              key: freeciv-server-port
+
+        # Database configuration
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: db-credentials
+              key: connection-string
+
+        # Application configuration
+        - name: LOG_LEVEL
+          value: "debug"
+        - name: RUST_LOG
+          value: "info,llm_gateway=debug"
+        - name: BIND_ADDR
+          value: "0.0.0.0:8003"
+        - name: GRPC_ADDR
+          value: "0.0.0.0:9000"
+
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+
+        # Health probes disabled until service is fully implemented
+        # livenessProbe:
+        #   tcpSocket:
+        #     port: websocket
+        #   initialDelaySeconds: 15
+        #   periodSeconds: 10
+
+        # readinessProbe:
+        #   tcpSocket:
+        #     port: websocket
+        #   initialDelaySeconds: 5
+        #   periodSeconds: 5
+
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 1001
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: false
+          capabilities:
+            drop:
+            - ALL
+
+      dnsPolicy: ClusterFirst
+      restartPolicy: Always
+      terminationGracePeriodSeconds: 30
