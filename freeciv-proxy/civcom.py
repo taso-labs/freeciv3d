@@ -16,6 +16,7 @@
 import socket
 from struct import *
 from threading import Thread
+import threading
 import logging
 import time
 import json
@@ -214,7 +215,8 @@ class CivCom(Thread):
 
         # Goto path cache: maps (unit_id, dest_tile) -> {'length': int, 'dir': [int,...]}
         self._goto_paths = {}
-        self._goto_paths_lock = None  # Lazy init to avoid threading issues
+        # Initialize lock eagerly to avoid races during lazy init from multiple threads
+        self._goto_paths_lock = threading.RLock()
 
     def _get_nation_name(self, nation_id):
         """Convert nation ID to human-readable name using nations registry.

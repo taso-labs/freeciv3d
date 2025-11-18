@@ -422,6 +422,11 @@ class GameSessionManager:
                 elif isinstance(_ms_port_raw, str) and _ms_port_raw.isdigit():
                     ms_port = int(_ms_port_raw)
                 else:
+                    logger.warning(f"Game {game_id}: metaserver.port invalid or malformed ({_ms_port_raw!r}); falling back to 8080")
+                    ms_port = 8080
+                # Validate numeric port range
+                if not (1 <= ms_port <= 65535):
+                    logger.warning(f"Game {game_id}: metaserver.port out of range ({ms_port}); falling back to 8080")
                     ms_port = 8080
                 metaserver = get_metaserver_client(host=ms_host, port=ms_port)
                 port = metaserver.find_pregame_server(min_players=0, max_players=0)

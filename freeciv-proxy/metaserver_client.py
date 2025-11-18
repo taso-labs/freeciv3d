@@ -76,7 +76,12 @@ class GameListParser(HTMLParser):
                         return
                     if "civserverport" in qs and qs["civserverport"]:
                         try:
-                            self.current_game["port"] = int(qs["civserverport"][0])
+                            parsed_port = int(qs["civserverport"][0])
+                            # Validate port range
+                            if 1 <= parsed_port <= 65535:
+                                self.current_game["port"] = parsed_port
+                            else:
+                                logger.debug(f"Ignoring out-of-range civserver port: {parsed_port}")
                         except (ValueError, TypeError):
                             pass
                     if "type" in qs and qs["type"]:
@@ -185,6 +190,9 @@ class MetaserverClient:
         self._cache: Optional[Dict[str, Any]] = None
         self._cache_time: float = 0
         self._cache_ttl: float = cache_ttl
+        # Allow returning slightly stale cache (in seconds) on metaserver failures
+        # to avoid flapping when metaserver is briefly unreachable. Default: 10x TTL
+        self._max_cache_stale: float = float(cache_ttl) * 10.0
         self.max_retries = max_retries
         self.backoff_factor = backoff_factor
         self.user_agent = user_agent
@@ -292,10 +300,15 @@ class MetaserverClient:
 
         except Exception as e:
             logger.error(f"Failed to get multiplayer games: {e}")
-            # Return stale cache if available
+            # Return stale cache if available and not too old
             if self._cache:
-                logger.warning("Returning stale cached data due to metaserver error")
-                return self._cache["games"]
+                age = now - self._cache_time
+                if age <= self._max_cache_stale:
+                    logger.warning(f"Returning stale cached data (age: {age:.1f}s) due to metaserver error")
+                    return self._cache["games"]
+                else:
+                    logger.error(f"Cached game list too old (age: {age:.1f}s > max_stale: {self._max_cache_stale:.1f}s); not returning stale data")
+                    return []
             return []
 
     def find_pregame_server(
