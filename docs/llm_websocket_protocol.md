@@ -408,7 +408,7 @@ All messages follow this structure:
 
 **Error Codes:**
 - `E101`: Missing required field
-- `E102`: Invalid API token
+- `E102`: Authentication Session Expired
 - `E103`: Unknown message type
 - `E120`: Not authenticated (session expired or not yet authenticated)
 - `E121`: State query failed

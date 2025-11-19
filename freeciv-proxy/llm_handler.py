@@ -12,7 +12,7 @@ import time
 import uuid
 import asyncio
 import socket
-from tornado import websocket
+from tornado import websocket, ioloop
 from civcom import CivCom
 from state_cache import state_cache
 from state_extractor import StateExtractor, StateFormat, civcom_registry
@@ -129,7 +129,6 @@ class LLMWSHandler(websocket.WebSocketHandler):
         # Add io_loop attribute for CivCom compatibility
         # CivCom uses conn.io_loop.add_callback() to send packets safely across threads
         # This must be the IOLoop instance that's handling this connection
-        from tornado import ioloop
         self.io_loop = ioloop.IOLoop.current()
 
         # Initialize message validator with configurable size limit
@@ -190,17 +189,6 @@ class LLMWSHandler(websocket.WebSocketHandler):
         """
         logger.debug(f"Received message from {self.agent_id or self.id}: {message[:200]}")
         try:
-            # Session validation for authenticated agents
-            if self.session_id and not self._validate_session():
-                self.write_message(json.dumps({
-                    'type': 'error',
-                    'code': 'E102',
-                    'message': 'Session expired or invalid',
-                    'requires_reconnect': True
-                }))
-                self.close()
-                return
-
             # Cleanup expired sessions periodically
             session_manager.cleanup_expired_sessions()
 

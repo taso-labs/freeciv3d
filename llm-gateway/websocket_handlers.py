@@ -246,7 +246,17 @@ class AgentWebSocketHandler:
                 try:
                     # Receive message from proxy
                     proxy_message = await self.proxy_connection.recv()
-                    logger.info(f"📥 Gateway received from proxy for agent {self.agent_id}: {proxy_message[:200]}")
+                    # Show a larger preview at INFO so we can triage without DEBUG logs.
+                    # If the message is very long, include the head (4k) and tail (200)
+                    # so truncated logs still show both the start and the end of JSON.
+                    msg_len = len(proxy_message)
+                    if msg_len > 4200:
+                        preview = proxy_message[:4000] + " ... " + proxy_message[-200:]
+                    else:
+                        preview = proxy_message
+
+                    logger.info(f"📥 Gateway received from proxy for agent {self.agent_id}: {preview} (len={msg_len})")
+                    logger.debug(f"📥 Full proxy message for agent {self.agent_id} ({msg_len} bytes): {proxy_message}")
 
                     # Transform proxy messages to agent format
                     try:
