@@ -26,6 +26,10 @@ This grouping makes it easy to identify which action failed from the error code.
 import logging
 from typing import Dict, Any, List, Optional
 from enum import Enum
+from itertools import chain
+
+from civcom import CivCom
+from ruleset_mapper import clean_production_name
 
 logger = logging.getLogger("freeciv-proxy")
 
@@ -86,8 +90,9 @@ class LLMActionValidator:
         ActionType.TRADE_ROUTE
     ]
 
-    def __init__(self, capabilities: Optional[List[ActionType]] = None):
+    def __init__(self, capabilities: Optional[List[ActionType]] = None, civcom: Optional[CivCom] = None):
         self.capabilities = capabilities or self.DEFAULT_CAPABILITIES.copy()
+        self.civcom = civcom
         self.validation_stats = {
             'total_actions': 0,
             'valid_actions': 0,
@@ -232,7 +237,7 @@ class LLMActionValidator:
                         return self._validation_error('E022', 'Unit cannot build cities')
                     break
             else:
-                return self._validation_error('E023', 'Unit not found')
+                return self._validation_error("E023", "Unit not found")
 
         return ValidationResult(True)
 
@@ -247,14 +252,26 @@ class LLMActionValidator:
         production_type = action['production_type']
 
         # Validate production type is reasonable
-        valid_production_types = [
-            'warrior', 'settler', 'worker', 'archer', 'spearman',
-            'barracks', 'granary', 'library', 'marketplace',
-            'temple', 'aqueduct', 'walls'
-        ]
+        valid_production_types: list[str] = []
 
-        if production_type not in valid_production_types:
-            return self._validation_error('E031', f'Invalid production type: {production_type}')
+        for _, prod_type in chain(
+            self.civcom.unit_types.items(), self.civcom.improvements.items()
+        ):
+            name = prod_type.get("name", "")
+            if not name:
+                continue
+            clean_name = clean_production_name(name)
+            valid_production_types.append(clean_name)
+
+        for production in valid_production_types:
+            if production_type.casefold() == production.casefold():
+                production_type = production
+                break
+        else:
+            return self._validation_error(
+                "E031",
+                f"Invalid production type: {production_type}, should be one of {valid_production_types}",
+            )
 
         # If game state available, verify city ownership
         if game_state and 'cities' in game_state:
@@ -266,7 +283,7 @@ class LLMActionValidator:
                         return self._validation_error('E032', 'Player does not own this city')
                     break
             else:
-                return self._validation_error('E033', 'City not found')
+                return self._validation_error("E033", "City not found")
 
         return ValidationResult(True)
 

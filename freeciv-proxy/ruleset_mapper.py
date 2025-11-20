@@ -28,6 +28,11 @@ VUT_IMPROVEMENT = 3  # Buildings (Barracks, Granary, Temple, etc.)
 VUT_UTYPE = 6        # Units (Warriors, Settlers, Phalanx, etc.)
 
 
+def clean_production_name(name: str) -> str:
+    """Clean production name (e.g. '?unit:Settlers' -> 'Settlers')"""
+    return name.split(":")[-1]
+
+
 class RulesetMapper:
     """
     Maps production names to (kind, value) tuples for PACKET_CITY_CHANGE.

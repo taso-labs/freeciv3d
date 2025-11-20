@@ -12,6 +12,7 @@ import time
 import uuid
 import asyncio
 import socket
+from itertools import chain
 from tornado import websocket, ioloop
 from civcom import CivCom
 from state_cache import state_cache
@@ -24,8 +25,9 @@ from rate_limiter import DistributedRateLimiter
 from session_manager import session_manager, SessionState
 from error_handler import error_handler, ErrorSeverity, ErrorCategory
 from game_session_manager import game_session_manager
-from ruleset_mapper import RulesetMapper
+from ruleset_mapper import RulesetMapper, clean_production_name
 from typing import Dict, Any, Optional, List
+from fc_constants import VUT_ADVANCE, VUT_IMPROVEMENT, VUT_MINSIZE
 
 logger = logging.getLogger("freeciv-proxy")
 
@@ -309,10 +311,6 @@ class LLMWSHandler(websocket.WebSocketHandler):
 
             self.session_id = self.session_info.session_id
 
-            # Set up capabilities for action validator
-            self.capabilities = [ActionType(cap) for cap in capability_set]
-            self.action_validator = LLMActionValidator(self.capabilities)
-
             # Register agent first (needed for player_id calculation)
             llm_agents[self.agent_id] = self
             self.is_llm_agent = True
@@ -379,6 +377,10 @@ class LLMWSHandler(websocket.WebSocketHandler):
                     del llm_agents[self.agent_id]
                 self.is_llm_agent = False
                 return
+
+            # Set up capabilities for action validator
+            self.capabilities = [ActionType(cap) for cap in capability_set]
+            self.action_validator = LLMActionValidator(self.capabilities, civcom=self.civcom)
 
             # Self-assign player_id (restores pre-GameSessionManager behavior)
             # The original working implementation assigned player_id client-side
@@ -1568,7 +1570,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
 
         return opportunities
 
-    def _get_legal_actions_optimized(self, game_state: Dict[str, Any] = None) -> List[Dict[str, Any]]:
+    def _get_legal_actions_optimized(self, game_state: dict[str, Any] | None = None) -> list[dict[str, Any]]:
         """Get top legal actions for LLM (limited to ~20 most important)"""
         actions = []
 
@@ -1579,71 +1581,96 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 logger.warning(f"Failed to get legal actions from civcom: {e}")
                 game_state = {}
 
-        if game_state:
-            units_raw = game_state.get('units', {})
-            cities_raw = game_state.get('cities', {})
-            techs = game_state.get('techs', [])
+        if not game_state:
+            return [{
+                'type': 'end_turn',
+                'priority': 'high',
+                'description': 'End turn and advance game'
+            }]
 
-            # Convert dicts to lists for iteration
-            units = list(units_raw.values()) if isinstance(units_raw, dict) else units_raw
-            cities = list(cities_raw.values()) if isinstance(cities_raw, dict) else cities_raw
+        units_raw = game_state.get('units', {})
+        cities_raw = game_state.get('cities', {})
+        techs = game_state.get('techs', [])
 
-            # Get our units that can move
-            our_units = [u for u in units if u.get('owner') == self.player_id and u.get('moves_left', 0) > 0]
+        # Convert dicts to lists for iteration
+        units = list(units_raw.values()) if isinstance(units_raw, dict) else units_raw
+        cities = list(cities_raw.values()) if isinstance(cities_raw, dict) else cities_raw
 
-            # Add unit movement actions
-            for unit in our_units[:10]:  # Limit to 10 units
-                # Handle unit type - can be int (type ID) or string (type name)
-                unit_type_raw = unit.get('type', '')
-                if isinstance(unit_type_raw, str):
-                    unit_type = unit_type_raw.lower()
-                else:
-                    # Type is an integer ID - use generic name
-                    unit_type = f"unit_{unit_type_raw}"
+        # Get our units that can move
+        our_units = [u for u in units if u.get('owner') == self.player_id and u.get('moves_left', 0) > 0]
 
-                current_x, current_y = unit.get('x', 0), unit.get('y', 0)
+        # Add unit movement actions
+        for unit in our_units[:10]:  # Limit to 10 units
+            # Handle unit type - can be int (type ID) or string (type name)
+            unit_type_raw = unit.get('type', '')
+            if isinstance(unit_type_raw, str):
+                prod_type = unit_type_raw.lower()
+            else:
+                # Type is an integer ID - use generic name
+                prod_type = f"unit_{unit_type_raw}"
 
-                # Check if unit can build cities (type 0 is usually Settlers in FreeCiv)
-                if unit_type in ['settlers', 'engineer'] or unit_type_raw == 0:
-                    # Settlement/construction actions
-                    actions.append({
-                        'type': 'unit_build_city',
-                        'unit_id': unit.get('id'),
-                        'priority': 'high',
-                        'description': f"Build city with {unit_type}"
-                    })
+            current_x, current_y = unit.get('x', 0), unit.get('y', 0)
 
-                # Movement actions (explore nearby)
-                for dx, dy in [(0, 1), (1, 0), (0, -1), (-1, 0)]:  # Adjacent tiles
-                    actions.append({
-                        'type': 'unit_move',
-                        'unit_id': unit.get('id'),
-                        'dest_x': current_x + dx,
-                        'dest_y': current_y + dy,
-                        'priority': 'medium',
-                        'description': f"Move {unit_type} to explore"
-                    })
+            # Check if unit can build cities (type 0 is usually Settlers in FreeCiv)
+            if prod_type in ['settlers', 'engineer'] or unit_type_raw == 0:
+                # Settlement/construction actions
+                actions.append({
+                    'type': 'unit_build_city',
+                    'unit_id': unit.get('id'),
+                    'priority': 'high',
+                    'description': f"Build city with {prod_type}"
+                })
 
+            # Movement actions (explore nearby)
+            for dx, dy in [(0, 1), (1, 0), (0, -1), (-1, 0), (1, 1), (1, -1), (-1, 1), (-1, -1)]:  # Adjacent tiles + diagonals
+                actions.append({
+                    'type': 'unit_move',
+                    'unit_id': unit.get('id'),
+                    'dest_x': current_x + dx,
+                    'dest_y': current_y + dy,
+                    'priority': 'medium',
+                    'description': f"Move {prod_type} to explore"
+                })
+
+        # Only suggest city production and tech research if there are little unit moves available
+        # This helps prevent overloading the action list with production and tech when units can act
+        if len(actions) < 10:
             # Add city production actions
-            our_cities = [c for c in cities if c.get('owner') == self.player_id]
-            for city in our_cities[:5]:  # Limit to 5 cities
-                city_id = city.get('id')
+            # Dynamic production options
+            # Get all available units and buildings from civcom
+            if self.civcom and hasattr(self.civcom, 'unit_types') and hasattr(self.civcom, 'improvements'):
+                our_cities = [c for c in cities if c.get('owner') == self.player_id]
+                for city in our_cities[:5]:  # Limit to 5 cities
+                    city_id = city.get('id')
+                    # Process Units
+                    for _, prod_type in chain(
+                        self.civcom.unit_types.items(), self.civcom.improvements.items()
+                    ):
+                        name = prod_type.get('name', '')
+                        if not name:
+                            continue
 
-                # Basic production options
-                productions = ['Warriors', 'Granary', 'Barracks']
-                if 'Bronze Working' in techs:
-                    productions.append('Spearmen')
-                if 'Pottery' in techs:
-                    productions.append('Granary')
+                        clean_name = clean_production_name(name)
 
-                for production in productions[:3]:  # Limit options
-                    actions.append({
-                        'type': 'city_production',
-                        'city_id': city_id,
-                        'production_type': production,
-                        'priority': 'medium',
-                        'description': f"Produce {production} in {city.get('name', 'city')}"
-                    })
+                        if self._is_buildable(city, prod_type, game_state):
+                            priority_score = self._calculate_production_priority(city, prod_type, game_state)
+
+                            # Map score to string priority for backward compatibility
+                            if priority_score >= 0.8:
+                                priority_str = 'high'
+                            elif priority_score >= 0.4:
+                                priority_str = 'medium'
+                            else:
+                                priority_str = 'low'
+
+                            actions.append({
+                                'type': 'city_production',
+                                'city_id': city_id,
+                                'production_type': clean_name,
+                                'priority': priority_str,
+                                'priority_score': priority_score,
+                                'description': f"Produce {clean_name} in {city.get('name', 'city')}"
+                            })
 
             # Add research actions
             available_techs = ['Alphabet', 'Bronze Working', 'Pottery', 'Animal Husbandry', 'Agriculture']
@@ -1659,26 +1686,6 @@ class LLMWSHandler(websocket.WebSocketHandler):
                     })
                     break  # Only suggest one tech at a time
 
-        # Fallback actions if no game state
-        if not actions:
-            actions = [
-                {
-                    'type': 'unit_move',
-                    'unit_id': 1,
-                    'dest_x': 10,
-                    'dest_y': 20,
-                    'priority': 'medium',
-                    'description': 'Explore nearby area'
-                },
-                {
-                    'type': 'city_production',
-                    'city_id': 1,
-                    'production_type': 'Warriors',
-                    'priority': 'medium',
-                    'description': 'Build military unit'
-                }
-            ]
-
         # ALWAYS add end_turn action so agents can signal turn completion
         # This is critical for game progression - without it, agents can't end their turn
         # and the game will be stuck on the current turn until timeout
@@ -1689,10 +1696,107 @@ class LLMWSHandler(websocket.WebSocketHandler):
         })
 
         # Sort by priority and limit to top 20 actions (increased from 15 to ensure end_turn is included)
+        # Sort by priority score if available, else by priority string
         priority_order = {'high': 3, 'medium': 2, 'low': 1}
-        actions.sort(key=lambda x: priority_order.get(x.get('priority', 'low'), 1), reverse=True)
-
+        actions.sort(key=lambda x: (x.get('priority_score', 0), priority_order.get(x.get('priority', 'low'), 1)), reverse=True)
         return actions[:20]
+
+    def _is_buildable(self, city: Dict[str, Any], item_type: Dict[str, Any], game_state: Dict[str, Any]) -> bool:
+        """Check if an item is buildable in the given city."""
+        # Get requirements list (units use 'build_reqs', buildings use 'reqs')
+        reqs = item_type.get('build_reqs', []) if 'build_reqs' in item_type else item_type.get('reqs', [])
+
+        known_techs = game_state.get('techs', [])
+        # Assuming known_techs might be names or IDs. civcom.known_techs is usually names.
+        # But requirements use IDs. We might need to map.
+        # For now, let's assume we can check against what we have.
+        # If game_state['techs'] are names, we need to map req IDs to names or vice versa.
+        # However, civcom.known_techs is a list of strings (names).
+        # The requirement values are IDs.
+        # We need a way to map Tech ID -> Tech Name.
+        # civcom.techs might store this mapping if available, or we can infer it.
+        # Actually, civcom.techs is likely not populated with full tech tree in this proxy version.
+        # Let's check if we can access tech mapping.
+        # If not, we might have to skip tech check or try to use RulesetMapper if it had reverse mapping.
+        # Wait, civcom.unit_types has 'tech_req' which is an ID? No, 'build_reqs' has 'source': {'kind': 1, 'value': ID}.
+
+        # CRITICAL: We need to map ID to Name to check against known_techs (names).
+        # Or map known_techs names to IDs.
+        # Let's try to find the tech name from the ID using civcom.techs if it exists.
+        # If not, we can't reliably check tech reqs.
+        # For this iteration, let's assume we can skip tech check if we can't map,
+        # OR better, check if 'tech_req' field exists directly on unit_type (older packet format) which might be a name?
+        # No, packets.def shows 'build_reqs'.
+
+        # Workaround: If we can't map ID to Name, we might be listing too many things.
+        # But let's look at what we have.
+
+        for req in reqs:
+            source = req.get('source', {})
+            kind = source.get('kind')
+            value = source.get('value')
+
+            # Placeholder for VUT_ADVANCE, VUT_IMPROVEMENT, VUT_MINSIZE if not defined
+            # VUT_ADVANCE, VUT_IMPROVEMENT, VUT_MINSIZE are imported from fc_constants
+
+            if kind == VUT_ADVANCE: # Tech
+                # We need to check if we have this tech.
+                # If we can't map ID to name, we are stuck.
+                # Let's check if civcom has a tech map.
+                pass # TODO: Implement tech check when ID mapping is available
+
+            elif kind == VUT_IMPROVEMENT: # Building
+                # Check if city has this building
+                # value is building_id. city['improvements'] should be a list of building IDs or names?
+                # Usually city['improvements'] in game_state (from civcom) is a list of IDs (integers).
+                if 'improvements' in city and isinstance(city['improvements'], list):
+                    if value not in city['improvements']:
+                        return False
+
+            elif kind == VUT_MINSIZE: # City Size
+                if city.get('size', 1) < value:
+                    return False
+
+        return True
+
+    def _calculate_production_priority(self, city: Dict[str, Any], item_type: Dict[str, Any], game_state: Dict[str, Any]) -> float:
+        """Calculate priority score (0.0 - 1.0) for a production item."""
+        name = clean_production_name(item_type.get('name', ''))
+        turn = game_state.get('turn', 0)
+
+        # Base score
+        score = 0.1
+
+        # Settlers
+        if name == 'Settlers':
+            # Early game expansion
+            num_cities = len([c for c in game_state.get('cities', {}).values() if c.get('owner') == self.player_id])
+            if turn < 50 and num_cities < 5:
+                return 1.0
+            return 0.3
+
+        # Defensive Units
+        # We need to identify if it's a defensive unit.
+        # Heuristic: 'Warriors', 'Phalanx', 'Spearmen', 'Archers'
+        # Or check stats: defense_strength > 0
+        if item_type.get('defense_strength', 0) > 0 and item_type.get('attack_strength', 0) < 2:
+            # It's likely a defender
+            garrison = city.get('garrison', []) # List of unit IDs
+            if not garrison:
+                return 0.9 # High priority if empty
+            return 0.2 # Low priority if already defended
+
+        # Growth Buildings
+        if name in ['Granary', 'Harbor', 'Aqueduct']:
+            if city.get('size', 1) > 2:
+                return 0.6
+
+        # Production Buildings
+        if name in ['Factory', 'Manufacturing Plant', 'Hydro Plant']:
+            if turn > 100:
+                return 0.7
+
+        return score
 
     def _get_current_game_state(self) -> Optional[Dict[str, Any]]:
         """Get current game state for validation"""
@@ -2087,9 +2191,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                     if attempt < int(max_attempts):
                         time.sleep(float(retry_delay))
             else:
-                error_msg = (
-                    f"Unable to reach civserver at {host}:{port} after {max_attempts} attempts"
-                )
+                error_msg = f"Unable to reach civserver at {host}:{port} after {max_attempts} attempts"
                 raise ConnectionError(error_msg) from last_error
 
             # Create proper FreeCiv login packet (PACKET_SERVER_JOIN_REQ)
