@@ -564,7 +564,7 @@ class StateExtractor:
 
             # Sort by priority (highest first) and take top 20
             sorted_actions = sorted(all_actions, key=lambda x: x.get('priority', 0), reverse=True)
-            return sorted_actions[:20]
+            return sorted_actions[:40]
 
         except (CivComNotFoundError, StateExtractionError) as e:
             # Re-raise specific exceptions with preserved context

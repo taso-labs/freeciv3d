@@ -1824,7 +1824,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
         # Sort by priority score if available, else by priority string
         priority_order = {'high': 3, 'medium': 2, 'low': 1}
         actions.sort(key=lambda x: (x.get('priority_score', 0), priority_order.get(x.get('priority', 'low'), 1)), reverse=True)
-        return actions[:20]
+        return actions[:40]
 
     def _is_buildable(self, city: Dict[str, Any], item_type: Dict[str, Any], game_state: Dict[str, Any]) -> bool:
         """Check if an item is buildable in the given city."""
