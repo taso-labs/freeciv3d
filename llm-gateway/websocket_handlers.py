@@ -51,7 +51,9 @@ class AgentWebSocketHandler:
         self.authenticated = False
         self.player_id: Optional[int] = None
         self.game_id: Optional[str] = None
-        self.proxy_connection: Optional[WebSocket] = None  # Connection to freeciv-proxy LLM handler
+        self.proxy_connection: websockets.ClientConnection | None = (
+            None  # Connection to freeciv-proxy LLM handler
+        )
 
     async def handle_connection(self):
         """Handle the WebSocket connection lifecycle"""
@@ -690,7 +692,6 @@ class AgentWebSocketHandler:
         except Exception as e:
             logger.error(f"Error validating origin for agent {self.agent_id}: {e}")
             return False
-
 
 
 # WebSocket route registration

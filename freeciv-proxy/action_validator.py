@@ -211,7 +211,7 @@ class LLMActionValidator:
                     break
 
             if not unit_found:
-                return self._validation_error('E014', 'Unit not found or not visible')
+                return self._validation_error('E014', f'Unit {unit_id} not found or not visible out of {units}')
 
         return ValidationResult(True)
 

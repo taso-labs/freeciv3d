@@ -30,6 +30,7 @@ from typing import Dict, Any, Optional, List
 from fc_constants import VUT_ADVANCE, VUT_IMPROVEMENT, VUT_MINSIZE
 
 logger = logging.getLogger("freeciv-proxy")
+logger.setLevel(logging.DEBUG)
 
 # Add file handler for persistent debug logging
 import os
@@ -1370,6 +1371,125 @@ class LLMWSHandler(websocket.WebSocketHandler):
         logger.warning(f"Unexpected type {type(data)} in _ensure_dict, returning empty dict")
         return {}
 
+    def _get_visible_tile(self, visible_tiles: list[dict[str, Any]] | None, x: int, y: int) -> dict | None:
+        """Find a visible tile by x,y coordinates in the provided tiles list.
+
+        Args:
+            visible_tiles: Array of tile dicts such as returned in 'visible_tiles'
+            x, y: Coordinates to search for
+
+        Returns: tile dict or None if not present
+        """
+        if not visible_tiles:
+            return None
+        for t in visible_tiles:
+            if not isinstance(t, dict):
+                continue
+            if t.get('x') == x and t.get('y') == y:
+                return t
+        return None
+
+    def _is_water_terrain(self, terrain: str | None) -> bool:
+        """Return True for common water/oceanic terrain names. Case-insensitive.
+
+        We treat 'ocean' and 'lake' (and synonyms) as water - these should only be
+        traversable by naval units. 'coast' is considered land for movement by
+        land units and is thus allowed.
+        """
+        if not terrain:
+            return False
+        t = str(terrain).strip().lower()
+        return t in {"ocean", "sea", "deep ocean", "lake", "water"}
+
+    def _unit_is_naval(self, unit: dict[str, Any]) -> bool:
+        """Heuristic: detect whether a given unit is a naval unit that can
+        move on ocean tiles. This uses unit type name and some ruleset hints.
+
+        - If the unit type name contains typical naval words (ship, trireme, frigate, etc.),
+          consider it naval.
+        - If civcom unit_types has a matching entry and it has 'transport_capacity' > 0,
+          consider it a naval transport.
+        - Fallback to name-based heuristics.
+        """
+        # Known naval terms to match against type names
+
+        NAVAL_TERMS = {
+            "trireme",
+            "caravel",
+            "galleon",
+            "frigate",
+            "ironclad",
+            "destroyer",
+            "cruiser",
+            "aegis_cruiser",
+            "battleship",
+            "submarine",
+            "carrier",
+            "transport",
+        }
+
+        # Normalize string type
+        unit_type_raw = unit.get('type', '')
+        unit_type_name = ''
+        if isinstance(unit_type_raw, str):
+            unit_type_name = unit_type_raw.lower()
+        elif isinstance(unit_type_raw, int) and self.civcom and hasattr(self.civcom, 'unit_types'):
+            ptype = self.civcom.unit_types.get(unit_type_raw)
+            if ptype:
+                # Some ruleset packets use 'name' field
+                unit_type_name = ptype.get('name', '') or ptype.get('rule_name', '')
+                if isinstance(unit_type_name, str):
+                    unit_type_name = unit_type_name.lower()
+                else:
+                    unit_type_name = ''
+
+                # transport capacity often implies a ship / naval transport
+                try:
+                    if int(ptype.get('transport_capacity', 0)) > 0:
+                        return True
+                except Exception:
+                    # ignore bad types
+                    pass
+
+                # flags may indicate coastal/sea units (bitvector representation)
+                flags = ptype.get('flags') or ptype.get('flags', [])
+                # a simple fallback: if flags exists and the list/bitvector length > 12
+                # and index 12 (UTYF_COAST) is set then we consider it a sea-capable unit.
+                try:
+                    if isinstance(flags, (list, tuple)) and len(flags) > 12 and flags[12]:
+                        return True
+                except Exception:
+                    pass
+        else:
+            # Could be a numeric string or other; fall back to string conversion
+            unit_type_name = str(unit_type_raw).lower()
+
+        # Name based heuristic
+        if any(term in unit_type_name for term in NAVAL_TERMS):
+            return True
+
+        return False
+
+    def _is_unit_move_valid(self, unit: dict[str, Any], dest_x: int, dest_y: int, visible_tiles: list[dict[str, Any]] | None) -> bool:
+        """Decide if the move is plausibly legal in terms of basic terrain/sea checks.
+
+        Returns False if the target tile is known (visible) and identified as ocean
+        but the unit appears to be non-naval.
+        If the tile is not visible we cannot reliably judge and we optimistically
+        allow the move (since exploring unknown tiles is generally valid).
+        """
+        tile = self._get_visible_tile(visible_tiles, dest_x, dest_y)
+        # If no tile data available (unseen), allow exploration moves
+        if not tile:
+            return True
+        terrain = tile.get('terrain')
+        if not terrain:
+            return True
+        # If it's water (ocean/lake) - only consider if unit is naval
+        if self._is_water_terrain(terrain) and not self._unit_is_naval(unit):
+            return False
+        return True
+
     def _build_fallback_state_from_full(self, full_state: Dict[str, Any]) -> Dict[str, Any]:
         """Construct a minimally useful state payload from a civcom snapshot - dict format."""
         # Keep dict format - no conversion to list
@@ -1623,11 +1743,16 @@ class LLMWSHandler(websocket.WebSocketHandler):
 
             # Movement actions (explore nearby)
             for dx, dy in [(0, 1), (1, 0), (0, -1), (-1, 0), (1, 1), (1, -1), (-1, 1), (-1, -1)]:  # Adjacent tiles + diagonals
+                dest_x = current_x + dx
+                dest_y = current_y + dy
+                if not self._is_unit_move_valid(unit, dest_x, dest_y, game_state.get('visible_tiles', [])):
+                    # If tile is known to be water and unit is non-naval, skip
+                    continue
                 actions.append({
                     'type': 'unit_move',
                     'unit_id': unit.get('id'),
-                    'dest_x': current_x + dx,
-                    'dest_y': current_y + dy,
+                    'dest_x': dest_x,
+                    'dest_y': dest_y,
                     'priority': 'medium',
                     'description': f"Move {prod_type} to explore"
                 })
