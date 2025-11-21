@@ -1690,6 +1690,67 @@ class LLMWSHandler(websocket.WebSocketHandler):
 
         return opportunities
 
+    def _is_city_site_valid(self, unit_x: int, unit_y: int, citymindist: int, all_cities: list[dict[str, Any]], map_info: dict[str, Any]) -> tuple[bool, str]:
+        """Check if a prospective city site at (unit_x, unit_y) is at least citymindist away from all known cities.
+
+        Uses Chebyshev distance (max(|dx|, |dy|)) which aligns with square-area spacing typical in FreeCiv city placement.
+        Wrap handling is deferred; current implementation assumes no wrapping or that wrap effects are negligible for short distances.
+
+        Args:
+            unit_x, unit_y: Integer tile coordinates of the unit.
+            citymindist: Minimum required distance (int) between cities (from PACKET_GAME_INFO.citymindist).
+            all_cities: List of city dictionaries (may include x,y or tile index only).
+            map_info: Map metadata (width/height) for fallback coordinate derivation if needed.
+
+        Returns:
+            Tuple of (is_valid: bool, reason: str) where reason explains why the site is invalid if applicable.
+        """
+
+        # Ensure width is an integer for coordinate derivation (fallback to 1 to avoid ZeroDivision)
+        try:
+            width = int(map_info.get('width') or 1)
+        except Exception:
+            width = 1
+        valid_cities = []
+        for c in all_cities:
+            if not isinstance(c, dict):
+                continue
+            cx = c.get('x')
+            cy = c.get('y')
+            # Derive from tile index if x,y missing
+            if (cx is None or cy is None) and isinstance(c.get('tile'), int):
+                tile_idx = c.get('tile')
+                cx = tile_idx % width
+                cy = tile_idx // width
+            if cx is None or cy is None:
+                continue
+            valid_cities.append((cx, cy, c.get('name', f"city_{c.get('id', '?')}")))  # Include city name for logging
+
+        min_distance = float('inf')
+        closest_city_name = None
+        closest_city_pos = None
+
+        for (cx, cy, city_name) in valid_cities:
+            dx = abs(unit_x - cx)
+            dy = abs(unit_y - cy)
+            # Chebyshev distance
+            dist = max(dx, dy)
+            if dist < min_distance:
+                min_distance = dist
+                closest_city_name = city_name
+                closest_city_pos = (cx, cy)
+            if dist < citymindist:
+                reason = f"Too close to {city_name} at ({cx},{cy}): distance={dist}, required={citymindist}"
+                return False, reason
+
+        if valid_cities:
+            if closest_city_pos is not None:  # Type guard for None check
+                return True, f"Valid site: nearest city {closest_city_name} at ({closest_city_pos[0]},{closest_city_pos[1]}) distance={min_distance}"
+            else:
+                return True, "Valid site: cities exist but no closest found"
+        else:
+            return True, "No existing cities to check against"
+
     def _get_legal_actions_optimized(self, game_state: dict[str, Any] | None = None) -> list[dict[str, Any]]:
         """Get top legal actions for LLM (limited to ~20 most important)"""
         actions = []
@@ -1719,7 +1780,23 @@ class LLMWSHandler(websocket.WebSocketHandler):
         # Get our units that can move
         our_units = [u for u in units if u.get('owner') == self.player_id and u.get('moves_left', 0) > 0]
 
-        # Add unit movement actions
+        # Retrieve global city minimum distance rule (citymindist)
+        citymindist = None
+        if isinstance(game_state.get('rules'), dict):
+            citymindist = game_state['rules'].get('citymindist')
+        if citymindist is None and self.civcom and hasattr(self.civcom, 'citymindist'):
+            citymindist = self.civcom.citymindist
+        if citymindist is None:
+            citymindist = 2  # conservative default if not yet received
+
+        # Gather all known cities (include other players to avoid illegal placements)
+        all_cities = []
+        if self.civcom and hasattr(self.civcom, 'player_cities') and isinstance(self.civcom.player_cities, dict):
+            all_cities = list(self.civcom.player_cities.values())
+
+        map_info = game_state.get('map', {}) if isinstance(game_state, dict) else {}
+
+        # Add unit movement & potential city founding actions
         for unit in our_units[:10]:  # Limit to 10 units
             # Handle unit type - can be int (type ID) or string (type name)
             unit_type_raw = unit.get('type', '')
@@ -1733,13 +1810,19 @@ class LLMWSHandler(websocket.WebSocketHandler):
 
             # Check if unit can build cities (type 0 is usually Settlers in FreeCiv)
             if prod_type in ['settlers', 'engineer'] or unit_type_raw == 0:
-                # Settlement/construction actions
-                actions.append({
-                    'type': 'unit_build_city',
-                    'unit_id': unit.get('id'),
-                    'priority': 'high',
-                    'description': f"Build city with {prod_type}"
-                })
+                is_valid, reason = self._is_city_site_valid(current_x, current_y, citymindist, all_cities, map_info)
+                if is_valid:
+                    logger.debug(f"✓ City build allowed for unit {unit.get('id')} at ({current_x},{current_y}): {reason}")
+                    # Settlement/construction actions (site satisfies distance rule)
+                    actions.append({
+                        'type': 'unit_build_city',
+                        'unit_id': unit.get('id'),
+                        'priority': 'high',
+                        'description': f"Build city with {prod_type}" + (f" (>= {citymindist} from others)" if citymindist else "")
+                    })
+                else:
+                    # Rejected: log the specific reason
+                    logger.info(f"✗ City build REJECTED for unit {unit.get('id')} at ({current_x},{current_y}): {reason}")
 
             # Movement actions (explore nearby)
             for dx, dy in [(0, 1), (1, 0), (0, -1), (-1, 0), (1, 1), (1, -1), (-1, 1), (-1, -1)]:  # Adjacent tiles + diagonals

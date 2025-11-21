@@ -213,6 +213,12 @@ class CivCom(Thread):
         self.improvements = {}    # {building_id: PACKET_RULESET_BUILDING data}
         self.techs = {}           # {tech_id: PACKET_RULESET_TECH data}
 
+        # Core rules values (e.g. minimum city distance). Populated from PACKET_GAME_INFO.
+        # citymindist is the minimum allowed distance between any two founded cities.
+        # It is used to pre-filter illegal unit_build_city actions before sending to server.
+        self.citymindist = None  # Will be set once PACKET_GAME_INFO is received
+        # Potential future: store other rules like cityradius, global warming parameters, etc.
+
         # Goto path cache: maps (unit_id, dest_tile) -> {'length': int, 'dir': [int,...]}
         self._goto_paths = {}
         # Initialize lock eagerly to avoid races during lazy init from multiple threads
@@ -592,18 +598,29 @@ class CivCom(Thread):
 
             # Map info packet (contains xsize, ysize)
             if packet_type == PACKET_MAP_INFO:
+                # Freeciv PACKET_MAP_INFO typically includes: xsize, ysize, topology_id, wrap_id, north_latitude, south_latitude
+                # We currently only need width/height and wrap_id for distance calculations.
                 self.map_info = {
                     'width': packet.get('xsize', 0),
                     'height': packet.get('ysize', 0),
+                    'wrap_id': packet.get('wrap_id'),  # raw wrap identifier (mapping to axis wrap can be added later)
+                    'topology_id': packet.get('topology_id'),
                     'tiles': [],
                     'visibility': {}
                 }
-                logger.info(f"Stored map info: {self.map_info['width']}x{self.map_info['height']}")
+                logger.info(f"Stored map info: {self.map_info['width']}x{self.map_info['height']} wrap_id={self.map_info.get('wrap_id')}")
 
             # Game info packet (turn number, etc)
             elif packet_type == PACKET_GAME_INFO:
                 self.game_turn = packet.get('turn', self.game_turn)
-                logger.debug(f"Updated game turn: {self.game_turn}")
+                # Capture minimum city distance rule if present.
+                # Field name in Freeciv packets.def: citymindist (UINT8)
+                if 'citymindist' in packet:
+                    previous = self.citymindist
+                    self.citymindist = packet.get('citymindist')
+                    if previous is None and self.citymindist is not None:
+                        logger.info(f"Rule: citymindist set to {self.citymindist}")
+                logger.debug(f"Updated game turn: {self.game_turn}; citymindist={self.citymindist}")
 
             # CRITICAL: Connection info packet - contains player_num assignment
             # This is the FIX for the PACKET_CONN_INFO bug
@@ -709,11 +726,21 @@ class CivCom(Thread):
                 city_id = packet.get('id')
                 owner = packet.get('owner')
                 if city_id is not None and owner is not None:
+                    tile_idx = packet.get('tile')
+                    # Compute x,y from tile index if map size known
+                    x = y = None
+                    width_val = self.map_info.get('width')
+                    if isinstance(tile_idx, int) and isinstance(width_val, int) and width_val > 0:
+                        xsize = width_val
+                        x = tile_idx % xsize
+                        y = tile_idx // xsize
                     city_data = {
                         'id': city_id,
                         'owner': owner,
                         'name': packet.get('name', f'City{city_id}'),
-                        'tile': packet.get('tile'),
+                        'tile': tile_idx,
+                        'x': x,
+                        'y': y,
                         'size': packet.get('size', 1),
                         'production': packet.get('production'),
                         'food_stock': packet.get('food_stock', 0),
@@ -1073,6 +1100,9 @@ class CivCom(Thread):
             'players': players_dict,  # Dict of all players keyed by ID
             'techs': getattr(self, 'known_techs', []),
             'map': map_info,
+            'rules': {
+                'citymindist': self.citymindist
+            },
             'game': game_dict  # Required field - must always be present
         }
 
