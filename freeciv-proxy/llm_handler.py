@@ -1820,9 +1820,10 @@ class LLMWSHandler(websocket.WebSocketHandler):
                         'priority': 'high',
                         'description': f"Build city with {prod_type}" + (f" (>= {citymindist} from others)" if citymindist else "")
                     })
-                else:
-                    # Rejected: log the specific reason
-                    logger.info(f"✗ City build REJECTED for unit {unit.get('id')} at ({current_x},{current_y}): {reason}")
+                    # If they can found a city, make them do so as soon as possible
+                    continue
+                # Rejected: log the specific reason
+                logger.info(f"✗ City build REJECTED for unit {unit.get('id')} at ({current_x},{current_y}): {reason}")
 
             # Movement actions (explore nearby)
             for dx, dy in [(0, 1), (1, 0), (0, -1), (-1, 0), (1, 1), (1, -1), (-1, 1), (-1, -1)]:  # Adjacent tiles + diagonals
