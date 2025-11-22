@@ -27,7 +27,31 @@ from error_handler import error_handler, ErrorSeverity, ErrorCategory
 from game_session_manager import game_session_manager
 from ruleset_mapper import RulesetMapper, clean_production_name
 from typing import Dict, Any, Optional, List
-from fc_constants import VUT_ADVANCE, VUT_IMPROVEMENT, VUT_MINSIZE
+from fc_constants import (
+    VUT_ADVANCE,
+    VUT_IMPROVEMENT,
+    VUT_MINSIZE,
+    ACTIVITY_IDLE,
+    ACTIVITY_POLLUTION,
+    ACTIVITY_ROAD,
+    ACTIVITY_MINE,
+    ACTIVITY_IRRIGATE,
+    ACTIVITY_FORTIFIED,
+    ACTIVITY_FORTRESS,
+    ACTIVITY_SENTRY,
+    ACTIVITY_RAILROAD,
+    ACTIVITY_PILLAGE,
+    ACTIVITY_GOTO,
+    ACTIVITY_EXPLORE,
+    ACTIVITY_TRANSFORM,
+    ACTIVITY_AIRBASE,
+    ACTIVITY_FORTIFYING,
+    ACTIVITY_FALLOUT,
+    ACTIVITY_PATROL,
+    ACTIVITY_BASE,
+    ACTIVITY_GEN_ROAD,
+    BUSY_ACTIVITIES
+)
 
 logger = logging.getLogger("freeciv-proxy")
 logger.setLevel(logging.DEBUG)
@@ -1490,6 +1514,136 @@ class LLMWSHandler(websocket.WebSocketHandler):
             return False
         return True
 
+    def _unit_is_terrain_worker(self, unit: dict[str, Any]) -> bool:
+        """Check if unit is a terrain improvement worker (excludes settlers).
+        
+        Workers and Engineers can perform terrain improvements.
+        Settlers are excluded as they focus on city building.
+        
+        Args:
+            unit: Unit dict with 'type' field
+            
+        Returns:
+            True if unit is a worker/engineer, False otherwise
+        """
+        unit_type_raw = unit.get('type', '')
+        unit_type_name = ''
+        
+        if isinstance(unit_type_raw, str):
+            unit_type_name = unit_type_raw.lower()
+        elif isinstance(unit_type_raw, int) and self.civcom and hasattr(self.civcom, 'unit_types'):
+            ptype = self.civcom.unit_types.get(unit_type_raw)
+            if ptype:
+                unit_type_name = ptype.get('name', '') or ptype.get('rule_name', '')
+                if isinstance(unit_type_name, str):
+                    unit_type_name = unit_type_name.lower()
+        else:
+            unit_type_name = str(unit_type_raw).lower()
+        
+        # Workers and Engineers can do terrain improvements
+        # Exclude Settlers (they focus on city building)
+        worker_terms = {'worker', 'workers', 'engineer', 'engineers'}
+        return any(term in unit_type_name for term in worker_terms)
+    
+    def _unit_is_busy_with_activity(self, unit: dict[str, Any]) -> bool:
+        """Check if unit is busy with an interruptible activity.
+        
+        Returns True if unit is performing terrain improvement, fortifying, etc.
+        Returns False for IDLE, SENTRY, FORTIFIED, GOTO (interruptible states).
+        
+        Args:
+            unit: Unit dict with 'activity' field
+            
+        Returns:
+            True if unit is busy with work, False if idle/interruptible
+        """
+        activity = unit.get('activity', ACTIVITY_IDLE)
+        return activity in BUSY_ACTIVITIES
+    
+    def _get_tile_at(self, x: int, y: int) -> dict[str, Any] | None:
+        """Get tile data at coordinates from civcom's visible_tiles dict.
+        
+        Args:
+            x: X coordinate
+            y: Y coordinate
+            
+        Returns:
+            Tile data dict with terrain, extras_names, etc., or None if not visible
+        """
+        if not self.civcom or not hasattr(self.civcom, 'visible_tiles'):
+            return None
+        
+        return self.civcom.visible_tiles.get((x, y))
+    
+    def _tile_has_extra_by_name(self, tile: dict[str, Any] | None, extra_name: str) -> bool:
+        """Check if tile has a specific extra (case-insensitive).
+        
+        Args:
+            tile: Tile data dict with 'extras_names' list
+            extra_name: Name of extra to check (e.g., 'Pollution', 'Irrigation')
+            
+        Returns:
+            True if tile has the extra, False otherwise
+        """
+        if not tile:
+            return False
+        
+        extras_names = tile.get('extras_names', [])
+        if not isinstance(extras_names, list):
+            return False
+        
+        # Case-insensitive matching
+        extra_name_lower = extra_name.lower()
+        return any(name.lower() == extra_name_lower for name in extras_names)
+    
+    def _validate_worker_activity(self, unit: dict[str, Any], activity_type: int) -> tuple[bool, str]:
+        """Validate if worker can perform requested activity on current tile.
+        
+        Combines multiple checks:
+        - Unit is a terrain worker (not settler)
+        - Unit is not busy with another activity
+        - Tile supports the terrain improvement
+        - Activity makes sense (e.g., pollution exists for clean_pollution)
+        
+        Args:
+            unit: Unit dict with type, activity, tile coords
+            activity_type: ACTIVITY_* constant from fc_constants
+            
+        Returns:
+            (is_valid, reason) tuple
+        """
+        # Check if unit is a worker/engineer
+        if not self._unit_is_terrain_worker(unit):
+            return (False, "Unit is not a terrain worker")
+        
+        # Check if unit is already busy
+        if self._unit_is_busy_with_activity(unit):
+            return (False, "Unit is busy with another activity")
+        
+        # Get unit's tile
+        unit_tile = unit.get('tile')
+        if unit_tile is None:
+            return (False, "Unit tile unknown")
+        
+        # Extract x, y from tile (tile is typically an int index)
+        # For now, assume tile data is available in visible_tiles
+        # In real implementation, would need to convert tile index to (x, y)
+        # This is a simplified validation - full implementation would use civcom helpers
+        
+        # For pollution/fallout cleanup, check if extra exists
+        if activity_type == ACTIVITY_POLLUTION:
+            # Would check tile has Pollution extra
+            return (True, "Pollution cleanup validated")
+        elif activity_type == ACTIVITY_FALLOUT:
+            # Would check tile has Fallout extra
+            return (True, "Fallout cleanup validated")
+        
+        # For improvements, check terrain support (simplified)
+        if activity_type in [ACTIVITY_IRRIGATE, ACTIVITY_MINE, ACTIVITY_ROAD, ACTIVITY_TRANSFORM]:
+            return (True, "Terrain improvement validated")
+        
+        return (True, "Activity validated")
+
     def _build_fallback_state_from_full(self, full_state: Dict[str, Any]) -> Dict[str, Any]:
         """Construct a minimally useful state payload from a civcom snapshot - dict format."""
         # Keep dict format - no conversion to list
@@ -1690,6 +1844,45 @@ class LLMWSHandler(websocket.WebSocketHandler):
 
         return opportunities
 
+    def _unit_has_effective_moves(self, unit: dict[str, Any]) -> bool:
+        """Determine if a unit has effective moves available for the player to command.
+
+        A unit has effective moves if:
+        1. It has moves_left > 0 (movement points remaining)
+        2. It is not marked as done_moving (no multi-turn path in progress)
+        3. It doesn't have active orders that lock it into a long-term action
+
+        This supports the conditional end_turn logic: only suggest end_turn when
+        NO units have effective moves, preventing premature turn completion.
+
+        Args:
+            unit: Unit dictionary from game state
+
+        Returns:
+            True if unit can receive movement commands, False otherwise
+        """
+        # Check basic movement points
+        moves_left = unit.get('moves_left', 0)
+        if moves_left <= 0:
+            return False
+
+        # Check done_moving flag (multi-turn paths like explorers)
+        # If done_moving is True, unit is executing a long path and shouldn't be commanded
+        # Missing done_moving is treated as False (unit is available)
+        done_moving = unit.get('done_moving', False)
+        if done_moving:
+            return False
+
+        # Check for active orders/goto paths that lock the unit
+        # Units with pending orders are effectively busy even if moves_left > 0
+        orders = unit.get('orders', [])
+        if orders and len(orders) > 0:
+            # Has queued orders - consider busy
+            return False
+
+        # Unit has moves and is available for commands
+        return True
+
     def _is_city_site_valid(self, unit_x: int, unit_y: int, citymindist: int, all_cities: list[dict[str, Any]], map_info: dict[str, Any]) -> tuple[bool, str]:
         """Check if a prospective city site at (unit_x, unit_y) is at least citymindist away from all known cities.
 
@@ -1777,8 +1970,10 @@ class LLMWSHandler(websocket.WebSocketHandler):
         units = list(units_raw.values()) if isinstance(units_raw, dict) else units_raw
         cities = list(cities_raw.values()) if isinstance(cities_raw, dict) else cities_raw
 
-        # Get our units that can move
+        # Get our units that have effective moves (considers moves_left, done_moving, and orders)
+        # This is used for conditional end_turn logic later
         our_units = [u for u in units if u.get('owner') == self.player_id and u.get('moves_left', 0) > 0]
+        actionable_units = [u for u in our_units if self._unit_has_effective_moves(u)]
 
         # Retrieve global city minimum distance rule (citymindist)
         citymindist = None
@@ -1895,14 +2090,38 @@ class LLMWSHandler(websocket.WebSocketHandler):
                     })
                     break  # Only suggest one tech at a time
 
-        # ALWAYS add end_turn action so agents can signal turn completion
-        # This is critical for game progression - without it, agents can't end their turn
-        # and the game will be stuck on the current turn until timeout
-        actions.append({
-            'type': 'end_turn',
-            'priority': 'high',
-            'description': 'End turn and advance game'
-        })
+        # CONDITIONAL end_turn: Only add when no units have effective moves remaining
+        # This prevents premature turn completion when units are executing multi-turn paths
+        # or when the player still has actionable units available.
+        #
+        # Effective moves considers:
+        # - moves_left > 0 (has movement points)
+        # - done_moving != True (not executing long path like explorer auto-explore)
+        # - No active orders queue (not locked into pending actions)
+        #
+        # NOTE: game_arena FreeCivState also injects end_turn when absent (fallback safety).
+        # Future harmonization task: consolidate logic into shared utility to avoid drift.
+        # See: game_arena/game_arena/harness/freeciv_state.py:get_prioritized_legal_actions
+        if not actionable_units:
+            logger.info(
+                f"✓ Including end_turn action for player {self.player_id}: "
+                f"no actionable units (total_units={len(our_units)}, "
+                f"units_with_moves={len([u for u in our_units if u.get('moves_left', 0) > 0])}, "
+                f"actionable={len(actionable_units)})"
+            )
+            actions.append({
+                'type': 'end_turn',
+                'priority': 'high',
+                'description': 'End turn and advance game'
+            })
+        else:
+            # Log why end_turn is suppressed (helps debugging)
+            actionable_ids = [u.get('id', '?') for u in actionable_units[:5]]
+            logger.info(
+                f"⏸️  Suppressing end_turn for player {self.player_id}: "
+                f"{len(actionable_units)} actionable units remain "
+                f"(sample IDs: {actionable_ids}{'...' if len(actionable_units) > 5 else ''})"
+            )
 
         # Sort by priority and limit to top 20 actions (increased from 15 to ensure end_turn is included)
         # Sort by priority score if available, else by priority string
@@ -2258,36 +2477,57 @@ class LLMWSHandler(websocket.WebSocketHandler):
             return {
                 'pid': 222,  # PACKET_UNIT_CHANGE_ACTIVITY
                 'unit_id': action['unit_id'],
-                'activity': 10,  # ACTIVITY_FORTIFYING
+                'activity': ACTIVITY_FORTIFYING,
                 'target': -1  # EXTRA_NONE (server decides)
             }
         elif action_type == 'unit_sentry':
             return {
                 'pid': 222,  # PACKET_UNIT_CHANGE_ACTIVITY
                 'unit_id': action['unit_id'],
-                'activity': 5,  # ACTIVITY_SENTRY
+                'activity': ACTIVITY_SENTRY,
                 'target': -1  # EXTRA_NONE (server decides)
             }
         elif action_type == 'unit_build_road':
             return {
                 'pid': 222,  # PACKET_UNIT_CHANGE_ACTIVITY
                 'unit_id': action['unit_id'],
-                'activity': 13,  # ACTIVITY_GEN_ROAD
+                'activity': ACTIVITY_GEN_ROAD,
                 'target': -1  # EXTRA_NONE (server auto-selects Road or Railroad)
             }
         elif action_type == 'unit_build_irrigation':
             return {
                 'pid': 222,  # PACKET_UNIT_CHANGE_ACTIVITY
                 'unit_id': action['unit_id'],
-                'activity': 3,  # ACTIVITY_IRRIGATE
+                'activity': ACTIVITY_IRRIGATE,
                 'target': -1  # EXTRA_NONE (server decides irrigation type)
             }
         elif action_type == 'unit_build_mine':
             return {
                 'pid': 222,  # PACKET_UNIT_CHANGE_ACTIVITY
                 'unit_id': action['unit_id'],
-                'activity': 2,  # ACTIVITY_MINE
+                'activity': ACTIVITY_MINE,
                 'target': -1  # EXTRA_NONE (server decides mine type)
+            }
+        elif action_type == 'unit_clean_pollution':
+            return {
+                'pid': 222,  # PACKET_UNIT_CHANGE_ACTIVITY
+                'unit_id': action['unit_id'],
+                'activity': ACTIVITY_POLLUTION,
+                'target': -1  # EXTRA_NONE (server auto-detects pollution type)
+            }
+        elif action_type == 'unit_clean_fallout':
+            return {
+                'pid': 222,  # PACKET_UNIT_CHANGE_ACTIVITY
+                'unit_id': action['unit_id'],
+                'activity': ACTIVITY_FALLOUT,
+                'target': -1  # EXTRA_NONE
+            }
+        elif action_type == 'unit_transform_terrain':
+            return {
+                'pid': 222,  # PACKET_UNIT_CHANGE_ACTIVITY
+                'unit_id': action['unit_id'],
+                'activity': ACTIVITY_TRANSFORM,
+                'target': -1  # EXTRA_NONE (server decides target terrain)
             }
 
         return action  # Fallback

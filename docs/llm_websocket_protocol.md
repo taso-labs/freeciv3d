@@ -501,7 +501,9 @@ Complete game state with all details. **Note**: `players`, `units`, and `cities`
       "moves_left": 1,
       "hp": 10,
       "owner": 1,
-      "activity": "idle"
+      "activity": "idle",
+      "done_moving": false,
+      "orders": []
     }
   },
   "cities": {
@@ -542,6 +544,8 @@ Complete game state with all details. **Note**: `players`, `units`, and `cities`
 **Field Types**:
 - `units[].type`: string (e.g., `"warrior"`, `"settler"`)
 - `units[].activity`: string or null (e.g., `"idle"`, `"sentry"`, `"fortified"`, or `null` for no activity)
+- `units[].done_moving`: boolean (optional, default `false`). When `true`, unit is executing a multi-turn path (e.g., explorer auto-explore, long goto) and should not be commanded until path completes. Used for conditional `end_turn` logic.
+- `units[].orders`: array (optional, default `[]`). List of pending orders/commands for the unit. Non-empty indicates unit is locked into queued actions.
 - `players[].nation`: string (e.g., `"Romans"`, `"Americans"`, `"Greeks"`)
 - All dictionary keys are strings for JSON compatibility
 

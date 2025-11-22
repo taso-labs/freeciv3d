@@ -24,48 +24,55 @@ import os
 from tornado import ioloop
 
 # Import packet ID constants for type-safe packet handling
-# Gracefully handle missing packet_constants module for backward compatibility
-try:
-    from packet_constants import (
-        PACKET_CONN_INFO,
-        PACKET_PLAYER_INFO,
-        PACKET_MAP_INFO,
-        PACKET_GAME_INFO,
-        PACKET_UNIT_INFO,
-        PACKET_UNIT_REMOVE,
-        PACKET_UNIT_SHORT_INFO,
-        PACKET_CITY_INFO,
-        PACKET_TILE_INFO,
-        PACKET_CHAT_MSG,
-        PACKET_RULESET_NATION,
-        PACKET_RULESET_UNIT,
-        PACKET_RULESET_BUILDING,
-        PACKET_CONN_PING,
-        PACKET_CONN_PONG,
-        get_packet_name
-    )
-    PACKET_CONSTANTS_AVAILABLE = True
-    logging.getLogger("freeciv-proxy").info("packet_constants module loaded successfully - LLM state parsing enabled")
-except ImportError as e:
-    logging.getLogger("freeciv-proxy").warning(f"packet_constants not available: {e}. Falling back to simple packet forwarding (working commit behavior).")
-    PACKET_CONSTANTS_AVAILABLE = False
-    # Define dummy constants to prevent NameError when packet_constants unavailable
-    PACKET_CONN_INFO = -1
-    PACKET_PLAYER_INFO = -1
-    PACKET_MAP_INFO = -1
-    PACKET_GAME_INFO = -1
-    PACKET_UNIT_INFO = -1
-    PACKET_UNIT_REMOVE = -1
-    PACKET_UNIT_SHORT_INFO = -1
-    PACKET_CITY_INFO = -1
-    PACKET_TILE_INFO = -1
-    PACKET_CHAT_MSG = -1
-    PACKET_RULESET_NATION = -1
-    PACKET_RULESET_UNIT = -1
-    PACKET_RULESET_BUILDING = -1
-    PACKET_CONN_PING = -1
-    PACKET_CONN_PONG = -1
-    def get_packet_name(pid): return f"packet_{pid}"
+from packet_constants import (
+    PACKET_CONN_INFO,
+    PACKET_PLAYER_INFO,
+    PACKET_MAP_INFO,
+    PACKET_GAME_INFO,
+    PACKET_UNIT_INFO,
+    PACKET_UNIT_REMOVE,
+    PACKET_UNIT_SHORT_INFO,
+    PACKET_CITY_INFO,
+    PACKET_TILE_INFO,
+    PACKET_CHAT_MSG,
+    PACKET_RULESET_NATION,
+    PACKET_RULESET_UNIT,
+    PACKET_RULESET_BUILDING,
+    PACKET_RULESET_EXTRA,
+    PACKET_RULESET_TERRAIN,
+    PACKET_CONN_PING,
+    PACKET_CONN_PONG,
+    get_packet_name
+)
+# Import activity constants for worker action validation
+from fc_constants import (
+    ACTIVITY_IDLE,
+    ACTIVITY_POLLUTION,
+    ACTIVITY_ROAD,
+    ACTIVITY_MINE,
+    ACTIVITY_IRRIGATE,
+    ACTIVITY_FORTIFIED,
+    ACTIVITY_FORTRESS,
+    ACTIVITY_SENTRY,
+    ACTIVITY_RAILROAD,
+    ACTIVITY_PILLAGE,
+    ACTIVITY_GOTO,
+    ACTIVITY_EXPLORE,
+    ACTIVITY_TRANSFORM,
+    ACTIVITY_AIRBASE,
+    ACTIVITY_FORTIFYING,
+    ACTIVITY_FALLOUT,
+    ACTIVITY_PATROL,
+    ACTIVITY_BASE,
+    ACTIVITY_GEN_ROAD,
+    BUSY_ACTIVITIES,
+    EC_IRRIGATION,
+    EC_MINE,
+    EC_ROAD,
+    EC_BASE,
+    EC_POLLUTION,
+    EC_FALLOUT
+)
 
 HOST = '127.0.0.1'
 logger = logging.getLogger("freeciv-proxy")
@@ -199,7 +206,7 @@ class CivCom(Thread):
         self.player_cities = {}  # Dict keyed by city_id for efficient updates
         self.all_players = []
         self.known_techs = []
-        self.visible_tiles = []
+        self.visible_tiles = {}   # {(x,y): tile_data} - persistent tile state updated by PACKET_TILE_INFO
         self.game_turn = 1
         self.game_phase = 'movement'
         self.player_id = None  # Will be set from PACKET_PLAYER_INFO
@@ -212,6 +219,8 @@ class CivCom(Thread):
         self.unit_types = {}      # {unit_type_id: PACKET_RULESET_UNIT data}
         self.improvements = {}    # {building_id: PACKET_RULESET_BUILDING data}
         self.techs = {}           # {tech_id: PACKET_RULESET_TECH data}
+        self.extras = {}          # {extra_id: PACKET_RULESET_EXTRA data} - roads, irrigation, pollution, etc.
+        self.terrains = {}        # {terrain_id: PACKET_RULESET_TERRAIN data} - grassland, plains, hills, etc.
 
         # Core rules values (e.g. minimum city distance). Populated from PACKET_GAME_INFO.
         # citymindist is the minimum allowed distance between any two founded cities.
@@ -299,29 +308,28 @@ class CivCom(Thread):
                     if (len(self.net_buf) == self.packet_size and self.net_buf[-1] == 0):
                         # valid packet received from freeciv server
                         # Parse and store game state ONLY if packet_constants module is available
-                        if PACKET_CONSTANTS_AVAILABLE:
-                            try:
-                                packet_str = self.net_buf[:-1].decode('utf-8')
-                                self.parse_and_store_packet(packet_str)
+                        try:
+                            packet_str = self.net_buf[:-1].decode('utf-8')
+                            self.parse_and_store_packet(packet_str)
 
-                                # Log important packet types
-                                try:
-                                    packet_json = json.loads(packet_str)
-                                    pid = packet_json.get('pid')
-                                    if pid == PACKET_UNIT_INFO:
-                                        logger.info(f"✓ Received PACKET_UNIT_INFO (pid={pid}) for {self.username}")
-                                    elif pid == PACKET_CITY_INFO:
-                                        logger.info(f"✓ Received PACKET_CITY_INFO (pid={pid}) for {self.username}")
-                                    elif pid == PACKET_GAME_INFO:
-                                        logger.debug(f"Received PACKET_GAME_INFO for {self.username}")
-                                    elif pid == PACKET_CHAT_MSG:
-                                        # Log chat messages to capture server command responses
-                                        msg_text = packet_json.get('message', '')
-                                        logger.info(f"Chat message for {self.username}: {msg_text}")
-                                except:
-                                    pass  # Not JSON or parsing failed, ignore
-                            except Exception as e:
-                                logger.warning(f"⚠ Error parsing packet for state storage: {e}", exc_info=True)
+                            # Log important packet types
+                            try:
+                                packet_json = json.loads(packet_str)
+                                pid = packet_json.get('pid')
+                                if pid == PACKET_UNIT_INFO:
+                                    logger.info(f"✓ Received PACKET_UNIT_INFO (pid={pid}) for {self.username}")
+                                elif pid == PACKET_CITY_INFO:
+                                    logger.info(f"✓ Received PACKET_CITY_INFO (pid={pid}) for {self.username}")
+                                elif pid == PACKET_GAME_INFO:
+                                    logger.debug(f"Received PACKET_GAME_INFO for {self.username}")
+                                elif pid == PACKET_CHAT_MSG:
+                                    # Log chat messages to capture server command responses
+                                    msg_text = packet_json.get('message', '')
+                                    logger.info(f"Chat message for {self.username}: {msg_text}")
+                            except:
+                                pass  # Not JSON or parsing failed, ignore
+                        except Exception as e:
+                            logger.warning(f"⚠ Error parsing packet for state storage: {e}", exc_info=True)
 
                         # ALWAYS forward packet to client (even if parsing disabled/failed)
                         self.send_buffer_append(self.net_buf[:-1])
@@ -575,10 +583,6 @@ class CivCom(Thread):
 
     def parse_and_store_packet(self, packet_json):
         """Parse incoming packets and store relevant game state"""
-        # Early return if packet_constants not available (should not happen if called correctly, but safety check)
-        if not PACKET_CONSTANTS_AVAILABLE:
-            return
-
         try:
             packet = json.loads(packet_json)
             packet_type = packet.get('pid')
@@ -780,9 +784,23 @@ class CivCom(Thread):
                 tile_x = packet.get('x')
                 tile_y = packet.get('y')
                 terrain = packet.get('terrain')
+                extras_bitvector = packet.get('extras')  # Bit vector of extras on this tile
+                
                 if tile_x is not None and tile_y is not None:
-                    logger.debug(f"Tile update at ({tile_x}, {tile_y}) - terrain={terrain}")
-                    # Could store tile info in self.visible_tiles if needed for state queries
+                    # Parse extras bit vector to get list of extra names on this tile
+                    extras_names = self._parse_tile_extras(extras_bitvector)
+                    
+                    # Store tile data in persistent visible_tiles dict
+                    tile_data = {
+                        'x': tile_x,
+                        'y': tile_y,
+                        'terrain': terrain,
+                        'extras_names': extras_names,
+                        'extras_bitvector': extras_bitvector
+                    }
+                    self.visible_tiles[(tile_x, tile_y)] = tile_data
+                    
+                    logger.debug(f"Tile update at ({tile_x}, {tile_y}) - terrain={terrain}, extras={extras_names}")
 
             # Unit short info packet - abbreviated unit updates
             # Sent by server for units entering/leaving vision range
@@ -822,6 +840,24 @@ class CivCom(Thread):
                 if building_id is not None and building_name:
                     self.improvements[building_id] = packet
                     logger.debug(f"Registered building: {building_name} (id={building_id})")
+
+            # RULESET extra packet - defines extras (irrigation, mine, road, pollution, etc.)
+            # Used for tile improvement validation and worker action generation
+            elif packet_type == PACKET_RULESET_EXTRA:
+                extra_id = packet.get('id')
+                extra_name = packet.get('name')
+                if extra_id is not None and extra_name:
+                    self.extras[extra_id] = packet
+                    logger.debug(f"Registered extra: {extra_name} (id={extra_id})")
+
+            # RULESET terrain packet - defines terrain types with activity times
+            # Used for validating which improvements can be built on which terrain
+            elif packet_type == PACKET_RULESET_TERRAIN:
+                terrain_id = packet.get('id')
+                terrain_name = packet.get('name')
+                if terrain_id is not None and terrain_name:
+                    self.terrains[terrain_id] = packet
+                    logger.debug(f"Registered terrain: {terrain_name} (id={terrain_id})")
 
             # CRITICAL: Connection ping packet - MUST respond with pong to keep connection alive
             # FreeCiv civserver sends PACKET_CONN_PING every ~2 minutes to verify connection health
@@ -867,6 +903,93 @@ class CivCom(Thread):
 
         except (json.JSONDecodeError, KeyError, TypeError) as e:
             logger.debug(f"Could not parse packet for state storage: {e}")
+
+    # Worker action validation helper methods
+    def _parse_tile_extras(self, extras_bitvector):
+        """
+        Parse extras bit vector to list of extra names.
+        
+        Args:
+            extras_bitvector: Integer bit vector from PACKET_TILE_INFO
+            
+        Returns:
+            List of extra names (e.g., ['Irrigation', 'Road', 'Pollution'])
+            Empty list if bitvector is None or no extras present
+        """
+        if extras_bitvector is None or not self.extras:
+            return []
+        
+        extras_names = []
+        for extra_id, extra_packet in self.extras.items():
+            # Check if bit at position extra_id is set in bitvector
+            if (extras_bitvector >> extra_id) & 1:
+                extra_name = extra_packet.get('name', '')
+                if extra_name:
+                    # Preserve original casing from ruleset
+                    extras_names.append(extra_name)
+        
+        return extras_names
+    
+    def _get_extras_by_cause(self, cause_bit):
+        """
+        Get all extras that can be created by a specific cause.
+        
+        Args:
+            cause_bit: EC_* constant from fc_constants (EC_IRRIGATION, EC_MINE, etc.)
+            
+        Returns:
+            List of dicts with {'id': extra_id, 'name': extra_name}
+        """
+        if not self.extras:
+            return []
+        
+        matching_extras = []
+        for extra_id, extra_packet in self.extras.items():
+            causes = extra_packet.get('causes', 0)
+            # Check if the cause bit is set in the extra's causes bitvector
+            if (causes >> cause_bit) & 1:
+                extra_name = extra_packet.get('name', '')
+                if extra_name:
+                    matching_extras.append({
+                        'id': extra_id,
+                        'name': extra_name
+                    })
+        
+        return matching_extras
+    
+    def _can_terrain_support_activity(self, terrain_id, activity_type):
+        """
+        Check if terrain supports a specific activity type.
+        
+        Args:
+            terrain_id: Terrain type ID from tile data
+            activity_type: ACTIVITY_* constant from fc_constants
+            
+        Returns:
+            True if terrain supports activity, False otherwise
+        """
+        if terrain_id is None or terrain_id not in self.terrains:
+            return False
+        
+        terrain = self.terrains[terrain_id]
+        
+        # Map activity types to terrain time fields
+        # If time field is 0, activity is not possible on this terrain
+        if activity_type == ACTIVITY_IRRIGATE:
+            return terrain.get('irrigation_time', 0) != 0
+        elif activity_type == ACTIVITY_MINE:
+            return terrain.get('mining_time', 0) != 0
+        elif activity_type == ACTIVITY_ROAD:
+            return terrain.get('road_time', 0) != 0
+        elif activity_type == ACTIVITY_TRANSFORM:
+            return terrain.get('transform_time', 0) != 0
+        elif activity_type == ACTIVITY_POLLUTION:
+            return terrain.get('clean_pollution_time', 0) != 0
+        elif activity_type == ACTIVITY_FALLOUT:
+            return terrain.get('clean_fallout_time', 0) != 0
+        
+        # Unknown activity type - default to True to avoid blocking
+        return True
 
     # LLM-optimized state query methods
     def handle_state_query(self, player_id, format='full'):

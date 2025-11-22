@@ -52,6 +52,20 @@ from concurrent.futures import ThreadPoolExecutor
 
 from state_cache import StateCache, CacheEntry
 from civcom import CivCom
+from fc_constants import (
+    ACTIVITY_IDLE,
+    ACTIVITY_POLLUTION,
+    ACTIVITY_MINE,
+    ACTIVITY_IRRIGATE,
+    ACTIVITY_TRANSFORM,
+    ACTIVITY_FALLOUT,
+    BUSY_ACTIVITIES,
+    EC_POLLUTION,
+    EC_FALLOUT,
+    EC_IRRIGATION,
+    EC_MINE,
+    EC_ROAD
+)
 
 # Required modules for production use
 try:
@@ -1107,7 +1121,7 @@ class StateExtractor:
 
         # If not in cache, try to get from civcom
         try:
-            civcom = self._get_civcom_instance(current_state.get('game_id', ''))
+            civcom = self._get_civcom_for_game(current_state.get('game_id', ''))
             if civcom and hasattr(civcom, 'get_turn_state'):
                 # Try to get historical state from game server
                 historical_state = civcom.get_turn_state(since_turn, current_state.get('player_id', 0))
@@ -1140,7 +1154,7 @@ class StateExtractor:
 
         try:
             # Get civcom instance for this game
-            civcom = self._get_civcom_instance(state.get('game_id', ''))
+            civcom = self._get_civcom_for_game(state.get('game_id', ''))
             if civcom and hasattr(civcom, 'get_legal_actions'):
                 # Use actual civcom to generate legal actions
                 logger.debug("Getting legal actions from civcom")
@@ -1197,29 +1211,92 @@ class StateExtractor:
                         'priority': 8
                     })
 
-                # Worker/engineer improvement actions
+                # Worker/engineer improvement actions with validation
                 if unit_type in ['worker', 'workers', 'engineer', 'engineers']:
-                    # Build road
-                    actions.append({
-                        'type': 'unit_build_road',
-                        'unit_id': unit['id'],
-                        'location': {'x': unit['x'], 'y': unit['y']},
-                        'priority': 6
-                    })
-                    # Build irrigation
-                    actions.append({
-                        'type': 'unit_build_irrigation',
-                        'unit_id': unit['id'],
-                        'location': {'x': unit['x'], 'y': unit['y']},
-                        'priority': 5
-                    })
-                    # Build mine
-                    actions.append({
-                        'type': 'unit_build_mine',
-                        'unit_id': unit['id'],
-                        'location': {'x': unit['x'], 'y': unit['y']},
-                        'priority': 5
-                    })
+                    unit_x, unit_y = unit.get('x'), unit.get('y')
+                    if unit_x is not None and unit_y is not None:
+                        # Get civcom instance for validation
+                        civcom = self._get_civcom_for_game(state.get('game_id', ''))
+                        
+                        # Get tile data if available
+                        tile = None
+                        if civcom and hasattr(civcom, 'visible_tiles'):
+                            tile = civcom.visible_tiles.get((unit_x, unit_y))
+                        
+                        # Check if unit is busy with an activity
+                        unit_activity = unit.get('activity', ACTIVITY_IDLE)
+                        is_busy = unit_activity in BUSY_ACTIVITIES
+                        
+                        if not is_busy:
+                            # Priority 8: Clean pollution/fallout (highest priority for workers)
+                            if tile:
+                                extras_names = tile.get('extras_names', [])
+                                # Check for pollution
+                                if any('pollution' in name.lower() for name in extras_names):
+                                    actions.append({
+                                        'type': 'unit_clean_pollution',
+                                        'unit_id': unit['id'],
+                                        'location': {'x': unit_x, 'y': unit_y},
+                                        'priority': 8,
+                                        'reasoning': 'Pollution cleanup'
+                                    })
+                                # Check for fallout
+                                if any('fallout' in name.lower() for name in extras_names):
+                                    actions.append({
+                                        'type': 'unit_clean_fallout',
+                                        'unit_id': unit['id'],
+                                        'location': {'x': unit_x, 'y': unit_y},
+                                        'priority': 8,
+                                        'reasoning': 'Fallout cleanup'
+                                    })
+                            
+                            # Priority 6: Build improvements (road, irrigation, mine)
+                            # Validate terrain support if possible
+                            can_validate = civcom and hasattr(civcom, 'terrains')
+                            terrain_id = tile.get('terrain') if tile else None
+                            
+                            # Build road (most universally useful)
+                            if not can_validate or (terrain_id and terrain_id in civcom.terrains):
+                                actions.append({
+                                    'type': 'unit_build_road',
+                                    'unit_id': unit['id'],
+                                    'location': {'x': unit_x, 'y': unit_y},
+                                    'priority': 6,
+                                    'reasoning': 'Road'
+                                })
+                            
+                            # Build irrigation (for food production)
+                            if not can_validate or (terrain_id and terrain_id in civcom.terrains and 
+                                                     civcom.terrains[terrain_id].get('irrigation_time', 0) != 0):
+                                actions.append({
+                                    'type': 'unit_build_irrigation',
+                                    'unit_id': unit['id'],
+                                    'location': {'x': unit_x, 'y': unit_y},
+                                    'priority': 6,
+                                    'reasoning': 'Irrigation'
+                                })
+                            
+                            # Build mine (for production)
+                            if not can_validate or (terrain_id and terrain_id in civcom.terrains and 
+                                                     civcom.terrains[terrain_id].get('mining_time', 0) != 0):
+                                actions.append({
+                                    'type': 'unit_build_mine',
+                                    'unit_id': unit['id'],
+                                    'location': {'x': unit_x, 'y': unit_y},
+                                    'priority': 6,
+                                    'reasoning': 'Mine'
+                                })
+                            
+                            # Priority 4: Transform terrain (lower priority, situational)
+                            if not can_validate or (terrain_id and terrain_id in civcom.terrains and 
+                                                     civcom.terrains[terrain_id].get('transform_time', 0) != 0):
+                                actions.append({
+                                    'type': 'unit_transform_terrain',
+                                    'unit_id': unit['id'],
+                                    'location': {'x': unit_x, 'y': unit_y},
+                                    'priority': 4,
+                                    'reasoning': 'Transform'
+                                })
 
                 # Sentry action for all units
                 actions.append({
