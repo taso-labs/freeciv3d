@@ -48,21 +48,16 @@ from packet_constants import (
 from fc_constants import (
     ACTIVITY_IDLE,
     ACTIVITY_POLLUTION,
-    ACTIVITY_ROAD,
     ACTIVITY_MINE,
     ACTIVITY_IRRIGATE,
     ACTIVITY_FORTIFIED,
-    ACTIVITY_FORTRESS,
     ACTIVITY_SENTRY,
-    ACTIVITY_RAILROAD,
     ACTIVITY_PILLAGE,
     ACTIVITY_GOTO,
     ACTIVITY_EXPLORE,
     ACTIVITY_TRANSFORM,
-    ACTIVITY_AIRBASE,
     ACTIVITY_FORTIFYING,
     ACTIVITY_FALLOUT,
-    ACTIVITY_PATROL,
     ACTIVITY_BASE,
     ACTIVITY_GEN_ROAD,
     BUSY_ACTIVITIES,
@@ -128,27 +123,27 @@ def get_unit_type_name(type_id):
     return 'unknown'
 
 # Activity type ID to name mapping (FreeCiv activity enum)
-# Source: freeciv/common/unit.h enum unit_activity
+# Source: freeciv/common/fc_types.h enum unit_activity
 # Maps integer activity IDs from PACKET_UNIT_INFO to human-readable activity names
 ACTIVITY_NAMES = {
     0: 'idle',           # ACTIVITY_IDLE
     1: 'pollution',      # ACTIVITY_POLLUTION
-    2: 'road',           # ACTIVITY_ROAD
-    3: 'mine',           # ACTIVITY_MINE
-    4: 'irrigate',       # ACTIVITY_IRRIGATE
-    5: 'fortified',      # ACTIVITY_FORTIFIED
-    6: 'fortress',       # ACTIVITY_FORTRESS
-    7: 'sentry',         # ACTIVITY_SENTRY
-    8: 'railroad',       # ACTIVITY_RAILROAD
-    9: 'pillage',        # ACTIVITY_PILLAGE
-    10: 'goto',          # ACTIVITY_GOTO
-    11: 'explore',       # ACTIVITY_EXPLORE
-    12: 'transform',     # ACTIVITY_TRANSFORM
-    13: 'airbase',       # ACTIVITY_AIRBASE
-    14: 'fortifying',    # ACTIVITY_FORTIFYING
-    15: 'fallout',       # ACTIVITY_FALLOUT
-    16: 'patrol',        # ACTIVITY_PATROL
-    17: 'base',          # ACTIVITY_BASE
+    2: 'mine',           # ACTIVITY_MINE
+    3: 'irrigate',       # ACTIVITY_IRRIGATE
+    4: 'fortified',      # ACTIVITY_FORTIFIED
+    5: 'sentry',         # ACTIVITY_SENTRY
+    6: 'pillage',        # ACTIVITY_PILLAGE
+    7: 'goto',           # ACTIVITY_GOTO
+    8: 'explore',        # ACTIVITY_EXPLORE
+    9: 'transform',      # ACTIVITY_TRANSFORM
+    10: 'fortifying',    # ACTIVITY_FORTIFYING
+    11: 'fallout',       # ACTIVITY_FALLOUT
+    12: 'base',          # ACTIVITY_BASE
+    13: 'gen_road',      # ACTIVITY_GEN_ROAD
+    14: 'convert',       # ACTIVITY_CONVERT
+    15: 'cultivate',     # ACTIVITY_CULTIVATE
+    16: 'plant',         # ACTIVITY_PLANT
+    17: 'clean',         # ACTIVITY_CLEAN
 }
 
 def get_activity_name(activity_id):
@@ -979,7 +974,7 @@ class CivCom(Thread):
             return terrain.get('irrigation_time', 0) != 0
         elif activity_type == ACTIVITY_MINE:
             return terrain.get('mining_time', 0) != 0
-        elif activity_type == ACTIVITY_ROAD:
+        elif activity_type == ACTIVITY_GEN_ROAD:
             return terrain.get('road_time', 0) != 0
         elif activity_type == ACTIVITY_TRANSFORM:
             return terrain.get('transform_time', 0) != 0

@@ -50,7 +50,21 @@ from fc_constants import (
     ACTIVITY_PATROL,
     ACTIVITY_BASE,
     ACTIVITY_GEN_ROAD,
-    BUSY_ACTIVITIES
+    BUSY_ACTIVITIES,
+    ACTION_TRANSPORT_BOARD,
+    ACTION_TRANSPORT_DEBOARD,
+    ACTION_TRANSPORT_EMBARK,
+    ACTION_TRANSPORT_UNLOAD,
+    ACTION_AIRLIFT,
+    ACTION_ESTABLISH_EMBASSY,
+    ACTION_SPY_INVESTIGATE_CITY,
+    ACTION_SPY_POISON,
+    ACTION_SPY_SABOTAGE_CITY,
+    ACTION_SPY_STEAL_TECH,
+    ACTION_SPY_BRIBE_UNIT,
+    ACTION_SPY_STEAL_GOLD,
+    ACTION_SPY_INCITE_CITY,
+    ACTION_TRADE_ROUTE
 )
 
 logger = logging.getLogger("freeciv-proxy")
@@ -2302,6 +2316,31 @@ class LLMWSHandler(websocket.WebSocketHandler):
         """Convert LLM action to FreeCiv packet format"""
         action_type = action.get('type')
 
+        if action_type == 'unit_attack':
+            # Compose PACKET_UNIT_DO_ACTION for attack
+            # ACTION_ATTACK is typically 45 in FreeCiv
+            attacker_id = action['attacker_unit_id']
+            target_id = action['target_unit_id']
+            # If tile id is needed, get from target unit
+            target_tile = None
+            try:
+                game_state = self._get_current_game_state()
+                if game_state and 'units' in game_state:
+                    units = game_state['units'].values() if isinstance(game_state['units'], dict) else game_state['units']
+                    for unit in units:
+                        if unit.get('id') == target_id:
+                            target_tile = unit.get('tile')
+                            break
+            except Exception:
+                pass
+            return {
+                'pid': 84,  # PACKET_UNIT_DO_ACTION
+                'actor_id': attacker_id,
+                'target_id': target_id,  # For attack, target is unit id
+                'sub_tgt_id': 0,
+                'name': '',
+                'action_type': 45  # ACTION_ATTACK
+            }
         if action_type == 'unit_move':
             # Use PACKET_UNIT_ORDERS (pid=73) and request server-computed goto path
             map_width = self.civcom.map_info.get('width', 80) if self.civcom and hasattr(self.civcom, 'map_info') else 80
@@ -2435,6 +2474,26 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 'pid': 55,  # PACKET_PLAYER_RESEARCH
                 'tech': tech_id  # Field name is 'tech', not 'tech_name'!
             }
+        elif action_type == 'government_change':
+            # PACKET_PLAYER_CHANGE_GOVERNMENT (pid=54) requires government type id
+            # Map common government names to IDs (approximate; ruleset dependent)
+            government_name_to_id = {
+                'despotism': 0,
+                'monarchy': 1,
+                'republic': 2,
+                'democracy': 3,
+                'communism': 4,
+                'fundamentalism': 5
+            }
+            gov_name = str(action.get('government_name', '')).strip().lower()
+            gov_id = government_name_to_id.get(gov_name)
+            if gov_id is None:
+                available = ', '.join(government_name_to_id.keys())
+                raise ValueError(f"Unknown government '{gov_name}'. Available: {available}")
+            return {
+                'pid': 54,  # PACKET_PLAYER_CHANGE_GOVERNMENT
+                'government': gov_id
+            }
         elif action_type == 'end_turn':
             # CRITICAL: Signal turn completion to advance game
             # Sends PACKET_PLAYER_PHASE_DONE to tell civserver this player is done with their turn
@@ -2461,6 +2520,33 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 'target_id': tile_id,
                 'sub_tgt_id': 0,
                 'name': city_name
+            }
+        elif action_type == 'join_city':
+            # PACKET_UNIT_DO_ACTION (pid=84) with ACTION_JOIN_CITY (28)
+            # Unit joins specified city (city_id). Server validates feasibility.
+            return {
+                'pid': 84,
+                'actor_id': action['unit_id'],
+                'target_id': action['city_id'],
+                'sub_tgt_id': 0,
+                'name': '',
+                'action_type': 28  # ACTION_JOIN_CITY
+            }
+        elif action_type == 'city_change_specialist':
+            # PACKET_CITY_CHANGE_SPECIALIST (pid=39)
+            # Convert one specialist type to another in a city.
+            # Map string names to numeric IDs: elvis/entertainer=0, scientist=1, taxman=2
+            def map_specialist(spec_value):
+                if isinstance(spec_value, int):
+                    return spec_value
+                name_map = {'elvis': 0, 'entertainer': 0, 'scientist': 1, 'taxman': 2}
+                return name_map.get(str(spec_value).lower(), 0)
+            
+            return {
+                'pid': 39,
+                'city_id': action['city_id'],
+                'from': map_specialist(action['from_specialist']),
+                'to': map_specialist(action['to_specialist'])
             }
         elif action_type == 'unit_explore':
             # FIXED: Use correct packet ID and field structure
@@ -2528,6 +2614,245 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 'unit_id': action['unit_id'],
                 'activity': ACTIVITY_TRANSFORM,
                 'target': -1  # EXTRA_NONE (server decides target terrain)
+            }
+        elif action_type == 'city_buy':
+            # PACKET_CITY_BUY (pid=34) - Buy current production in city
+            return {
+                'pid': 34,  # PACKET_CITY_BUY
+                'city_id': action['city_id']
+            }
+        elif action_type == 'city_sell_improvement':
+            # PACKET_CITY_SELL (pid=33) - Sell an existing improvement from a city
+            # Requires: city_id and improvement_id (build_id). If only improvement_name provided, map via ruleset.
+            city_id = action['city_id']
+            improvement_id = action.get('improvement_id')
+            if improvement_id is None and 'improvement_name' in action:
+                name_lower = str(action['improvement_name']).strip().lower()
+                try:
+                    if self.civcom and hasattr(self.civcom, 'improvements'):
+                        for bid, packet in self.civcom.improvements.items():
+                            if isinstance(packet, dict) and str(packet.get('name', '')).lower() == name_lower:
+                                improvement_id = packet.get('id', bid)
+                                break
+                except Exception:
+                    pass
+            # Fallback: if still None let server reject; send -1
+            return {
+                'pid': 33,  # PACKET_CITY_SELL
+                'city_id': city_id,
+                'build_id': improvement_id if improvement_id is not None else -1
+            }
+        elif action_type == 'cultivate':
+            # PACKET_UNIT_CHANGE_ACTIVITY (pid=222) - Cultivate terrain
+            # activity=15 (ACTIVITY_CULTIVATE), target=-1 (EXTRA_NONE, server determines target terrain)
+            return {
+                'pid': 222,  # PACKET_UNIT_CHANGE_ACTIVITY
+                'unit_id': action['unit_id'],
+                'activity': 15,  # ACTIVITY_CULTIVATE
+                'target': -1  # EXTRA_NONE (server decides target terrain)
+            }
+        elif action_type == 'plant':
+            # PACKET_UNIT_CHANGE_ACTIVITY (pid=222) - Plant vegetation
+            # activity=16 (ACTIVITY_PLANT), target=-1 (EXTRA_NONE, server determines target terrain)
+            return {
+                'pid': 222,  # PACKET_UNIT_CHANGE_ACTIVITY
+                'unit_id': action['unit_id'],
+                'activity': 16,  # ACTIVITY_PLANT
+                'target': -1  # EXTRA_NONE (server decides target terrain)
+            }
+        elif action_type == 'base':
+            # PACKET_UNIT_CHANGE_ACTIVITY (pid=222) - Build base (fortress/airbase)
+            # activity=12 (ACTIVITY_BASE), target=-1 (EXTRA_NONE, server determines base type)
+            return {
+                'pid': 222,  # PACKET_UNIT_CHANGE_ACTIVITY
+                'unit_id': action['unit_id'],
+                'activity': 12,  # ACTIVITY_BASE
+                'target': -1  # EXTRA_NONE (server decides base type)
+            }
+        elif action_type == 'upgrade_unit':
+            # PACKET_UNIT_DO_ACTION (pid=84) with ACTION_UPGRADE_UNIT (42)
+            # Upgrade must typically be performed at a city
+            unit_id = action['unit_id']
+            city_id = action.get('city_id', 0)  # City where upgrade happens (0 if not specified)
+            
+            # Try to get city_id from unit location if not provided
+            if city_id == 0:
+                try:
+                    game_state = self._get_current_game_state()
+                    if game_state and 'units' in game_state:
+                        units = game_state['units'].values() if isinstance(game_state['units'], dict) else game_state['units']
+                        for unit in units:
+                            if unit.get('id') == unit_id:
+                                city_id = unit.get('homecity', 0) or unit.get('city_id', 0)
+                                break
+                except Exception:
+                    pass
+            
+            return {
+                'pid': 84,  # PACKET_UNIT_DO_ACTION
+                'actor_id': unit_id,
+                'target_id': city_id,  # City where upgrade happens
+                'sub_tgt_id': 0,
+                'name': '',
+                'action_type': 42  # ACTION_UPGRADE_UNIT
+            }
+        elif action_type == 'bombard':
+            # PACKET_UNIT_DO_ACTION (pid=84) with ACTION_BOMBARD (53)
+            return {
+                'pid': 84,  # PACKET_UNIT_DO_ACTION
+                'actor_id': action['unit_id'],
+                'target_id': action['target_tile_id'],  # Target tile to bombard
+                'sub_tgt_id': 0,
+                'name': '',
+                'action_type': 53  # ACTION_BOMBARD
+            }
+        elif action_type == 'disband_unit':
+            # PACKET_UNIT_DO_ACTION (pid=84) with ACTION_DISBAND_UNIT (39)
+            # Disbanding unit returns some shields depending on ruleset; server enforces constraints
+            return {
+                'pid': 84,
+                'actor_id': action['unit_id'],
+                'target_id': 0,
+                'sub_tgt_id': 0,
+                'name': '',
+                'action_type': 39  # ACTION_DISBAND_UNIT
+            }
+        elif action_type == 'pillage':
+            # PACKET_UNIT_CHANGE_ACTIVITY (pid=222) with ACTIVITY_PILLAGE (6)
+            return {
+                'pid': 222,  # PACKET_UNIT_CHANGE_ACTIVITY
+                'unit_id': action['unit_id'],
+                'activity': ACTIVITY_PILLAGE,
+                'target': -1  # EXTRA_NONE (server decides which improvement to pillage)
+            }
+
+        elif action_type == 'transport_board':
+            # PACKET_UNIT_DO_ACTION (pid=84) with ACTION_TRANSPORT_BOARD (68) or ACTION_TRANSPORT_EMBARK (72)
+            # Use ACTION_TRANSPORT_EMBARK for same-tile boarding, ACTION_TRANSPORT_BOARD for adjacent
+            return {
+                'pid': 84,  # PACKET_UNIT_DO_ACTION
+                'actor_id': action['unit_id'],
+                'action_type': ACTION_TRANSPORT_EMBARK,  # Default to embark (same tile)
+                'target_id': action['transport_id'],
+                'value': 0,
+                'name': ''
+            }
+
+        elif action_type == 'transport_deboard':
+            # PACKET_UNIT_DO_ACTION (pid=84) with ACTION_TRANSPORT_DEBOARD (71)
+            return {
+                'pid': 84,  # PACKET_UNIT_DO_ACTION
+                'actor_id': action['unit_id'],
+                'action_type': ACTION_TRANSPORT_DEBOARD,
+                'target_id': 0,  # No specific target needed for deboard
+                'value': 0,
+                'name': ''
+            }
+
+        elif action_type == 'transport_unload':
+            # PACKET_UNIT_DO_ACTION (pid=84) with ACTION_TRANSPORT_UNLOAD (83)
+            return {
+                'pid': 84,  # PACKET_UNIT_DO_ACTION
+                'actor_id': action['unit_id'],  # Transport unit
+                'action_type': ACTION_TRANSPORT_UNLOAD,
+                'target_id': action['cargo_id'],  # Cargo to unload
+                'value': 0,
+                'name': ''
+            }
+
+        elif action_type == 'airlift':
+            # PACKET_UNIT_DO_ACTION (pid=84) with ACTION_AIRLIFT (44)
+            return {
+                'pid': 84,  # PACKET_UNIT_DO_ACTION
+                'actor_id': action['unit_id'],
+                'action_type': ACTION_AIRLIFT,
+                'target_id': action['target_city_id'],
+                'value': 0,
+                'name': ''
+            }
+
+        elif action_type == 'establish_embassy':
+            # PACKET_UNIT_DO_ACTION (pid=84) with ACTION_ESTABLISH_EMBASSY (0)
+            return {
+                'pid': 84,  # PACKET_UNIT_DO_ACTION
+                'actor_id': action['unit_id'],
+                'action_type': ACTION_ESTABLISH_EMBASSY,
+                'target_id': action['target_city_id'],
+                'value': 0,
+                'name': ''
+            }
+        elif action_type == 'spy_investigate_city':
+            return {
+                'pid': 84,
+                'actor_id': action['unit_id'],
+                'action_type': ACTION_SPY_INVESTIGATE_CITY,
+                'target_id': action['target_city_id'],
+                'sub_tgt_id': 0,
+                'name': ''
+            }
+        elif action_type == 'spy_poison':
+            return {
+                'pid': 84,
+                'actor_id': action['unit_id'],
+                'action_type': ACTION_SPY_POISON,
+                'target_id': action['target_city_id'],
+                'sub_tgt_id': 0,
+                'name': ''
+            }
+        elif action_type == 'spy_sabotage_city':
+            return {
+                'pid': 84,
+                'actor_id': action['unit_id'],
+                'action_type': ACTION_SPY_SABOTAGE_CITY,
+                'target_id': action['target_city_id'],
+                'sub_tgt_id': 0,
+                'name': ''
+            }
+        elif action_type == 'spy_steal_tech':
+            # Target city based tech steal
+            return {
+                'pid': 84,
+                'actor_id': action['unit_id'],
+                'action_type': ACTION_SPY_STEAL_TECH,
+                'target_id': action.get('target_city_id', 0),
+                'sub_tgt_id': 0,
+                'name': ''
+            }
+        elif action_type == 'spy_bribe_unit':
+            return {
+                'pid': 84,
+                'actor_id': action['unit_id'],
+                'action_type': ACTION_SPY_BRIBE_UNIT,
+                'target_id': action['target_unit_id'],
+                'sub_tgt_id': 0,
+                'name': ''
+            }
+        elif action_type == 'spy_steal_gold':
+            return {
+                'pid': 84,
+                'actor_id': action['unit_id'],
+                'action_type': ACTION_SPY_STEAL_GOLD,
+                'target_id': action['target_city_id'],
+                'sub_tgt_id': 0,
+                'name': ''
+            }
+        elif action_type == 'spy_incite_city':
+            return {
+                'pid': 84,
+                'actor_id': action['unit_id'],
+                'action_type': ACTION_SPY_INCITE_CITY,
+                'target_id': action['target_city_id'],
+                'sub_tgt_id': 0,
+                'name': ''
+            }
+        elif action_type == 'trade_route':
+            return {
+                'pid': 84,
+                'actor_id': action['unit_id'],
+                'action_type': ACTION_TRADE_ROUTE,
+                'target_id': action['target_city_id'],
+                'sub_tgt_id': 0,
+                'name': ''
             }
 
         return action  # Fallback

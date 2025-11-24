@@ -21,6 +21,195 @@ from action_validator import LLMActionValidator, ValidationResult
 
 
 class TestActionValidators(unittest.TestCase):
+
+    # ========================================================================
+    # unit_attack Tests (Tier 1)
+    # ========================================================================
+    def test_unit_attack_valid_adjacent(self):
+        """Valid adjacent attack should pass validation"""
+        action = {
+            'type': 'unit_attack',
+            'attacker_unit_id': 123,
+            'target_unit_id': 456,
+            'player_id': 0
+        }
+        # Place attacker at (10, 15), target at (11, 15) (adjacent)
+        game_state = self.sample_game_state.copy()
+        game_state['units'] = {
+            '123': {'id': 123, 'owner': 0, 'moves_left': 2, 'x': 10, 'y': 15, 'can_attack': True},
+            '456': {'id': 456, 'owner': 1, 'moves_left': 1, 'x': 11, 'y': 15}
+        }
+        result = self.validator.validate_action(action, player_id=0, game_state=game_state)
+        self.assertTrue(result.is_valid)
+
+    def test_unit_attack_attacker_not_found(self):
+        action = {'type': 'unit_attack', 'attacker_unit_id': 999, 'target_unit_id': 456, 'player_id': 0}
+        result = self.validator.validate_action(action, player_id=0, game_state=self.sample_game_state)
+        self.assertFalse(result.is_valid)
+        self.assertEqual(result.error_code, 'E109')
+
+    def test_unit_attack_target_not_found(self):
+        action = {'type': 'unit_attack', 'attacker_unit_id': 123, 'target_unit_id': 999, 'player_id': 0}
+        result = self.validator.validate_action(action, player_id=0, game_state=self.sample_game_state)
+        self.assertFalse(result.is_valid)
+        self.assertEqual(result.error_code, 'E115')
+
+    def test_unit_attack_wrong_owner(self):
+        action = {'type': 'unit_attack', 'attacker_unit_id': 456, 'target_unit_id': 123, 'player_id': 0}
+        result = self.validator.validate_action(action, player_id=0, game_state=self.sample_game_state)
+        self.assertFalse(result.is_valid)
+        self.assertEqual(result.error_code, 'E113')
+
+    def test_unit_attack_friendly_target(self):
+        action = {'type': 'unit_attack', 'attacker_unit_id': 123, 'target_unit_id': 789, 'player_id': 0}
+        # Both units owned by player 0
+        game_state = self.sample_game_state.copy()
+        game_state['units'] = {
+            '123': {'id': 123, 'owner': 0, 'moves_left': 2, 'x': 10, 'y': 15, 'can_attack': True},
+            '789': {'id': 789, 'owner': 0, 'moves_left': 2, 'x': 11, 'y': 15}
+        }
+        result = self.validator.validate_action(action, player_id=0, game_state=game_state)
+        self.assertFalse(result.is_valid)
+        self.assertEqual(result.error_code, 'E115')
+
+    def test_unit_attack_no_moves_left(self):
+        action = {'type': 'unit_attack', 'attacker_unit_id': 123, 'target_unit_id': 456, 'player_id': 0}
+        game_state = self.sample_game_state.copy()
+        game_state['units']['123']['moves_left'] = 0
+        result = self.validator.validate_action(action, player_id=0, game_state=game_state)
+        self.assertFalse(result.is_valid)
+        self.assertEqual(result.error_code, 'E111')
+
+    def test_unit_attack_attacker_busy(self):
+        action = {'type': 'unit_attack', 'attacker_unit_id': 123, 'target_unit_id': 456, 'player_id': 0}
+        game_state = self.sample_game_state.copy()
+        game_state['units']['123']['busy'] = True
+        result = self.validator.validate_action(action, player_id=0, game_state=game_state)
+        self.assertFalse(result.is_valid)
+        self.assertEqual(result.error_code, 'E110')
+
+    def test_unit_attack_not_adjacent_non_ranged(self):
+        action = {'type': 'unit_attack', 'attacker_unit_id': 123, 'target_unit_id': 456, 'player_id': 0}
+        game_state = self.sample_game_state.copy()
+        game_state['units']['123']['x'] = 10
+        game_state['units']['123']['y'] = 15
+        game_state['units']['456']['x'] = 20
+        game_state['units']['456']['y'] = 25
+        result = self.validator.validate_action(action, player_id=0, game_state=game_state)
+        self.assertFalse(result.is_valid)
+        self.assertEqual(result.error_code, 'E112')
+
+    def test_unit_attack_attacker_cannot_attack(self):
+        action = {'type': 'unit_attack', 'attacker_unit_id': 123, 'target_unit_id': 456, 'player_id': 0}
+        game_state = self.sample_game_state.copy()
+        game_state['units']['123']['can_attack'] = False
+        result = self.validator.validate_action(action, player_id=0, game_state=game_state)
+        self.assertFalse(result.is_valid)
+        self.assertEqual(result.error_code, 'E113')
+
+    def test_unit_attack_action_not_available(self):
+        action = {'type': 'unit_attack', 'attacker_unit_id': 123, 'target_unit_id': 456, 'player_id': 0}
+        game_state = self.sample_game_state.copy()
+        # No 'attack' in unit_actions for attacker
+        game_state['unit_actions'] = {123: [{'action_type': 'other', 'probability': 100}]}
+        result = self.validator.validate_action(action, player_id=0, game_state=game_state)
+        self.assertFalse(result.is_valid)
+        self.assertEqual(result.error_code, 'E116')
+
+        # ========================================================================
+        # unit_attack Tests (Tier 1)
+        # ========================================================================
+
+        def test_unit_attack_valid_adjacent(self):
+            """Valid adjacent attack should pass validation"""
+            action = {
+                'type': 'unit_attack',
+                'attacker_unit_id': 123,
+                'target_unit_id': 456,
+                'player_id': 0
+            }
+            # Place attacker at (10, 15), target at (11, 15) (adjacent)
+            game_state = self.sample_game_state.copy()
+            game_state['units'] = {
+                '123': {'id': 123, 'owner': 0, 'moves_left': 2, 'x': 10, 'y': 15, 'can_attack': True},
+                '456': {'id': 456, 'owner': 1, 'moves_left': 1, 'x': 11, 'y': 15}
+            }
+            result = self.validator.validate_action(action, player_id=0, game_state=game_state)
+            self.assertTrue(result.is_valid)
+
+        def test_unit_attack_attacker_not_found(self):
+            action = {'type': 'unit_attack', 'attacker_unit_id': 999, 'target_unit_id': 456, 'player_id': 0}
+            result = self.validator.validate_action(action, player_id=0, game_state=self.sample_game_state)
+            self.assertFalse(result.is_valid)
+            self.assertEqual(result.error_code, 'E109')
+
+        def test_unit_attack_target_not_found(self):
+            action = {'type': 'unit_attack', 'attacker_unit_id': 123, 'target_unit_id': 999, 'player_id': 0}
+            result = self.validator.validate_action(action, player_id=0, game_state=self.sample_game_state)
+            self.assertFalse(result.is_valid)
+            self.assertEqual(result.error_code, 'E115')
+
+        def test_unit_attack_wrong_owner(self):
+            action = {'type': 'unit_attack', 'attacker_unit_id': 456, 'target_unit_id': 123, 'player_id': 0}
+            result = self.validator.validate_action(action, player_id=0, game_state=self.sample_game_state)
+            self.assertFalse(result.is_valid)
+            self.assertEqual(result.error_code, 'E113')
+
+        def test_unit_attack_friendly_target(self):
+            action = {'type': 'unit_attack', 'attacker_unit_id': 123, 'target_unit_id': 789, 'player_id': 0}
+            # Both units owned by player 0
+            game_state = self.sample_game_state.copy()
+            game_state['units'] = {
+                '123': {'id': 123, 'owner': 0, 'moves_left': 2, 'x': 10, 'y': 15, 'can_attack': True},
+                '789': {'id': 789, 'owner': 0, 'moves_left': 2, 'x': 11, 'y': 15}
+            }
+            result = self.validator.validate_action(action, player_id=0, game_state=game_state)
+            self.assertFalse(result.is_valid)
+            self.assertEqual(result.error_code, 'E115')
+
+        def test_unit_attack_no_moves_left(self):
+            action = {'type': 'unit_attack', 'attacker_unit_id': 123, 'target_unit_id': 456, 'player_id': 0}
+            game_state = self.sample_game_state.copy()
+            game_state['units']['123']['moves_left'] = 0
+            result = self.validator.validate_action(action, player_id=0, game_state=game_state)
+            self.assertFalse(result.is_valid)
+            self.assertEqual(result.error_code, 'E111')
+
+        def test_unit_attack_attacker_busy(self):
+            action = {'type': 'unit_attack', 'attacker_unit_id': 123, 'target_unit_id': 456, 'player_id': 0}
+            game_state = self.sample_game_state.copy()
+            game_state['units']['123']['busy'] = True
+            result = self.validator.validate_action(action, player_id=0, game_state=game_state)
+            self.assertFalse(result.is_valid)
+            self.assertEqual(result.error_code, 'E110')
+
+        def test_unit_attack_not_adjacent_non_ranged(self):
+            action = {'type': 'unit_attack', 'attacker_unit_id': 123, 'target_unit_id': 456, 'player_id': 0}
+            game_state = self.sample_game_state.copy()
+            game_state['units']['123']['x'] = 10
+            game_state['units']['123']['y'] = 15
+            game_state['units']['456']['x'] = 20
+            game_state['units']['456']['y'] = 25
+            result = self.validator.validate_action(action, player_id=0, game_state=game_state)
+            self.assertFalse(result.is_valid)
+            self.assertEqual(result.error_code, 'E112')
+
+        def test_unit_attack_attacker_cannot_attack(self):
+            action = {'type': 'unit_attack', 'attacker_unit_id': 123, 'target_unit_id': 456, 'player_id': 0}
+            game_state = self.sample_game_state.copy()
+            game_state['units']['123']['can_attack'] = False
+            result = self.validator.validate_action(action, player_id=0, game_state=game_state)
+            self.assertFalse(result.is_valid)
+            self.assertEqual(result.error_code, 'E113')
+
+        def test_unit_attack_action_not_available(self):
+            action = {'type': 'unit_attack', 'attacker_unit_id': 123, 'target_unit_id': 456, 'player_id': 0}
+            game_state = self.sample_game_state.copy()
+            # No 'attack' in unit_actions for attacker
+            game_state['unit_actions'] = {123: [{'action_type': 'other', 'probability': 100}]}
+            result = self.validator.validate_action(action, player_id=0, game_state=game_state)
+            self.assertFalse(result.is_valid)
+            self.assertEqual(result.error_code, 'E116')
     """Test suite for action validators"""
 
     def setUp(self):
