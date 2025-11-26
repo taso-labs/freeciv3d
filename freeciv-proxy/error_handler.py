@@ -25,6 +25,8 @@ from common.error_codes import (
     E_RATE_LIMIT,
     E_CONNECTION_LOST,
     E_INTERNAL,
+    E_NOT_AUTHENTICATED,
+    E_STATE_QUERY_FAILED,
     to_canonical,
 )
 
@@ -49,31 +51,32 @@ class ErrorCategory(Enum):
     CONFIGURATION = "configuration"
 
 class ErrorCode:
-    """Standardized error codes"""
-    # Authentication errors (E100-E119)
-    AUTH_INVALID_TOKEN = "E110"
-    AUTH_FAILED = "E111"
-    AUTH_SESSION_CAPACITY = "E112"
-    AUTH_SESSION_EXPIRED = "E102"
+    """Standardized error codes - use canonical codes from common.error_codes"""
+    
+    # Authentication errors - using E900 range to avoid conflicts with tactical codes
+    AUTH_INVALID_TOKEN = E_NOT_AUTHENTICATED  # canonical E902
+    AUTH_FAILED = E_NOT_AUTHENTICATED         # canonical E902
+    AUTH_SESSION_CAPACITY = "E905"            # Session capacity exceeded
+    AUTH_SESSION_EXPIRED = E_NOT_AUTHENTICATED # canonical E902
 
-    # Rate limiting errors (E120-E139)
+    # Rate limiting errors
     RATE_LIMIT_EXCEEDED = E_RATE_LIMIT  # canonical E429
 
-    # Validation errors (E140-E179)
-    VALIDATION_FAILED = "E116"
+    # Validation errors
+    VALIDATION_FAILED = "E400"          # Use E_VALIDATION canonical
     VALIDATION_MESSAGE_SIZE = "V001"
     VALIDATION_JSON_INVALID = "V002"
     VALIDATION_JSON_STRUCTURE = "V003"
 
-    # System errors (E180-E199)
-    SYSTEM_CAPACITY = "E100"
-    SYSTEM_INTERNAL = "E199"
-    SYSTEM_CIVSERVER_CONNECTION = E_CONNECTION_LOST  # canonical E123
+    # System errors
+    SYSTEM_CAPACITY = "E906"            # System capacity exceeded (moved from E100)
+    SYSTEM_INTERNAL = E_INTERNAL        # canonical E500
+    SYSTEM_CIVSERVER_CONNECTION = E_CONNECTION_LOST  # canonical E904
 
-    # Security errors (E200-E219)
-    SECURITY_VIOLATION = "E200"
-    SECURITY_INJECTION_ATTEMPT = "E201"
-    SECURITY_CACHE_POISONING = "E202"
+    # Security errors - using E9xx range to avoid conflicts
+    SECURITY_VIOLATION = "E910"         # Security violation
+    SECURITY_INJECTION_ATTEMPT = "E911" # Injection attempt
+    SECURITY_CACHE_POISONING = "E912"   # Cache poisoning
 
 class ErrorResponse:
     """Standardized error response structure"""
