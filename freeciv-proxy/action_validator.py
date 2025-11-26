@@ -79,21 +79,21 @@ class ActionType(Enum):
     UNIT_CLEAN_POLLUTION = "unit_clean_pollution"
     UNIT_CLEAN_FALLOUT = "unit_clean_fallout"
     UNIT_TRANSFORM_TERRAIN = "unit_transform_terrain"
-    # Tier 1: Combat
+    
     UNIT_ATTACK = "unit_attack"
     PLAYER_READY = "player_ready"
-    # Tier 2: Economy
+    
     UPGRADE_UNIT = "upgrade_unit"
     BOMBARD = "bombard"
     PILLAGE = "pillage"
-    # Tier 3: Transport
+    
     TRANSPORT_BOARD = "transport_board"
     TRANSPORT_DEBOARD = "transport_deboard"
     TRANSPORT_UNLOAD = "transport_unload"
-    # Tier 3: Strategic Movement & Diplomacy
+    
     AIRLIFT = "airlift"
     ESTABLISH_EMBASSY = "establish_embassy"
-    # Tier 3: Espionage & Trade
+    
     SPY_INVESTIGATE_CITY = "spy_investigate_city"
     SPY_POISON = "spy_poison"
     SPY_SABOTAGE_CITY = "spy_sabotage_city"
@@ -101,23 +101,37 @@ class ActionType(Enum):
     SPY_BRIBE_UNIT = "spy_bribe_unit"
     SPY_STEAL_GOLD = "spy_steal_gold"
     SPY_INCITE_CITY = "spy_incite_city"
-    # Tier 4: Government
+    
     GOVERNMENT_CHANGE = "government_change"
-    # Tier 4: Unit Management
+    
     DISBAND_UNIT = "disband_unit"
     JOIN_CITY = "join_city"
-    # Tier 4: City Management
+    
     CITY_CHANGE_SPECIALIST = "city_change_specialist"
     CITY_SELL_IMPROVEMENT = "city_sell_improvement"
-    # Phase 6: Advanced Terrain
+    
     CULTIVATE = "cultivate"
     PLANT = "plant"
     BASE = "base"
-    # Phase 7: City Production
+    
     CITY_BUILD_UNIT = "city_build_unit"
     CITY_BUILD_IMPROVEMENT = "city_build_improvement"
-    # Phase 7: Diplomacy
+    
     DIPLOMACY_MESSAGE = "diplomacy_message"
+    
+    HELP_WONDER = "help_wonder"
+    CONQUER_CITY = "conquer_city"
+    CAPTURE_UNITS = "capture_units"
+    STEAL_MAPS = "steal_maps"
+    CONVERT = "convert"
+    HOME_CITY = "home_city"
+    # Advanced Actions: Military & Economic
+    STRIKE_BUILDING = "strike_building"
+    STRIKE_PRODUCTION = "strike_production"
+    MARKETPLACE = "marketplace"
+    EXPEL_UNIT = "expel_unit"
+    SPY_SABOTAGE_UNIT = "spy_sabotage_unit"
+    PLAYER_RATES = "player_rates"
 
 class LLMActionValidator:
     """
@@ -166,21 +180,35 @@ class LLMActionValidator:
         ActionType.UNIT_CLEAN_POLLUTION,
         ActionType.UNIT_CLEAN_FALLOUT,
         ActionType.UNIT_TRANSFORM_TERRAIN,
-        # Tier 4: Government & Specialist management
+        
         ActionType.GOVERNMENT_CHANGE,
         ActionType.DISBAND_UNIT,
         ActionType.JOIN_CITY,
         ActionType.CITY_CHANGE_SPECIALIST,
         ActionType.CITY_SELL_IMPROVEMENT,
-        # Phase 6: Advanced terrain actions
+        
         ActionType.CULTIVATE,
         ActionType.PLANT,
         ActionType.BASE,
-        # Phase 7: City production actions
+        
         ActionType.CITY_BUILD_UNIT,
         ActionType.CITY_BUILD_IMPROVEMENT,
-        # Phase 7: Diplomacy actions
+        
         ActionType.DIPLOMACY_MESSAGE,
+        
+        ActionType.HELP_WONDER,
+        ActionType.CONQUER_CITY,
+        ActionType.CAPTURE_UNITS,
+        ActionType.STEAL_MAPS,
+        ActionType.CONVERT,
+        ActionType.HOME_CITY,
+        # Advanced Actions: Military & Economic
+        ActionType.STRIKE_BUILDING,
+        ActionType.STRIKE_PRODUCTION,
+        ActionType.MARKETPLACE,
+        ActionType.EXPEL_UNIT,
+        ActionType.SPY_SABOTAGE_UNIT,
+        ActionType.PLAYER_RATES,
     ]
 
     # Restricted actions that require special permissions
@@ -327,6 +355,30 @@ class LLMActionValidator:
             result = self._validate_city_build_improvement(action, player_id, game_state)
         elif action_type == ActionType.DIPLOMACY_MESSAGE:
             result = self._validate_diplomacy_message(action, player_id, game_state)
+        elif action_type == ActionType.HELP_WONDER:
+            result = self._validate_help_wonder(action, player_id, game_state)
+        elif action_type == ActionType.CONQUER_CITY:
+            result = self._validate_conquer_city(action, player_id, game_state)
+        elif action_type == ActionType.CAPTURE_UNITS:
+            result = self._validate_capture_units(action, player_id, game_state)
+        elif action_type == ActionType.STEAL_MAPS:
+            result = self._validate_steal_maps(action, player_id, game_state)
+        elif action_type == ActionType.CONVERT:
+            result = self._validate_convert(action, player_id, game_state)
+        elif action_type == ActionType.HOME_CITY:
+            result = self._validate_home_city(action, player_id, game_state)
+        elif action_type == ActionType.STRIKE_BUILDING:
+            result = self._validate_strike_building(action, player_id, game_state)
+        elif action_type == ActionType.STRIKE_PRODUCTION:
+            result = self._validate_strike_production(action, player_id, game_state)
+        elif action_type == ActionType.MARKETPLACE:
+            result = self._validate_marketplace(action, player_id, game_state)
+        elif action_type == ActionType.EXPEL_UNIT:
+            result = self._validate_expel_unit(action, player_id, game_state)
+        elif action_type == ActionType.SPY_SABOTAGE_UNIT:
+            result = self._validate_spy_sabotage_unit(action, player_id, game_state)
+        elif action_type == ActionType.PLAYER_RATES:
+            result = self._validate_player_rates(action, player_id, game_state)
         else:
             # Default validation for other action types
             result = self._validate_basic_action(action, player_id, game_state)
@@ -355,7 +407,7 @@ class LLMActionValidator:
         return result
 
     def _validate_unit_attack(self, action: Dict[str, Any], player_id: int, game_state: Optional[Dict[str, Any]]) -> ValidationResult:
-        """Validate unit attack action (Tier 1)"""
+        """Validate unit attack action"""
         # Required fields
         required_fields = ['attacker_unit_id', 'target_unit_id']
         for field in required_fields:
@@ -421,7 +473,7 @@ class LLMActionValidator:
 
     def _validate_city_sell_improvement(self, action: Dict[str, Any], player_id: int,
                                         game_state: Optional[Dict[str, Any]]) -> ValidationResult:
-        """Validate city_sell_improvement action (Phase 5 - Economy)
+        """Validate city_sell_improvement action
 
         Sells an existing city improvement for gold refund.
         Packet: PACKET_CITY_SELL (pid=33) with fields {city_id, build_id}.
@@ -511,7 +563,7 @@ class LLMActionValidator:
 
     def _validate_cultivate(self, action: Dict[str, Any], player_id: int,
                            game_state: Optional[Dict[str, Any]]) -> ValidationResult:
-        """Validate cultivate action (Phase 6 - Advanced Terrain)
+        """Validate cultivate action
 
         Cultivates tile to change terrain type (e.g., forest to plains).
         Uses PACKET_UNIT_CHANGE_ACTIVITY (pid=222) with activity=ACTIVITY_CULTIVATE (15).
@@ -568,7 +620,7 @@ class LLMActionValidator:
 
     def _validate_plant(self, action: Dict[str, Any], player_id: int,
                        game_state: Optional[Dict[str, Any]]) -> ValidationResult:
-        """Validate plant action (Phase 6 - Advanced Terrain)
+        """Validate plant action
 
         Plants vegetation on tile to change terrain type (e.g., plains to forest).
         Uses PACKET_UNIT_CHANGE_ACTIVITY (pid=222) with activity=ACTIVITY_PLANT (16).
@@ -625,7 +677,7 @@ class LLMActionValidator:
 
     def _validate_base(self, action: Dict[str, Any], player_id: int,
                       game_state: Optional[Dict[str, Any]]) -> ValidationResult:
-        """Validate base action (Phase 6 - Advanced Terrain)
+        """Validate base action
 
         Builds a base (fortress/airbase) on tile.
         Uses PACKET_UNIT_CHANGE_ACTIVITY (pid=222) with activity=ACTIVITY_BASE (12).
@@ -681,7 +733,7 @@ class LLMActionValidator:
         return ValidationResult(True)
 
     def _validate_player_ready(self, action: Dict[str, Any], player_id: int, game_state: Optional[Dict[str, Any]]) -> ValidationResult:
-        """Validate player_ready action (Tier 1)"""
+        """Validate player_ready action"""
         # Error codes:
         # E300: Not in correct phase
         # E301: Player already marked ready (idempotent)
@@ -713,7 +765,7 @@ class LLMActionValidator:
         return ValidationResult(True)
 
     def _validate_city_buy(self, action: Dict[str, Any], player_id: int, game_state: Optional[Dict[str, Any]]) -> ValidationResult:
-        """Validate city_buy action (Tier 2 - Economy)"""
+        """Validate city_buy action"""
         # Error codes:
         # E201: Insufficient gold
         # E202: Invalid city or city not found
@@ -768,7 +820,7 @@ class LLMActionValidator:
         return ValidationResult(True)
 
     def _validate_upgrade_unit(self, action: Dict[str, Any], player_id: int, game_state: Optional[Dict[str, Any]]) -> ValidationResult:
-        """Validate upgrade_unit action (Tier 2 - Economy)"""
+        """Validate upgrade_unit action"""
         # Error codes:
         # E109: Unit not found
         # E116: Action not possible per server
@@ -828,7 +880,7 @@ class LLMActionValidator:
         return ValidationResult(True)
 
     def _validate_bombard(self, action: Dict[str, Any], player_id: int, game_state: Optional[Dict[str, Any]]) -> ValidationResult:
-        """Validate bombard action (Tier 2 - Ranged Combat)"""
+        """Validate bombard action"""
         # Error codes: Reuse tactical range E109-E116
         # E109: Unit not found
         # E110: Unit busy
@@ -902,7 +954,7 @@ class LLMActionValidator:
         return ValidationResult(True)
 
     def _validate_pillage(self, action: Dict[str, Any], player_id: int, game_state: Optional[Dict[str, Any]]) -> ValidationResult:
-        """Validate pillage action (Tier 2 - Economic Warfare)"""
+        """Validate pillage action"""
         # Error codes: Reuse tactical range E109-E116
         # E109: Unit not found
         # E110: Unit busy
@@ -971,7 +1023,7 @@ class LLMActionValidator:
         return ValidationResult(True)
 
     def _validate_transport_board(self, action: Dict[str, Any], player_id: int, game_state: Optional[Dict[str, Any]]) -> ValidationResult:
-        """Validate transport board action (Tier 3 - Transport)"""
+        """Validate transport board action"""
         # Error codes: E109-E116 (tactical), E350-E353 (transport-specific)
         # E109: Unit not found
         # E110: Unit busy
@@ -1045,7 +1097,7 @@ class LLMActionValidator:
         return ValidationResult(True)
 
     def _validate_transport_deboard(self, action: Dict[str, Any], player_id: int, game_state: Optional[Dict[str, Any]]) -> ValidationResult:
-        """Validate transport deboard action (Tier 3 - Transport)"""
+        """Validate transport deboard action"""
         # Error codes: E109-E116, E353 (not on transport)
 
         # Required fields
@@ -1092,7 +1144,7 @@ class LLMActionValidator:
         return ValidationResult(True)
 
     def _validate_transport_unload(self, action: Dict[str, Any], player_id: int, game_state: Optional[Dict[str, Any]]) -> ValidationResult:
-        """Validate transport unload action (Tier 3 - Transport)"""
+        """Validate transport unload action"""
         # Error codes: E109-E116, E353 (not on transport)
 
         # Required fields
@@ -1152,7 +1204,7 @@ class LLMActionValidator:
         return ValidationResult(True)
 
     def _validate_airlift(self, action: Dict[str, Any], player_id: int, game_state: Optional[Dict[str, Any]]) -> ValidationResult:
-        """Validate airlift action (Tier 3 - Strategic Movement)"""
+        """Validate airlift action"""
         # Error codes: E109-E116 (tactical), E354-E356 (airlift-specific)
         # E109: Unit not found
         # E113: Not owner or lacks capability
@@ -1209,7 +1261,7 @@ class LLMActionValidator:
         return ValidationResult(True)
 
     def _validate_establish_embassy(self, action: Dict[str, Any], player_id: int, game_state: Optional[Dict[str, Any]]) -> ValidationResult:
-        """Validate establish embassy action (Tier 3 - Diplomacy)"""
+        """Validate establish embassy action"""
         # Error codes: E109-E116 (tactical), E310-E312 (diplomacy)
         # E109: Unit not found
         # E113: Not owner or lacks capability
@@ -1272,7 +1324,7 @@ class LLMActionValidator:
         return ValidationResult(True)
 
     def _validate_spy_action(self, action: Dict[str, Any], player_id: int, game_state: Optional[Dict[str, Any]]) -> ValidationResult:
-        """Validate spy / espionage actions (Tier 3 - Espionage & Phase 5)
+        """Validate spy / espionage actions
 
         Supports: investigate_city, poison, sabotage_city, steal_tech, bribe_unit, steal_gold, incite_city
         Error codes (mix of tactical + espionage specific):
@@ -1427,7 +1479,7 @@ class LLMActionValidator:
         return ValidationResult(True)
 
     def _validate_trade_route(self, action: Dict[str, Any], player_id: int, game_state: Optional[Dict[str, Any]]) -> ValidationResult:
-        """Validate trade_route action (Tier 3 - Trade)
+        """Validate trade_route action
 
         Error codes:
         E109: Unit not found
@@ -1820,7 +1872,7 @@ class LLMActionValidator:
         return ValidationResult(True)
 
     def _validate_unit_clean_pollution(self, action: Dict[str, Any], player_id: int, game_state: Optional[Dict[str, Any]]) -> ValidationResult:
-        """Validate unit clean pollution action (Tier 2.5: Terrain Management)
+        """Validate unit clean pollution action
 
         Validates worker/settler cleaning pollution from a tile using PACKET_UNIT_CHANGE_ACTIVITY
         with ACTIVITY_POLLUTION. The action operates on the unit's current tile.
@@ -1857,7 +1909,7 @@ class LLMActionValidator:
         return ValidationResult(True)
 
     def _validate_unit_clean_fallout(self, action: Dict[str, Any], player_id: int, game_state: Optional[Dict[str, Any]]) -> ValidationResult:
-        """Validate unit clean fallout action (Tier 2.5: Terrain Management)
+        """Validate unit clean fallout action
 
         Validates worker/settler cleaning nuclear fallout from a tile using PACKET_UNIT_CHANGE_ACTIVITY
         with ACTIVITY_FALLOUT. The action operates on the unit's current tile.
@@ -1894,7 +1946,7 @@ class LLMActionValidator:
         return ValidationResult(True)
 
     def _validate_unit_transform_terrain(self, action: Dict[str, Any], player_id: int, game_state: Optional[Dict[str, Any]]) -> ValidationResult:
-        """Validate unit transform terrain action (Tier 2.5: Terrain Management)
+        """Validate unit transform terrain action
 
         Validates engineer/settler transforming terrain type (e.g., plains to grassland, desert to plains)
         using PACKET_UNIT_CHANGE_ACTIVITY with ACTIVITY_TRANSFORM. The action operates on the unit's
@@ -1932,7 +1984,7 @@ class LLMActionValidator:
         return ValidationResult(True)
 
     def _validate_government_change(self, action: Dict[str, Any], player_id: int, game_state: Optional[Dict[str, Any]]) -> ValidationResult:
-        """Validate government change action (Tier 4)
+        """Validate government change action
 
         Player attempts to change government via PACKET_PLAYER_CHANGE_GOVERNMENT (pid=54).
         Requires specifying a target government name. Validation ensures:
@@ -2000,7 +2052,7 @@ class LLMActionValidator:
         return ValidationResult(True)
 
     def _validate_disband_unit(self, action: Dict[str, Any], player_id: int, game_state: Optional[Dict[str, Any]]) -> ValidationResult:
-        """Validate disband unit action (Tier 4: Unit Management)
+        """Validate disband unit action
 
         Simple validation prior to sending PACKET_UNIT_DO_ACTION with ACTION_DISBAND_UNIT (39).
         The server is authoritative about special constraints (e.g., cannot disband last defender
@@ -2033,7 +2085,7 @@ class LLMActionValidator:
         return ValidationResult(True)
 
     def _validate_join_city(self, action: Dict[str, Any], player_id: int, game_state: Optional[Dict[str, Any]]) -> ValidationResult:
-        """Validate join city action (Tier 4)
+        """Validate join city action
 
         Worker/settler adds its population to a city using PACKET_UNIT_DO_ACTION with ACTION_JOIN_CITY (28).
         Server enforces deeper rules (e.g., unit type allowed, city size constraints); client checks structure.
@@ -2091,7 +2143,7 @@ class LLMActionValidator:
         return ValidationResult(True)
 
     def _validate_city_change_specialist(self, action: Dict[str, Any], player_id: int, game_state: Optional[Dict[str, Any]]) -> ValidationResult:
-        """Validate city change specialist action (Tier 4)
+        """Validate city change specialist action
 
         Convert one specialist type to another within a city using PACKET_CITY_CHANGE_SPECIALIST (pid=39).
         This allows micromanagement of citizen allocation (e.g., converting entertainers to scientists).
@@ -2315,5 +2367,375 @@ class LLMActionValidator:
             target = players.get(str(target_player_id)) if isinstance(players, dict) else None
             if not target:
                 return self._validation_error('E504', f'Target player {target_player_id} not found')
+        
+        return ValidationResult(is_valid=True)
+
+    def _validate_help_wonder(self, action: Dict[str, Any], player_id: int, game_state: Optional[Dict[str, Any]]) -> ValidationResult:
+        """Validate help_wonder action - unit adds shields to wonder construction"""
+        if 'unit_id' not in action:
+            return self._validation_error('E600', 'help_wonder requires unit_id')
+        if 'target_city_id' not in action:
+            return self._validation_error('E601', 'help_wonder requires target_city_id')
+        
+        unit_id = action['unit_id']
+        target_city_id = action['target_city_id']
+        
+        # Validate unit exists and is owned by player
+        if game_state and 'units' in game_state:
+            units = game_state['units']
+            unit = units.get(str(unit_id)) if isinstance(units, dict) else None
+            if not unit:
+                return self._validation_error('E602', f'Unit {unit_id} not found')
+            if unit.get('owner') != player_id:
+                return self._validation_error('E603', 'Player does not own unit')
+        
+        # Validate target city exists and is owned by player
+        if game_state and 'cities' in game_state:
+            cities = game_state['cities']
+            city = cities.get(str(target_city_id)) if isinstance(cities, dict) else None
+            if not city:
+                return self._validation_error('E604', f'City {target_city_id} not found')
+            if city.get('owner') != player_id:
+                return self._validation_error('E605', 'Player does not own city')
+        
+        return ValidationResult(is_valid=True)
+
+    def _validate_conquer_city(self, action: Dict[str, Any], player_id: int, game_state: Optional[Dict[str, Any]]) -> ValidationResult:
+        """Validate conquer_city action - military unit conquers enemy city"""
+        if 'unit_id' not in action:
+            return self._validation_error('E610', 'conquer_city requires unit_id')
+        if 'target_city_id' not in action:
+            return self._validation_error('E611', 'conquer_city requires target_city_id')
+        
+        unit_id = action['unit_id']
+        target_city_id = action['target_city_id']
+        
+        # Validate unit exists and is owned by player
+        if game_state and 'units' in game_state:
+            units = game_state['units']
+            unit = units.get(str(unit_id)) if isinstance(units, dict) else None
+            if not unit:
+                return self._validation_error('E612', f'Unit {unit_id} not found')
+            if unit.get('owner') != player_id:
+                return self._validation_error('E613', 'Player does not own unit')
+            # Check unit is military
+            if not unit.get('can_attack', True):
+                return self._validation_error('E614', 'Unit cannot attack (not a military unit)')
+        
+        # Validate target city exists and is NOT owned by player
+        if game_state and 'cities' in game_state:
+            cities = game_state['cities']
+            city = cities.get(str(target_city_id)) if isinstance(cities, dict) else None
+            if not city:
+                return self._validation_error('E615', f'City {target_city_id} not found')
+            if city.get('owner') == player_id:
+                return self._validation_error('E616', 'Cannot conquer own city')
+        
+        return ValidationResult(is_valid=True)
+
+    def _validate_capture_units(self, action: Dict[str, Any], player_id: int, game_state: Optional[Dict[str, Any]]) -> ValidationResult:
+        """Validate capture_units action - capture defeated units instead of destroying them"""
+        if 'unit_id' not in action:
+            return self._validation_error('E620', 'capture_units requires unit_id')
+        if 'target_tile' not in action:
+            return self._validation_error('E621', 'capture_units requires target_tile')
+        
+        unit_id = action['unit_id']
+        
+        # Validate unit exists and is owned by player
+        if game_state and 'units' in game_state:
+            units = game_state['units']
+            unit = units.get(str(unit_id)) if isinstance(units, dict) else None
+            if not unit:
+                return self._validation_error('E622', f'Unit {unit_id} not found')
+            if unit.get('owner') != player_id:
+                return self._validation_error('E623', 'Player does not own unit')
+            # Check unit has capture capability
+            if not unit.get('can_capture', False):
+                return self._validation_error('E624', 'Unit cannot capture (lacks capture capability)')
+        
+        return ValidationResult(is_valid=True)
+
+    def _validate_steal_maps(self, action: Dict[str, Any], player_id: int, game_state: Optional[Dict[str, Any]]) -> ValidationResult:
+        """Validate steal_maps action - spy steals enemy maps"""
+        if 'unit_id' not in action:
+            return self._validation_error('E630', 'steal_maps requires unit_id')
+        if 'target_city_id' not in action:
+            return self._validation_error('E631', 'steal_maps requires target_city_id')
+        
+        unit_id = action['unit_id']
+        target_city_id = action['target_city_id']
+        
+        # Validate unit exists and is owned by player
+        if game_state and 'units' in game_state:
+            units = game_state['units']
+            unit = units.get(str(unit_id)) if isinstance(units, dict) else None
+            if not unit:
+                return self._validation_error('E632', f'Unit {unit_id} not found')
+            if unit.get('owner') != player_id:
+                return self._validation_error('E633', 'Player does not own unit')
+            # Check unit is a spy/diplomat
+            unit_type = unit.get('type', '').lower()
+            if 'spy' not in unit_type and 'diplomat' not in unit_type:
+                return self._validation_error('E634', 'Unit must be spy or diplomat')
+        
+        # Validate target city exists and is NOT owned by player
+        if game_state and 'cities' in game_state:
+            cities = game_state['cities']
+            city = cities.get(str(target_city_id)) if isinstance(cities, dict) else None
+            if not city:
+                return self._validation_error('E635', f'City {target_city_id} not found')
+            if city.get('owner') == player_id:
+                return self._validation_error('E636', 'Cannot steal maps from own city')
+        
+        return ValidationResult(is_valid=True)
+
+    def _validate_convert(self, action: Dict[str, Any], player_id: int, game_state: Optional[Dict[str, Any]]) -> ValidationResult:
+        """Validate convert action - convert unit type (e.g., religion, government)"""
+        if 'unit_id' not in action:
+            return self._validation_error('E640', 'convert requires unit_id')
+        
+        unit_id = action['unit_id']
+        
+        # Validate unit exists and is owned by player
+        if game_state and 'units' in game_state:
+            units = game_state['units']
+            unit = units.get(str(unit_id)) if isinstance(units, dict) else None
+            if not unit:
+                return self._validation_error('E641', f'Unit {unit_id} not found')
+            if unit.get('owner') != player_id:
+                return self._validation_error('E642', 'Player does not own unit')
+            # Check unit can be converted
+            if not unit.get('can_convert', True):
+                return self._validation_error('E643', 'Unit cannot be converted')
+        
+        return ValidationResult(is_valid=True)
+
+    def _validate_home_city(self, action: Dict[str, Any], player_id: int, game_state: Optional[Dict[str, Any]]) -> ValidationResult:
+        """Validate home_city action - change unit's home city"""
+        if 'unit_id' not in action:
+            return self._validation_error('E650', 'home_city requires unit_id')
+        if 'city_id' not in action:
+            return self._validation_error('E651', 'home_city requires city_id')
+        
+        unit_id = action['unit_id']
+        city_id = action['city_id']
+        
+        # Validate unit exists and is owned by player
+        if game_state and 'units' in game_state:
+            units = game_state['units']
+            unit = units.get(str(unit_id)) if isinstance(units, dict) else None
+            if not unit:
+                return self._validation_error('E652', f'Unit {unit_id} not found')
+            if unit.get('owner') != player_id:
+                return self._validation_error('E653', 'Player does not own unit')
+        
+        # Validate city exists and is owned by player
+        if game_state and 'cities' in game_state:
+            cities = game_state['cities']
+            city = cities.get(str(city_id)) if isinstance(cities, dict) else None
+            if not city:
+                return self._validation_error('E654', f'City {city_id} not found')
+            if city.get('owner') != player_id:
+                return self._validation_error('E655', 'Player does not own city')
+        
+        return ValidationResult(is_valid=True)
+
+    def _validate_strike_building(self, action: Dict[str, Any], player_id: int, game_state: Optional[Dict[str, Any]]) -> ValidationResult:
+        """Validate strike_building action - surgical strike on specific building"""
+        if 'unit_id' not in action:
+            return self._validation_error('E660', 'strike_building requires unit_id')
+        if 'target_city_id' not in action:
+            return self._validation_error('E661', 'strike_building requires target_city_id')
+        if 'building_id' not in action:
+            return self._validation_error('E662', 'strike_building requires building_id')
+        
+        unit_id = action['unit_id']
+        target_city_id = action['target_city_id']
+        
+        # Validate unit exists and is owned by player
+        if game_state and 'units' in game_state:
+            units = game_state['units']
+            unit = units.get(str(unit_id)) if isinstance(units, dict) else None
+            if not unit:
+                return self._validation_error('E663', f'Unit {unit_id} not found')
+            if unit.get('owner') != player_id:
+                return self._validation_error('E664', 'Player does not own unit')
+            # Check unit can strike (bomber, fighter, etc.)
+            if not unit.get('can_bombard', False):
+                return self._validation_error('E665', 'Unit cannot perform strikes')
+        
+        # Validate target city exists and is NOT owned by player
+        if game_state and 'cities' in game_state:
+            cities = game_state['cities']
+            city = cities.get(str(target_city_id)) if isinstance(cities, dict) else None
+            if not city:
+                return self._validation_error('E666', f'City {target_city_id} not found')
+            if city.get('owner') == player_id:
+                return self._validation_error('E667', 'Cannot strike own city')
+        
+        return ValidationResult(is_valid=True)
+
+    def _validate_strike_production(self, action: Dict[str, Any], player_id: int, game_state: Optional[Dict[str, Any]]) -> ValidationResult:
+        """Validate strike_production action - surgical strike on production"""
+        if 'unit_id' not in action:
+            return self._validation_error('E670', 'strike_production requires unit_id')
+        if 'target_city_id' not in action:
+            return self._validation_error('E671', 'strike_production requires target_city_id')
+        
+        unit_id = action['unit_id']
+        target_city_id = action['target_city_id']
+        
+        # Validate unit exists and is owned by player
+        if game_state and 'units' in game_state:
+            units = game_state['units']
+            unit = units.get(str(unit_id)) if isinstance(units, dict) else None
+            if not unit:
+                return self._validation_error('E672', f'Unit {unit_id} not found')
+            if unit.get('owner') != player_id:
+                return self._validation_error('E673', 'Player does not own unit')
+            # Check unit can strike
+            if not unit.get('can_bombard', False):
+                return self._validation_error('E674', 'Unit cannot perform strikes')
+        
+        # Validate target city exists and is NOT owned by player
+        if game_state and 'cities' in game_state:
+            cities = game_state['cities']
+            city = cities.get(str(target_city_id)) if isinstance(cities, dict) else None
+            if not city:
+                return self._validation_error('E675', f'City {target_city_id} not found')
+            if city.get('owner') == player_id:
+                return self._validation_error('E676', 'Cannot strike own city')
+        
+        return ValidationResult(is_valid=True)
+
+    def _validate_marketplace(self, action: Dict[str, Any], player_id: int, game_state: Optional[Dict[str, Any]]) -> ValidationResult:
+        """Validate marketplace action - convert caravan to gold"""
+        if 'unit_id' not in action:
+            return self._validation_error('E680', 'marketplace requires unit_id')
+        if 'target_city_id' not in action:
+            return self._validation_error('E681', 'marketplace requires target_city_id')
+        
+        unit_id = action['unit_id']
+        target_city_id = action['target_city_id']
+        
+        # Validate unit exists and is owned by player
+        if game_state and 'units' in game_state:
+            units = game_state['units']
+            unit = units.get(str(unit_id)) if isinstance(units, dict) else None
+            if not unit:
+                return self._validation_error('E682', f'Unit {unit_id} not found')
+            if unit.get('owner') != player_id:
+                return self._validation_error('E683', 'Player does not own unit')
+            # Check unit is caravan/freight
+            unit_type = unit.get('type', '').lower()
+            if 'caravan' not in unit_type and 'freight' not in unit_type:
+                return self._validation_error('E684', 'Unit must be caravan or freight')
+        
+        # Validate target city exists
+        if game_state and 'cities' in game_state:
+            cities = game_state['cities']
+            city = cities.get(str(target_city_id)) if isinstance(cities, dict) else None
+            if not city:
+                return self._validation_error('E685', f'City {target_city_id} not found')
+        
+        return ValidationResult(is_valid=True)
+
+    def _validate_expel_unit(self, action: Dict[str, Any], player_id: int, game_state: Optional[Dict[str, Any]]) -> ValidationResult:
+        """Validate expel_unit action - diplomatically expel foreign unit"""
+        if 'unit_id' not in action:
+            return self._validation_error('E690', 'expel_unit requires unit_id')
+        if 'target_unit_id' not in action:
+            return self._validation_error('E691', 'expel_unit requires target_unit_id')
+        
+        unit_id = action['unit_id']
+        target_unit_id = action['target_unit_id']
+        
+        # Validate unit exists and is owned by player
+        if game_state and 'units' in game_state:
+            units = game_state['units']
+            unit = units.get(str(unit_id)) if isinstance(units, dict) else None
+            if not unit:
+                return self._validation_error('E692', f'Unit {unit_id} not found')
+            if unit.get('owner') != player_id:
+                return self._validation_error('E693', 'Player does not own unit')
+        
+        # Validate target unit exists and is NOT owned by player
+        if game_state and 'units' in game_state:
+            units = game_state['units']
+            target = units.get(str(target_unit_id)) if isinstance(units, dict) else None
+            if not target:
+                return self._validation_error('E694', f'Target unit {target_unit_id} not found')
+            if target.get('owner') == player_id:
+                return self._validation_error('E695', 'Cannot expel own unit')
+        
+        return ValidationResult(is_valid=True)
+
+    def _validate_spy_sabotage_unit(self, action: Dict[str, Any], player_id: int, game_state: Optional[Dict[str, Any]]) -> ValidationResult:
+        """Validate spy_sabotage_unit action - sabotage specific enemy unit"""
+        if 'unit_id' not in action:
+            return self._validation_error('E700', 'spy_sabotage_unit requires unit_id')
+        if 'target_unit_id' not in action:
+            return self._validation_error('E701', 'spy_sabotage_unit requires target_unit_id')
+        
+        unit_id = action['unit_id']
+        target_unit_id = action['target_unit_id']
+        
+        # Validate unit exists and is owned by player
+        if game_state and 'units' in game_state:
+            units = game_state['units']
+            unit = units.get(str(unit_id)) if isinstance(units, dict) else None
+            if not unit:
+                return self._validation_error('E702', f'Unit {unit_id} not found')
+            if unit.get('owner') != player_id:
+                return self._validation_error('E703', 'Player does not own unit')
+            # Check unit is spy/diplomat
+            unit_type = unit.get('type', '').lower()
+            if 'spy' not in unit_type and 'diplomat' not in unit_type:
+                return self._validation_error('E704', 'Unit must be spy or diplomat')
+        
+        # Validate target unit exists and is NOT owned by player
+        if game_state and 'units' in game_state:
+            units = game_state['units']
+            target = units.get(str(target_unit_id)) if isinstance(units, dict) else None
+            if not target:
+                return self._validation_error('E705', f'Target unit {target_unit_id} not found')
+            if target.get('owner') == player_id:
+                return self._validation_error('E706', 'Cannot sabotage own unit')
+        
+        return ValidationResult(is_valid=True)
+
+    def _validate_player_rates(self, action: Dict[str, Any], player_id: int, game_state: Optional[Dict[str, Any]]) -> ValidationResult:
+        """Validate player_rates action - set tax/science/luxury rates"""
+        if 'tax_rate' not in action:
+            return self._validation_error('E710', 'player_rates requires tax_rate')
+        if 'science_rate' not in action:
+            return self._validation_error('E711', 'player_rates requires science_rate')
+        if 'luxury_rate' not in action:
+            return self._validation_error('E712', 'player_rates requires luxury_rate')
+        
+        tax_rate = action['tax_rate']
+        science_rate = action['science_rate']
+        luxury_rate = action['luxury_rate']
+        
+        # Validate rates are integers
+        if not isinstance(tax_rate, int):
+            return self._validation_error('E713', 'tax_rate must be an integer')
+        if not isinstance(science_rate, int):
+            return self._validation_error('E714', 'science_rate must be an integer')
+        if not isinstance(luxury_rate, int):
+            return self._validation_error('E715', 'luxury_rate must be an integer')
+        
+        # Validate rates are 0-100
+        if not (0 <= tax_rate <= 100):
+            return self._validation_error('E716', 'tax_rate must be between 0 and 100')
+        if not (0 <= science_rate <= 100):
+            return self._validation_error('E717', 'science_rate must be between 0 and 100')
+        if not (0 <= luxury_rate <= 100):
+            return self._validation_error('E718', 'luxury_rate must be between 0 and 100')
+        
+        # Validate rates sum to 100
+        if tax_rate + science_rate + luxury_rate != 100:
+            return self._validation_error('E719', 'Rates must sum to 100')
         
         return ValidationResult(is_valid=True)

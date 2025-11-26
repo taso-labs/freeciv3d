@@ -441,6 +441,12 @@ Query actions for multiple units in a single request:
 - `city_sell_improvement`: Sell an existing city improvement for gold refund
 - `tech_research`: Research technology
 - `diplomacy_message`: Send diplomatic message
+- `help_wonder`: Add unit shields to wonder construction
+- `conquer_city`: Military unit conquers enemy city
+- `capture_units`: Capture defeated units instead of destroying
+- `steal_maps`: Spy steals enemy civilization maps
+- `convert`: Convert unit (religion, government, etc.)
+- `home_city`: Change unit's home city for support
 - `end_turn`: End current turn
 - `player_ready`: Mark player slot ready in lobby (turn==0 only)
 
@@ -1537,6 +1543,430 @@ Spy or diplomat attempts to incite a city revolt, causing it to defect to the pl
 **Prompt Example:**
 ```
 "Use diplomat unit 42 to incite city 10 to revolt and join our civilization."
+```
+
+#### help_wonder
+
+A unit adds its production shields to speed up wonder construction in a target city. The unit is consumed in the process, converting its production value into shields for the wonder.
+
+**Request:**
+```json
+{
+  "type": "action",
+  "agent_id": "my-agent",
+  "timestamp": 1234567890.123,
+  "correlation_id": "wonder-1",
+  "data": {
+    "action_type": "help_wonder",
+    "unit_id": 42,
+    "target_city_id": 10,
+    "player_id": 1,
+    "game_id": "game-123"
+  }
+}
+```
+
+**Success Response:**
+```json
+{
+  "type": "action_result",
+  "agent_id": "my-agent",
+  "timestamp": 1234567890.124,
+  "correlation_id": "wonder-1",
+  "data": {
+    "type": "action_result",
+    "success": true,
+    "action_type": "help_wonder",
+    "result": {
+      "unit_id": 42,
+      "target_city_id": 10,
+      "shields_added": 40,
+      "wonder_name": "Great Library",
+      "unit_consumed": true
+    }
+  }
+}
+```
+
+**Validation Rules:**
+1. `unit_id` must exist and belong to player
+2. `target_city_id` must exist and belong to player
+3. Target city must be building a wonder
+4. Unit must be in or adjacent to the target city
+5. Unit must have movement points available
+
+**Error Codes (Strategic Actions Range E600–E655):**
+- `E600`: Missing unit_id field
+- `E601`: Missing target_city_id field
+- `E602`: Unit not found
+- `E603`: Player does not own unit
+- `E604`: City not found
+- `E605`: Player does not own city
+- `E116`: Action not possible (city not building wonder)
+
+**Usage Notes:**
+- Particularly effective with high-production units (Settlers, Engineers)
+- Shields added equal unit's production cost
+- Unit is always consumed when helping wonder
+- Can significantly accelerate wonder completion
+- Strategic for competitive wonder races
+- More efficient than disbanding unit in city
+
+**Prompt Example:**
+```
+"Send unit 42 to help complete the Great Library wonder in city 10."
+```
+
+#### conquer_city
+
+A military unit conquers an enemy city through combat. The city is captured and becomes part of the conquering player's civilization. Population and improvements may be lost in the conquest.
+
+**Request:**
+```json
+{
+  "type": "action",
+  "agent_id": "my-agent",
+  "timestamp": 1234567890.123,
+  "correlation_id": "conquer-1",
+  "data": {
+    "action_type": "conquer_city",
+    "unit_id": 42,
+    "target_city_id": 10,
+    "player_id": 1,
+    "game_id": "game-123"
+  }
+}
+```
+
+**Success Response:**
+```json
+{
+  "type": "action_result",
+  "agent_id": "my-agent",
+  "timestamp": 1234567890.124,
+  "correlation_id": "conquer-1",
+  "data": {
+    "type": "action_result",
+    "success": true,
+    "action_type": "conquer_city",
+    "result": {
+      "unit_id": 42,
+      "target_city_id": 10,
+      "city_conquered": true,
+      "new_owner": 1,
+      "population_after": 3,
+      "improvements_destroyed": 2
+    }
+  }
+}
+```
+
+**Validation Rules:**
+1. `unit_id` must exist and belong to player
+2. Unit must be a military unit (can_attack = true)
+3. `target_city_id` must exist and not belong to player
+4. Unit must be adjacent to target city
+5. City defenses must be depleted (garrison defeated)
+6. Unit must have movement points
+
+**Error Codes (Strategic Actions Range E610–E616):**
+- `E610`: Missing unit_id field
+- `E611`: Missing target_city_id field
+- `E612`: Unit not found
+- `E613`: Player does not own unit
+- `E614`: Unit cannot attack (not a military unit)
+- `E615`: Target city not found
+- `E616`: Cannot conquer own city
+
+**Usage Notes:**
+- Requires defeating city garrison first through unit_attack
+- Population typically reduced by 1-2 citizens
+- Some city improvements may be destroyed
+- Palace/capital status preserved or reset
+- Cultural borders may shift after conquest
+- Unhappiness from conquest affects initial turns
+- Strategic for territorial expansion and military victory
+
+**Prompt Example:**
+```
+"Use warrior unit 42 to conquer the defenseless enemy city 10."
+```
+
+#### capture_units
+
+A unit with capture capability (e.g., certain naval units) captures defeated enemy units instead of destroying them, converting them to the player's control.
+
+**Request:**
+```json
+{
+  "type": "action",
+  "agent_id": "my-agent",
+  "timestamp": 1234567890.123,
+  "correlation_id": "capture-1",
+  "data": {
+    "action_type": "capture_units",
+    "unit_id": 42,
+    "target_tile": 1234,
+    "player_id": 1,
+    "game_id": "game-123"
+  }
+}
+```
+
+**Success Response:**
+```json
+{
+  "type": "action_result",
+  "agent_id": "my-agent",
+  "timestamp": 1234567890.124,
+  "correlation_id": "capture-1",
+  "data": {
+    "type": "action_result",
+    "success": true,
+    "action_type": "capture_units",
+    "result": {
+      "unit_id": 42,
+      "target_tile": 1234,
+      "units_captured": 1,
+      "captured_unit_ids": [50]
+    }
+  }
+}
+```
+
+**Validation Rules:**
+1. `unit_id` must exist and belong to player
+2. `target_tile` must be specified
+3. Unit must have capture capability (can_capture flag)
+4. Target tile must contain defeatable enemy units
+5. Unit must have movement points
+
+**Error Codes (Strategic Actions Range E620–E624):**
+- `E620`: Missing unit_id field
+- `E621`: Missing target_tile field
+- `E622`: Unit not found
+- `E623`: Player does not own unit
+- `E624`: Unit cannot capture (lacks capture capability)
+
+**Usage Notes:**
+- Typically available to naval units (privateers, cruisers)
+- Captured units immediately join your civilization
+- Maintains unit type and experience level
+- More valuable than destroying enemy units
+- Useful for building navy without production cost
+- Ruleset-dependent: not all unit types can capture
+
+**Prompt Example:**
+```
+"Use privateer unit 42 to capture the enemy ships at tile 1234."
+```
+
+#### steal_maps
+
+A spy or diplomat steals map knowledge from an enemy civilization, revealing all terrain and cities they have explored. Provides significant intelligence advantage.
+
+**Request:**
+```json
+{
+  "type": "action",
+  "agent_id": "my-agent",
+  "timestamp": 1234567890.123,
+  "correlation_id": "maps-1",
+  "data": {
+    "action_type": "steal_maps",
+    "unit_id": 42,
+    "target_city_id": 10,
+    "player_id": 1,
+    "game_id": "game-123"
+  }
+}
+```
+
+**Success Response:**
+```json
+{
+  "type": "action_result",
+  "agent_id": "my-agent",
+  "timestamp": 1234567890.124,
+  "correlation_id": "maps-1",
+  "data": {
+    "type": "action_result",
+    "success": true,
+    "action_type": "steal_maps",
+    "result": {
+      "unit_id": 42,
+      "target_city_id": 10,
+      "tiles_revealed": 523,
+      "detected": false,
+      "unit_consumed": false
+    }
+  }
+}
+```
+
+**Validation Rules:**
+1. `unit_id` must exist and belong to player
+2. Unit must be a spy or diplomat
+3. `target_city_id` must exist and not belong to player
+4. Unit must be in or adjacent to target city
+5. Unit must have movement points
+
+**Error Codes (Strategic Actions Range E630–E636):**
+- `E630`: Missing unit_id field
+- `E631`: Missing target_city_id field
+- `E632`: Unit not found
+- `E633`: Player does not own unit
+- `E634`: Unit must be spy or diplomat
+- `E635`: Target city not found
+- `E636`: Cannot steal maps from own city
+
+**Usage Notes:**
+- Reveals all terrain enemy has explored
+- Shows enemy city locations and borders
+- Does not reveal unit positions
+- Relatively low-risk spy mission
+- Can be repeated as enemy explores more
+- Useful for military planning and strategy
+- May be detected with small probability
+
+**Prompt Example:**
+```
+"Send spy unit 42 to steal maps from enemy city 10 to reveal their territory."
+```
+
+#### convert
+
+Converts a unit to a different type, religion, or government affiliation. The specific conversion depends on the unit type and ruleset configuration.
+
+**Request:**
+```json
+{
+  "type": "action",
+  "agent_id": "my-agent",
+  "timestamp": 1234567890.123,
+  "correlation_id": "convert-1",
+  "data": {
+    "action_type": "convert",
+    "unit_id": 42,
+    "player_id": 1,
+    "game_id": "game-123"
+  }
+}
+```
+
+**Success Response:**
+```json
+{
+  "type": "action_result",
+  "agent_id": "my-agent",
+  "timestamp": 1234567890.124,
+  "correlation_id": "convert-1",
+  "data": {
+    "type": "action_result",
+    "success": true,
+    "action_type": "convert",
+    "result": {
+      "unit_id": 42,
+      "converted": true,
+      "unit_type_before": "Fanatics",
+      "unit_type_after": "Riflemen"
+    }
+  }
+}
+```
+
+**Validation Rules:**
+1. `unit_id` must exist and belong to player
+2. Unit must have conversion capability (can_convert flag)
+3. Conversion must be allowed by ruleset
+4. Unit must not be busy or in combat
+
+**Error Codes (Strategic Actions Range E640–E643):**
+- `E640`: Missing unit_id field
+- `E641`: Unit not found
+- `E642`: Player does not own unit
+- `E643`: Unit cannot be converted
+
+**Usage Notes:**
+- Common use: government change converts fanatics
+- Religious units may convert between religions
+- Maintains unit experience and location
+- Free conversion (no gold cost typically)
+- Ruleset-specific availability
+- Useful for adapting to government changes
+
+**Prompt Example:**
+```
+"Convert fanatics unit 42 to regular riflemen after government change."
+```
+
+#### home_city
+
+Changes a unit's home city for support and production purposes. The unit will now be supported by and upgrade in the new home city.
+
+**Request:**
+```json
+{
+  "type": "action",
+  "agent_id": "my-agent",
+  "timestamp": 1234567890.123,
+  "correlation_id": "home-1",
+  "data": {
+    "action_type": "home_city",
+    "unit_id": 42,
+    "city_id": 10,
+    "player_id": 1,
+    "game_id": "game-123"
+  }
+}
+```
+
+**Success Response:**
+```json
+{
+  "type": "action_result",
+  "agent_id": "my-agent",
+  "timestamp": 1234567890.124,
+  "correlation_id": "home-1",
+  "data": {
+    "type": "action_result",
+    "success": true,
+    "action_type": "home_city",
+    "result": {
+      "unit_id": 42,
+      "old_home_city_id": 5,
+      "new_home_city_id": 10
+    }
+  }
+}
+```
+
+**Validation Rules:**
+1. `unit_id` must exist and belong to player
+2. `city_id` must exist and belong to player
+3. Unit must not be busy or in combat
+4. New home city must be able to support unit
+
+**Error Codes (Strategic Actions Range E650–E655):**
+- `E650`: Missing unit_id field
+- `E651`: Missing city_id field
+- `E652`: Unit not found
+- `E653`: Player does not own unit
+- `E654`: City not found
+- `E655`: Player does not own city
+
+**Usage Notes:**
+- Redistributes unit support costs between cities
+- Useful for managing city happiness and production
+- Military units benefit from home city improvements
+- Unit upgrades will happen in new home city
+- Can reduce unhappiness in overcrowded cities
+- Strategic for optimizing empire economy
+- Free action (no gold cost)
+
+**Prompt Example:**
+```
+"Change unit 42's home city to city 10 to balance support costs."
 ```
 
 #### trade_route
@@ -3306,3 +3736,175 @@ asyncio.run(intelligent_agent_v2())
 ---
 
 **End of Protocol Specification v2.0**
+
+---
+
+## Error Code Reference
+
+This section provides a comprehensive reference of all validation error codes used in the LLM Gateway.
+
+### General Validation (E001–E099)
+
+| Code | Description |
+|------|-------------|
+| E001 | Action must be a dictionary |
+| E002 | Action must specify a type |
+| E003 | Unknown action type |
+| E004 | Too many parameters (>20) |
+
+### Movement & Basic Actions (E100–E149)
+
+| Code | Description |
+|------|-------------|
+| E100 | Missing unit_id field |
+| E101 | Unit not found |
+| E102 | Player does not own unit |
+| E103 | Unit is busy |
+| E104 | Insufficient movement points |
+| E105 | Invalid coordinates |
+| E106 | Target coordinates out of bounds |
+| E107 | Cannot move to target tile (terrain restriction) |
+| E108 | Unit cannot perform this action |
+
+### Combat Actions (E109–E119)
+
+| Code | Description |
+|------|-------------|
+| E109 | Attacker unit not found |
+| E110 | Unit busy |
+| E111 | Insufficient movement points for attack |
+| E112 | Target too far (not in range) |
+| E113 | Player does not own attacker unit |
+| E114 | Unit cannot attack (not a military unit) |
+| E115 | Target not found or invalid |
+| E116 | Action not possible (server-determined) |
+
+### City Actions (E030–E041, E200–E249)
+
+| Code | Description |
+|------|-------------|
+| E030 | city_build_unit requires city_id |
+| E031 | city_build_unit requires unit_type |
+| E032 | City not found |
+| E033 | Player does not own city |
+| E034 | unit_type must be a string |
+| E035 | Unknown unit type |
+| E036 | city_build_improvement requires city_id |
+| E037 | city_build_improvement requires improvement |
+| E038 | City not found |
+| E039 | Player does not own city |
+| E040 | improvement must be a string |
+| E041 | Unknown improvement type |
+| E200 | Missing city_id field |
+| E201 | City not owned by player |
+| E202 | Invalid production target |
+| E203 | Insufficient gold for city_buy |
+
+### Technology Research (E250–E299)
+
+| Code | Description |
+|------|-------------|
+| E250 | Missing tech_name field |
+| E251 | Unknown technology |
+| E252 | Technology already researched |
+| E253 | Technology prerequisites not met |
+
+### Session & Lifecycle (E300–E309)
+
+| Code | Description |
+|------|-------------|
+| E300 | Game not in lobby (turn > 0) |
+| E301 | Player already marked ready |
+| E302 | Invalid session phase for readiness |
+| E303 | Nation not selected yet |
+| E304 | Player record not found in session |
+
+### Espionage & Trade (E400–E449)
+
+| Code | Description |
+|------|-------------|
+| E400 | Missing target_city_id |
+| E401 | Target city not found |
+| E402 | Unit is not a diplomat/spy |
+| E403 | Insufficient gold for operation |
+| E404 | Mission failed (server-determined) |
+| E410 | Trade route unit not found |
+| E411 | Invalid trade route (cities too close) |
+| E412 | Maximum trade routes reached |
+| E413 | Cities already connected |
+
+### Diplomacy (E500–E549)
+
+| Code | Description |
+|------|-------------|
+| E500 | diplomacy_message requires target_player_id |
+| E501 | diplomacy_message requires message_type |
+| E502 | Invalid message_type |
+| E503 | Cannot send diplomacy message to self |
+| E504 | Target player not found |
+| E505 | Message type not implemented |
+
+### Strategic Actions (E600–E655)
+
+| Code | Description |
+|------|-------------|
+| E600 | help_wonder requires unit_id |
+| E601 | help_wonder requires target_city_id |
+| E602 | Unit not found |
+| E603 | Player does not own unit |
+| E604 | City not found |
+| E605 | Player does not own city |
+| E610 | conquer_city requires unit_id |
+| E611 | conquer_city requires target_city_id |
+| E612 | Unit not found |
+| E613 | Player does not own unit |
+| E614 | Unit cannot attack (not a military unit) |
+| E615 | Target city not found |
+| E616 | Cannot conquer own city |
+| E620 | capture_units requires unit_id |
+| E621 | capture_units requires target_tile |
+| E622 | Unit not found |
+| E623 | Player does not own unit |
+| E624 | Unit cannot capture (lacks capture capability) |
+| E630 | steal_maps requires unit_id |
+| E631 | steal_maps requires target_city_id |
+| E632 | Unit not found |
+| E633 | Player does not own unit |
+| E634 | Unit must be spy or diplomat |
+| E635 | Target city not found |
+| E636 | Cannot steal maps from own city |
+| E640 | convert requires unit_id |
+| E641 | Unit not found |
+| E642 | Player does not own unit |
+| E643 | Unit cannot be converted |
+| E650 | home_city requires unit_id |
+| E651 | home_city requires city_id |
+| E652 | Unit not found |
+| E653 | Player does not own unit |
+| E654 | City not found |
+| E655 | Player does not own city |
+
+### Error Response Format
+
+All validation errors follow this structure:
+
+```json
+{
+  "type": "action_result",
+  "agent_id": "my-agent",
+  "timestamp": 1234567890.124,
+  "correlation_id": "action-123",
+  "data": {
+    "type": "action_result",
+    "success": false,
+    "action_type": "help_wonder",
+    "error": {
+      "code": "E602",
+      "message": "Unit not found",
+      "details": "Unit 999 does not exist in game state"
+    }
+  }
+}
+```
+
+---

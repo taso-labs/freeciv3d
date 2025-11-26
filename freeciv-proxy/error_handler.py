@@ -230,17 +230,19 @@ class ErrorHandler:
             self._cleanup_error_counts()
             self.last_cleanup = now
 
-        # Check error count in time window
-        if operation in self.error_counts:
-            recent_errors = [
-                timestamp for timestamp in self.error_counts[operation]
-                if now - timestamp < time_window
-            ]
+        # Check error count in time window across all error types for the operation
+        recent_errors_count = 0
+        for key, timestamps in self.error_counts.items():
+            if key.startswith(f"{operation}:"):
+                recent_errors = [
+                    timestamp for timestamp in timestamps
+                    if now - timestamp < time_window
+                ]
+                recent_errors_count += len(recent_errors)
 
-            if len(recent_errors) >= error_threshold:
-                logger.warning(f"Circuit breaker activated for {operation}: "
-                             f"{len(recent_errors)} errors in {time_window}s")
-                return True
+        if recent_errors_count >= error_threshold:
+            logger.warning(f"Circuit breaker activated for {operation}: {recent_errors_count} errors in {time_window}s")
+            return True
 
         return False
 

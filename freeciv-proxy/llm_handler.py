@@ -59,11 +59,24 @@ from fc_constants import (
     ACTION_SPY_BRIBE_UNIT,
     ACTION_SPY_STEAL_GOLD,
     ACTION_SPY_INCITE_CITY,
-    ACTION_TRADE_ROUTE
+    ACTION_TRADE_ROUTE,
+    ACTION_HELP_WONDER,
+    ACTION_MARKETPLACE,
+    ACTION_CAPTURE_UNITS,
+    ACTION_SPY_SABOTAGE_UNIT,
+    ACTION_STEAL_MAPS,
+    ACTION_EXPEL_UNIT,
+    ACTION_CONQUER_CITY,
+    ACTION_STRIKE_BUILDING,
+    ACTION_STRIKE_PRODUCTION,
+    ACTION_CONVERT,
+    ACTION_HOME_CITY
 )
 from packet_constants import (
     PACKET_CITY_CHANGE,
-    PACKET_DIPLOMACY_INIT_MEETING_REQ
+    PACKET_DIPLOMACY_INIT_MEETING_REQ,
+    PACKET_UNIT_DO_ACTION,
+    PACKET_PLAYER_RATES
 )
 
 logger = logging.getLogger("freeciv-proxy")
@@ -2854,22 +2867,22 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 'name': ''
             }
         elif action_type == 'city_build_unit':
-            # Convert unit type name to production value
+            # Convert unit type name to production value using canonical civcom.unit_types
             city_id = action.get('city_id')
             unit_type = action.get('unit_type')
             
             if not city_id or not unit_type:
                 return action  # Fallback to validation error
             
-            # Get ruleset to look up unit type
-            ruleset = self.civcom.clstate.ruleset_control if self.civcom and hasattr(self.civcom, 'clstate') else {}
+            # Look up unit type in canonical civcom.unit_types dictionary
             production_value = None
+            unit_type_lower = unit_type.lower()
             
-            # Search for unit type in ruleset
-            if ruleset and 'unit_types' in ruleset:
-                for idx, utype in enumerate(ruleset.get('unit_types', [])):
-                    if isinstance(utype, dict) and utype.get('name', '').lower() == unit_type.lower():
-                        production_value = idx
+            # Search civcom.unit_types for matching name
+            if self.civcom and hasattr(self.civcom, 'unit_types'):
+                for type_id, unit_packet in self.civcom.unit_types.items():
+                    if isinstance(unit_packet, dict) and unit_packet.get('name', '').lower() == unit_type_lower:
+                        production_value = type_id
                         break
             
             if production_value is None:
@@ -2884,22 +2897,22 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 'production_value': production_value
             }
         elif action_type == 'city_build_improvement':
-            # Convert improvement name to production value
+            # Convert improvement name to production value using canonical civcom.improvements
             city_id = action.get('city_id')
             improvement = action.get('improvement')
             
             if not city_id or not improvement:
                 return action  # Fallback to validation error
             
-            # Get ruleset to look up improvement type
-            ruleset = self.civcom.clstate.ruleset_control if self.civcom and hasattr(self.civcom, 'clstate') else {}
+            # Look up improvement in canonical civcom.improvements dictionary
             production_value = None
+            improvement_lower = improvement.lower()
             
-            # Search for improvement in ruleset
-            if ruleset and 'improvement_types' in ruleset:
-                for idx, imp in enumerate(ruleset.get('improvement_types', [])):
-                    if isinstance(imp, dict) and imp.get('name', '').lower() == improvement.lower():
-                        production_value = idx
+            # Search civcom.improvements for matching name
+            if self.civcom and hasattr(self.civcom, 'improvements'):
+                for building_id, building_packet in self.civcom.improvements.items():
+                    if isinstance(building_packet, dict) and building_packet.get('name', '').lower() == improvement_lower:
+                        production_value = building_id
                         break
             
             if production_value is None:
@@ -2930,6 +2943,197 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 # Other message types not yet implemented
                 logger.warning(f"Diplomacy message type {message_type} not yet implemented")
                 return action  # Fallback
+        elif action_type == 'help_wonder':
+            # Unit helps build wonder in city
+            unit_id = action.get('unit_id')
+            target_city_id = action.get('target_city_id')
+            
+            if not unit_id or not target_city_id:
+                return action  # Fallback to validation error
+            
+            return {
+                'pid': PACKET_UNIT_DO_ACTION,
+                'actor_id': unit_id,
+                'action_type': ACTION_HELP_WONDER,
+                'target_id': target_city_id,
+                'sub_tgt_id': 0,
+                'name': ''
+            }
+        elif action_type == 'conquer_city':
+            # Military unit conquers enemy city
+            unit_id = action.get('unit_id')
+            target_city_id = action.get('target_city_id')
+            
+            if not unit_id or not target_city_id:
+                return action  # Fallback to validation error
+            
+            return {
+                'pid': PACKET_UNIT_DO_ACTION,
+                'actor_id': unit_id,
+                'action_type': ACTION_CONQUER_CITY,
+                'target_id': target_city_id,
+                'sub_tgt_id': 0,
+                'name': ''
+            }
+        elif action_type == 'capture_units':
+            # Capture defeated units
+            unit_id = action.get('unit_id')
+            target_tile = action.get('target_tile')
+            
+            if not unit_id or not target_tile:
+                return action  # Fallback to validation error
+            
+            return {
+                'pid': PACKET_UNIT_DO_ACTION,
+                'actor_id': unit_id,
+                'action_type': ACTION_CAPTURE_UNITS,
+                'target_id': target_tile,
+                'sub_tgt_id': 0,
+                'name': ''
+            }
+        elif action_type == 'steal_maps':
+            # Spy steals enemy maps
+            unit_id = action.get('unit_id')
+            target_city_id = action.get('target_city_id')
+            
+            if not unit_id or not target_city_id:
+                return action  # Fallback to validation error
+            
+            return {
+                'pid': PACKET_UNIT_DO_ACTION,
+                'actor_id': unit_id,
+                'action_type': ACTION_STEAL_MAPS,
+                'target_id': target_city_id,
+                'sub_tgt_id': 0,
+                'name': ''
+            }
+        elif action_type == 'convert':
+            # Convert unit type
+            unit_id = action.get('unit_id')
+            
+            if not unit_id:
+                return action  # Fallback to validation error
+            
+            return {
+                'pid': PACKET_UNIT_DO_ACTION,
+                'actor_id': unit_id,
+                'action_type': ACTION_CONVERT,
+                'target_id': unit_id,  # Self-target
+                'sub_tgt_id': 0,
+                'name': ''
+            }
+        elif action_type == 'home_city':
+            # Change unit home city
+            unit_id = action.get('unit_id')
+            city_id = action.get('city_id')
+            
+            if not unit_id or not city_id:
+                return action  # Fallback to validation error
+            
+            return {
+                'pid': PACKET_UNIT_DO_ACTION,
+                'actor_id': unit_id,
+                'action_type': ACTION_HOME_CITY,
+                'target_id': city_id,
+                'sub_tgt_id': 0,
+                'name': ''
+            }
+        elif action_type == 'strike_building':
+            # Surgical strike on specific building
+            unit_id = action.get('unit_id')
+            target_city_id = action.get('target_city_id')
+            building_id = action.get('building_id')
+            
+            if not unit_id or not target_city_id or building_id is None:
+                return action  # Fallback to validation error
+            
+            return {
+                'pid': PACKET_UNIT_DO_ACTION,
+                'actor_id': unit_id,
+                'action_type': ACTION_STRIKE_BUILDING,
+                'target_id': target_city_id,
+                'sub_tgt_id': building_id,
+                'name': ''
+            }
+        elif action_type == 'strike_production':
+            # Surgical strike on city production
+            unit_id = action.get('unit_id')
+            target_city_id = action.get('target_city_id')
+            
+            if not unit_id or not target_city_id:
+                return action  # Fallback to validation error
+            
+            return {
+                'pid': PACKET_UNIT_DO_ACTION,
+                'actor_id': unit_id,
+                'action_type': ACTION_STRIKE_PRODUCTION,
+                'target_id': target_city_id,
+                'sub_tgt_id': 0,
+                'name': ''
+            }
+        elif action_type == 'marketplace':
+            # Convert caravan to gold at marketplace
+            unit_id = action.get('unit_id')
+            target_city_id = action.get('target_city_id')
+            
+            if not unit_id or not target_city_id:
+                return action  # Fallback to validation error
+            
+            return {
+                'pid': PACKET_UNIT_DO_ACTION,
+                'actor_id': unit_id,
+                'action_type': ACTION_MARKETPLACE,
+                'target_id': target_city_id,
+                'sub_tgt_id': 0,
+                'name': ''
+            }
+        elif action_type == 'expel_unit':
+            # Diplomatically expel foreign unit
+            unit_id = action.get('unit_id')
+            target_unit_id = action.get('target_unit_id')
+            
+            if not unit_id or not target_unit_id:
+                return action  # Fallback to validation error
+            
+            return {
+                'pid': PACKET_UNIT_DO_ACTION,
+                'actor_id': unit_id,
+                'action_type': ACTION_EXPEL_UNIT,
+                'target_id': target_unit_id,
+                'sub_tgt_id': 0,
+                'name': ''
+            }
+        elif action_type == 'spy_sabotage_unit':
+            # Spy sabotages specific enemy unit
+            unit_id = action.get('unit_id')
+            target_unit_id = action.get('target_unit_id')
+            
+            if not unit_id or not target_unit_id:
+                return action  # Fallback to validation error
+            
+            return {
+                'pid': PACKET_UNIT_DO_ACTION,
+                'actor_id': unit_id,
+                'action_type': ACTION_SPY_SABOTAGE_UNIT,
+                'target_id': target_unit_id,
+                'sub_tgt_id': 0,
+                'name': ''
+            }
+        elif action_type == 'player_rates':
+            # Set tax/science/luxury rates
+            tax_rate = action.get('tax_rate')
+            science_rate = action.get('science_rate')
+            luxury_rate = action.get('luxury_rate')
+            
+            if tax_rate is None or science_rate is None or luxury_rate is None:
+                return action  # Fallback to validation error
+            
+            return {
+                'pid': PACKET_PLAYER_RATES,
+                'tax': tax_rate,
+                'science': science_rate,
+                'luxury': luxury_rate
+            }
 
         return action  # Fallback
 

@@ -101,3 +101,16 @@ ACTION_SPY_STEAL_TECH = 14
 ACTION_SPY_INCITE_CITY = 18
 ACTION_TRADE_ROUTE = 20
 ACTION_SPY_BRIBE_UNIT = 23
+
+# Action Type Constants - Strategic Actions
+ACTION_HELP_WONDER = 21         # Help build wonder
+ACTION_MARKETPLACE = 21         # Enter marketplace (caravan/freight)
+ACTION_CAPTURE_UNITS = 24       # Capture defeated units
+ACTION_SPY_SABOTAGE_UNIT = 25   # Sabotage specific enemy unit
+ACTION_STEAL_MAPS = 10          # Spy steals enemy maps
+ACTION_EXPEL_UNIT = 37          # Diplomatically expel foreign unit
+ACTION_CONQUER_CITY = 47        # Conquer enemy city (multiple variants 47-50)
+ACTION_STRIKE_BUILDING = 47     # Surgical strike on specific building
+ACTION_STRIKE_PRODUCTION = 48   # Surgical strike on city production
+ACTION_CONVERT = 54             # Convert unit
+ACTION_HOME_CITY = 51           # Change unit home city

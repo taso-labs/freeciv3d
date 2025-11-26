@@ -40,6 +40,10 @@ from packet_constants import (
     PACKET_RULESET_BUILDING,
     PACKET_RULESET_EXTRA,
     PACKET_RULESET_TERRAIN,
+    PACKET_RULESET_TECH,
+    PACKET_RULESET_ACTION,
+    PACKET_RULESET_ACTION_ENABLER,
+    PACKET_RULESET_ACTION_AUTO,
     PACKET_CONN_PING,
     PACKET_CONN_PONG,
     get_packet_name
@@ -227,6 +231,12 @@ class CivCom(Thread):
         self._goto_paths = {}
         # Initialize lock eagerly to avoid races during lazy init from multiple threads
         self._goto_paths_lock = threading.RLock()
+
+        # Action-related ruleset data (currently unused but stored for potential future use)
+        # These could be used for advanced action validation or UI generation
+        self.actions = {}          # {action_id: PACKET_RULESET_ACTION data}
+        self.action_enablers = {}  # {enabler_id: PACKET_RULESET_ACTION_ENABLER data}
+        self.action_auto = {}      # {auto_id: PACKET_RULESET_ACTION_AUTO data}
 
     def _get_nation_name(self, nation_id):
         """Convert nation ID to human-readable name using nations registry.
@@ -853,6 +863,36 @@ class CivCom(Thread):
                 if terrain_id is not None and terrain_name:
                     self.terrains[terrain_id] = packet
                     logger.debug(f"Registered terrain: {terrain_name} (id={terrain_id})")
+
+            # RULESET tech packet - defines technology entries
+            elif packet_type == PACKET_RULESET_TECH:
+                tech_id = packet.get('id')
+                tech_name = packet.get('name') or packet.get('rule_name')
+                if tech_id is not None and tech_name:
+                    self.techs[tech_id] = packet
+                    logger.debug(f"Registered tech: {tech_name} (id={tech_id})")
+
+            # RULESET action packet - store for potential future use
+            # Currently not used by validators but available for advanced features
+            elif packet_type == PACKET_RULESET_ACTION:
+                action_id = packet.get('id')
+                if action_id is not None:
+                    self.actions[action_id] = packet
+                    logger.debug(f"Registered ruleset action: id={action_id} name={packet.get('name')}")
+
+            # RULESET action enabler - store for potential future use
+            elif packet_type == PACKET_RULESET_ACTION_ENABLER:
+                enabler_id = packet.get('id')
+                if enabler_id is not None:
+                    self.action_enablers[enabler_id] = packet
+                    logger.debug(f"Registered action enabler: id={enabler_id} name={packet.get('name')}")
+
+            # RULESET automatic action - store for potential future use
+            elif packet_type == PACKET_RULESET_ACTION_AUTO:
+                auto_id = packet.get('id')
+                if auto_id is not None:
+                    self.action_auto[auto_id] = packet
+                    logger.debug(f"Registered automatic action: id={auto_id} name={packet.get('name')}")
 
             # CRITICAL: Connection ping packet - MUST respond with pong to keep connection alive
             # FreeCiv civserver sends PACKET_CONN_PING every ~2 minutes to verify connection health
