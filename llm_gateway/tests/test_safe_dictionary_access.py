@@ -129,7 +129,7 @@ class TestSafeDictionaryAccess:
         }
 
         # Mock the connection_state_manager
-        with patch('main.connection_state_manager') as mock_csm:
+        with patch('llm_gateway.main.connection_state_manager') as mock_csm:
             async def mock_get_connection(gid):
                 return Mock()
 

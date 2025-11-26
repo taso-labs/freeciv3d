@@ -238,7 +238,7 @@ class TestGameStateEndpoint:
 
         client = TestClient(app)
 
-        with patch('main.gateway.get_game_state') as mock_get_state:
+        with patch('llm_gateway.main.gateway.get_game_state') as mock_get_state:
             mock_get_state.return_value = {
                 "success": True,
                 "format": "full",
@@ -451,7 +451,7 @@ class TestHealthEndpoint:
 
         client = TestClient(app)
 
-        with patch('main.gateway.get_health_status') as mock_health:
+        with patch('llm_gateway.main.gateway.get_health_status') as mock_health:
             mock_health.return_value = {
                 "status": "degraded",
                 "active_games": 10,  # At capacity
@@ -474,7 +474,7 @@ class TestHealthEndpoint:
 
         client = TestClient(app)
 
-        with patch('main.gateway.get_health_status') as mock_health:
+        with patch('llm_gateway.main.gateway.get_health_status') as mock_health:
             mock_health.return_value = {
                 "status": "unhealthy",
                 "error": "Cannot connect to FreeCiv proxy server"
@@ -500,7 +500,7 @@ class TestAuthenticationAndAuthorization:
 
         headers = {"Authorization": "Bearer valid-api-key"}
 
-        with patch('main.authenticate_api_key') as mock_auth:
+        with patch('llm_gateway.main.authenticate_api_key') as mock_auth:
             mock_auth.return_value = {"valid": True, "agent_id": "test-agent"}
 
             response = client.get("/api/game/game-123/state?player_id=1", headers=headers)
@@ -517,7 +517,7 @@ class TestAuthenticationAndAuthorization:
 
         headers = {"Authorization": "Bearer invalid-api-key"}
 
-        with patch('main.authenticate_api_key') as mock_auth:
+        with patch('llm_gateway.main.authenticate_api_key') as mock_auth:
             mock_auth.return_value = {"valid": False, "error": "Invalid API key"}
 
             response = client.get("/api/game/game-123/state?player_id=1", headers=headers)
@@ -535,7 +535,7 @@ class TestAuthenticationAndAuthorization:
 
         headers = {"Authorization": "Bearer valid-api-key"}
 
-        with patch('main.check_rate_limit') as mock_rate_limit:
+        with patch('llm_gateway.main.check_rate_limit') as mock_rate_limit:
             # First request should pass
             mock_rate_limit.return_value = {"allowed": True}
             response1 = client.get("/api/game/game-123/state?player_id=1", headers=headers)

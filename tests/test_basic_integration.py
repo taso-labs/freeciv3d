@@ -143,9 +143,8 @@ class TestBasicIntegration:
         try:
             import sys
             import os
-            sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'llm_gateway'))
-
-            from config import Settings, get_freeciv_proxy_url
+            # Import the package-qualified config from the llm_gateway package
+            from llm_gateway.config import Settings, get_freeciv_proxy_url
 
             # Test configuration creation
             settings = Settings()
