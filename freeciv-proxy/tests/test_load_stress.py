@@ -16,8 +16,13 @@ import concurrent.futures
 import threading
 import sys
 import os
+import secrets
 from typing import List, Dict, Any
 from unittest.mock import Mock
+
+# Generate HMAC secret for testing if not already set
+if 'CACHE_HMAC_SECRET' not in os.environ:
+    os.environ['CACHE_HMAC_SECRET'] = secrets.token_hex(32)
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -260,7 +265,7 @@ class TestLoadAndStress(unittest.TestCase):
 
         # Register test games
         for i in range(10):
-            civcom_registry.register_game(f'load_test_game_{i}', cls.mock_civcom)
+            civcom_registry.register_game(f'load_test_game_{i}', f'test_agent_{i}', cls.mock_civcom)
 
     def test_moderate_concurrent_load(self):
         """Test system under moderate concurrent load (10 users, 5 requests each)"""

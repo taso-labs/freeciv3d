@@ -132,7 +132,7 @@ class InputSanitizer:
         return value
 
     @classmethod
-    def sanitize_string_field(cls, value: Any, field_type: str, max_length: int = None) -> str:
+    def sanitize_string_field(cls, value: Any, field_type: str, max_length: int | None = None) -> str:
         """Sanitize and validate string fields"""
         if not isinstance(value, str):
             raise SecurityError(f"Invalid {field_type} type: {type(value)}")
@@ -266,8 +266,8 @@ class SecurityLogger:
     """
 
     @staticmethod
-    def log_authentication_attempt(agent_id: str, success: bool, ip_address: str = None,
-                                 session_id: str = None, details: str = None):
+    def log_authentication_attempt(agent_id: str, success: bool, ip_address: str | None = None,
+                                 session_id: str | None = None, details: str | None = None):
         """Log authentication attempts with enhanced context"""
         status = "SUCCESS" if success else "FAILED"
         log_data = {
@@ -286,8 +286,8 @@ class SecurityLogger:
             logger.warning(f"AUTH_{status}: {SecurityLogger._format_log_data(log_data)}")
 
     @staticmethod
-    def log_rate_limit_exceeded(agent_id: str, ip_address: str = None,
-                              limit_type: str = 'default', current_count: int = None):
+    def log_rate_limit_exceeded(agent_id: str, ip_address: str | None = None,
+                              limit_type: str = 'default', current_count: int | None = None):
         """Log rate limit violations with detailed metrics"""
         log_data = {
             'event': 'rate_limit_exceeded',
@@ -301,7 +301,7 @@ class SecurityLogger:
 
     @staticmethod
     def log_validation_error(agent_id: str, error_code: str, message: str,
-                           session_id: str = None, input_data: str = None):
+                           session_id: str | None = None, input_data: str | None = None):
         """Log validation errors with context"""
         log_data = {
             'event': 'validation_error',
@@ -316,7 +316,7 @@ class SecurityLogger:
 
     @staticmethod
     def log_security_violation(agent_id: str, violation_type: str, details: str,
-                             severity: str = 'medium', session_id: str = None):
+                             severity: str = 'medium', session_id: str | None = None):
         """Log security violations with severity levels"""
         log_data = {
             'event': 'security_violation',
@@ -334,8 +334,8 @@ class SecurityLogger:
             logger.warning(f"SECURITY_VIOLATION: {SecurityLogger._format_log_data(log_data)}")
 
     @staticmethod
-    def log_connection_event(agent_id: str, event_type: str, details: str = None,
-                           session_id: str = None, ip_address: str = None):
+    def log_connection_event(agent_id: str, event_type: str, details: str | None = None,
+                           session_id: str | None = None, ip_address: str | None = None):
         """Log connection events with session context"""
         log_data = {
             'event': 'connection',
@@ -350,7 +350,7 @@ class SecurityLogger:
 
     @staticmethod
     def log_session_event(session_id: str, agent_id: str, event_type: str,
-                         details: str = None, metadata: dict = None):
+                         details: str | None = None, metadata: dict | None = None):
         """Log session-specific events"""
         log_data = {
             'event': 'session',
@@ -365,7 +365,7 @@ class SecurityLogger:
 
     @staticmethod
     def log_action_attempt(agent_id: str, action_type: str, success: bool,
-                          session_id: str = None, validation_errors: list = None):
+                          session_id: str | None = None, validation_errors: list | None = None):
         """Log action execution attempts"""
         status = "SUCCESS" if success else "FAILED"
         log_data = {
@@ -384,8 +384,8 @@ class SecurityLogger:
             logger.warning(f"ACTION_{status}: {SecurityLogger._format_log_data(log_data)}")
 
     @staticmethod
-    def log_cache_event(event_type: str, cache_key: str, player_id: int = None,
-                       success: bool = True, error: str = None):
+    def log_cache_event(event_type: str, cache_key: str, player_id: int | None = None,
+                       success: bool = True, error: str | None = None):
         """Log cache-related security events"""
         log_data = {
             'event': 'cache',
@@ -404,7 +404,7 @@ class SecurityLogger:
 
     @staticmethod
     def log_performance_warning(operation: str, duration_ms: float, threshold_ms: float,
-                              agent_id: str = None, details: str = None):
+                              agent_id: str | None = None, details: str | None = None):
         """Log performance warnings for security monitoring"""
         log_data = {
             'event': 'performance_warning',

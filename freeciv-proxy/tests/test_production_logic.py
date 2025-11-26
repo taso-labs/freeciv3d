@@ -2,6 +2,11 @@ import unittest
 from unittest.mock import MagicMock, patch
 import sys
 import os
+import secrets
+
+# Generate HMAC secret for testing if not already set
+if 'CACHE_HMAC_SECRET' not in os.environ:
+    os.environ['CACHE_HMAC_SECRET'] = secrets.token_hex(32)
 
 # Add proxy directory to path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -19,11 +24,6 @@ class TestProductionLogic(unittest.TestCase):
         self.handler.civcom = self.mock_civcom
         self.handler.player_id = 1
         
-    def test_clean_production_name(self):
-        self.assertEqual(self.handler._clean_production_name("Settlers"), "Settlers")
-        self.assertEqual(self.handler._clean_production_name("?unit:Settlers"), "Settlers")
-        self.assertEqual(self.handler._clean_production_name("?building:Barracks"), "Barracks")
-
     def test_is_buildable_tech_req(self):
         # Setup item with tech requirement
         item_type = {

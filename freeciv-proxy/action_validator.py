@@ -113,6 +113,11 @@ class ActionType(Enum):
     CULTIVATE = "cultivate"
     PLANT = "plant"
     BASE = "base"
+    # Phase 7: City Production
+    CITY_BUILD_UNIT = "city_build_unit"
+    CITY_BUILD_IMPROVEMENT = "city_build_improvement"
+    # Phase 7: Diplomacy
+    DIPLOMACY_MESSAGE = "diplomacy_message"
 
 class LLMActionValidator:
     """
@@ -171,6 +176,11 @@ class LLMActionValidator:
         ActionType.CULTIVATE,
         ActionType.PLANT,
         ActionType.BASE,
+        # Phase 7: City production actions
+        ActionType.CITY_BUILD_UNIT,
+        ActionType.CITY_BUILD_IMPROVEMENT,
+        # Phase 7: Diplomacy actions
+        ActionType.DIPLOMACY_MESSAGE,
     ]
 
     # Restricted actions that require special permissions
@@ -309,6 +319,14 @@ class LLMActionValidator:
             result = self._validate_plant(action, player_id, game_state)
         elif action_type == ActionType.BASE:
             result = self._validate_base(action, player_id, game_state)
+        elif action_type == ActionType.UNIT_EXPLORE:
+            result = self._validate_unit_explore(action, player_id, game_state)
+        elif action_type == ActionType.CITY_BUILD_UNIT:
+            result = self._validate_city_build_unit(action, player_id, game_state)
+        elif action_type == ActionType.CITY_BUILD_IMPROVEMENT:
+            result = self._validate_city_build_improvement(action, player_id, game_state)
+        elif action_type == ActionType.DIPLOMACY_MESSAGE:
+            result = self._validate_diplomacy_message(action, player_id, game_state)
         else:
             # Default validation for other action types
             result = self._validate_basic_action(action, player_id, game_state)
@@ -2189,3 +2207,113 @@ class LLMActionValidator:
             return False
 
         return True
+
+    def _validate_unit_explore(self, action: Dict[str, Any], player_id: int, game_state: Optional[Dict[str, Any]]) -> ValidationResult:
+        """Validate unit_explore action"""
+        # Required fields
+        if 'unit_id' not in action:
+            return self._validation_error('E120', 'unit_explore requires unit_id')
+        
+        unit_id = action['unit_id']
+        
+        # Validate unit exists and is owned by player
+        if game_state and 'units' in game_state:
+            units = game_state['units']
+            unit = units.get(str(unit_id)) if isinstance(units, dict) else None
+            if not unit:
+                return self._validation_error('E121', f'Unit {unit_id} not found')
+            if unit.get('owner') != player_id:
+                return self._validation_error('E122', 'Player does not own unit')
+            
+            # Check unit can explore (settlers/workers typically can't)
+            unit_type = unit.get('type', '').lower()
+            non_explorer_types = ['settlers', 'worker', 'engineers']
+            if any(t in unit_type for t in non_explorer_types):
+                return self._validation_error('E123', f'Unit type {unit_type} cannot auto-explore')
+            
+            # Check movement points
+            if unit.get('moves_left', 0) <= 0:
+                return self._validation_error('E124', 'Unit has no movement points')
+        
+        return ValidationResult(is_valid=True)
+
+    def _validate_city_build_unit(self, action: Dict[str, Any], player_id: int, game_state: Optional[Dict[str, Any]]) -> ValidationResult:
+        """Validate city_build_unit action"""
+        # Required fields
+        if 'city_id' not in action:
+            return self._validation_error('E030', 'city_build_unit requires city_id')
+        if 'unit_type' not in action:
+            return self._validation_error('E031', 'city_build_unit requires unit_type')
+        
+        city_id = action['city_id']
+        unit_type = action['unit_type']
+        
+        # Validate city exists and is owned by player
+        if game_state and 'cities' in game_state:
+            cities = game_state['cities']
+            city = cities.get(str(city_id)) if isinstance(cities, dict) else None
+            if not city:
+                return self._validation_error('E032', f'City {city_id} not found')
+            if city.get('owner') != player_id:
+                return self._validation_error('E033', 'Player does not own city')
+        
+        # Validate unit_type is a string
+        if not isinstance(unit_type, str):
+            return self._validation_error('E034', 'unit_type must be a string')
+        
+        return ValidationResult(is_valid=True)
+
+    def _validate_city_build_improvement(self, action: Dict[str, Any], player_id: int, game_state: Optional[Dict[str, Any]]) -> ValidationResult:
+        """Validate city_build_improvement action"""
+        # Required fields
+        if 'city_id' not in action:
+            return self._validation_error('E036', 'city_build_improvement requires city_id')
+        if 'improvement' not in action:
+            return self._validation_error('E037', 'city_build_improvement requires improvement')
+        
+        city_id = action['city_id']
+        improvement = action['improvement']
+        
+        # Validate city exists and is owned by player
+        if game_state and 'cities' in game_state:
+            cities = game_state['cities']
+            city = cities.get(str(city_id)) if isinstance(cities, dict) else None
+            if not city:
+                return self._validation_error('E038', f'City {city_id} not found')
+            if city.get('owner') != player_id:
+                return self._validation_error('E039', 'Player does not own city')
+        
+        # Validate improvement is a string
+        if not isinstance(improvement, str):
+            return self._validation_error('E040', 'improvement must be a string')
+        
+        return ValidationResult(is_valid=True)
+
+    def _validate_diplomacy_message(self, action: Dict[str, Any], player_id: int, game_state: Optional[Dict[str, Any]]) -> ValidationResult:
+        """Validate diplomacy_message action"""
+        # Required fields
+        if 'target_player_id' not in action:
+            return self._validation_error('E500', 'diplomacy_message requires target_player_id')
+        if 'message_type' not in action:
+            return self._validation_error('E501', 'diplomacy_message requires message_type')
+        
+        target_player_id = action['target_player_id']
+        message_type = action['message_type']
+        
+        # Validate message_type is valid
+        valid_types = ['treaty_request', 'declare_war', 'make_peace', 'cancel_treaty', 'share_vision']
+        if message_type not in valid_types:
+            return self._validation_error('E502', f'Invalid message_type. Must be one of: {valid_types}')
+        
+        # Can't send diplomacy to self
+        if target_player_id == player_id:
+            return self._validation_error('E503', 'Cannot send diplomacy message to self')
+        
+        # Validate target player exists
+        if game_state and 'players' in game_state:
+            players = game_state['players']
+            target = players.get(str(target_player_id)) if isinstance(players, dict) else None
+            if not target:
+                return self._validation_error('E504', f'Target player {target_player_id} not found')
+        
+        return ValidationResult(is_valid=True)

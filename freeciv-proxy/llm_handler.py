@@ -61,6 +61,10 @@ from fc_constants import (
     ACTION_SPY_INCITE_CITY,
     ACTION_TRADE_ROUTE
 )
+from packet_constants import (
+    PACKET_CITY_CHANGE,
+    PACKET_DIPLOMACY_INIT_MEETING_REQ
+)
 
 logger = logging.getLogger("freeciv-proxy")
 logger.setLevel(logging.DEBUG)
@@ -2849,6 +2853,83 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 'sub_tgt_id': 0,
                 'name': ''
             }
+        elif action_type == 'city_build_unit':
+            # Convert unit type name to production value
+            city_id = action.get('city_id')
+            unit_type = action.get('unit_type')
+            
+            if not city_id or not unit_type:
+                return action  # Fallback to validation error
+            
+            # Get ruleset to look up unit type
+            ruleset = self.civcom.clstate.ruleset_control if self.civcom and hasattr(self.civcom, 'clstate') else {}
+            production_value = None
+            
+            # Search for unit type in ruleset
+            if ruleset and 'unit_types' in ruleset:
+                for idx, utype in enumerate(ruleset.get('unit_types', [])):
+                    if isinstance(utype, dict) and utype.get('name', '').lower() == unit_type.lower():
+                        production_value = idx
+                        break
+            
+            if production_value is None:
+                # Return error action - will be caught by handler
+                logger.warning(f"Unknown unit type: {unit_type}")
+                return action  # Fallback
+            
+            return {
+                'pid': PACKET_CITY_CHANGE,
+                'city_id': city_id,
+                'production_kind': 0,  # 0 = unit
+                'production_value': production_value
+            }
+        elif action_type == 'city_build_improvement':
+            # Convert improvement name to production value
+            city_id = action.get('city_id')
+            improvement = action.get('improvement')
+            
+            if not city_id or not improvement:
+                return action  # Fallback to validation error
+            
+            # Get ruleset to look up improvement type
+            ruleset = self.civcom.clstate.ruleset_control if self.civcom and hasattr(self.civcom, 'clstate') else {}
+            production_value = None
+            
+            # Search for improvement in ruleset
+            if ruleset and 'improvement_types' in ruleset:
+                for idx, imp in enumerate(ruleset.get('improvement_types', [])):
+                    if isinstance(imp, dict) and imp.get('name', '').lower() == improvement.lower():
+                        production_value = idx
+                        break
+            
+            if production_value is None:
+                # Return error action - will be caught by handler
+                logger.warning(f"Unknown improvement: {improvement}")
+                return action  # Fallback
+            
+            return {
+                'pid': PACKET_CITY_CHANGE,
+                'city_id': city_id,
+                'production_kind': 1,  # 1 = improvement
+                'production_value': production_value
+            }
+        elif action_type == 'diplomacy_message':
+            # Basic diplomacy support - treaty request only
+            target_player_id = action.get('target_player_id')
+            message_type = action.get('message_type')
+            
+            if not target_player_id or not message_type:
+                return action  # Fallback to validation error
+            
+            if message_type == 'treaty_request':
+                return {
+                    'pid': PACKET_DIPLOMACY_INIT_MEETING_REQ,
+                    'counterpart': target_player_id
+                }
+            else:
+                # Other message types not yet implemented
+                logger.warning(f"Diplomacy message type {message_type} not yet implemented")
+                return action  # Fallback
 
         return action  # Fallback
 

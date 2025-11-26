@@ -11,7 +11,13 @@ import json
 import time
 import hmac
 import hashlib
+import secrets
+import os
 from unittest.mock import Mock, patch, MagicMock
+
+# Generate HMAC secret for testing if not already set
+if 'CACHE_HMAC_SECRET' not in os.environ:
+    os.environ['CACHE_HMAC_SECRET'] = secrets.token_hex(32)
 
 # Import the modules to test
 from message_validator import MessageValidator, ValidationError
