@@ -10,12 +10,14 @@ import json
 from unittest.mock import Mock, AsyncMock, patch, MagicMock
 from fastapi.testclient import TestClient
 
-# Import the modules we're testing (these don't exist yet - TDD!)
-import sys
-import os
-sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
-from main import app
-from api_endpoints import GameConfig, FreeCivAction
+# Import the modules we're testing from the package
+try:
+    from llm_gateway.main import app
+    from llm_gateway.api_endpoints import GameConfig, FreeCivAction
+except ImportError:
+    app = None
+    GameConfig = None
+    FreeCivAction = None
 
 class TestGameCreationEndpoint:
     """Test /api/game/create endpoint"""
@@ -34,7 +36,7 @@ class TestGameCreationEndpoint:
             "ai_level": "easy"
         }
 
-        with patch('main.gateway.create_game') as mock_create:
+        with patch('llm_gateway.main.gateway.create_game') as mock_create:
             mock_create.return_value = {
                 "success": True,
                 "game_id": "game-123",
@@ -83,7 +85,7 @@ class TestGameCreationEndpoint:
             "map_size": "small"
         }
 
-        with patch('main.gateway.create_game') as mock_create:
+        with patch('llm_gateway.main.gateway.create_game') as mock_create:
             mock_create.side_effect = Exception("FreeCiv server unavailable")
 
             response = client.post("/api/game/create", json=game_config)
@@ -105,7 +107,7 @@ class TestGameCreationEndpoint:
             "map_size": "small"
         }
 
-        with patch('main.gateway.create_game') as mock_create:
+        with patch('llm_gateway.main.gateway.create_game') as mock_create:
             mock_create.return_value = {
                 "success": False,
                 "error": "Maximum concurrent games (10) exceeded"
@@ -128,7 +130,7 @@ class TestGameStateEndpoint:
 
         client = TestClient(app)
 
-        with patch('main.gateway.get_game_state') as mock_get_state:
+        with patch('llm_gateway.main.gateway.get_game_state') as mock_get_state:
             mock_get_state.return_value = {
                 "success": True,
                 "format": "llm_optimized",
@@ -158,7 +160,7 @@ class TestGameStateEndpoint:
 
         client = TestClient(app)
 
-        with patch('main.gateway.get_game_state') as mock_get_state:
+        with patch('llm_gateway.main.gateway.get_game_state') as mock_get_state:
             mock_get_state.return_value = {
                 "success": True,
                 "format": "full",
@@ -198,7 +200,7 @@ class TestGameStateEndpoint:
 
         client = TestClient(app)
 
-        with patch('main.gateway.get_game_state') as mock_get_state:
+        with patch('llm_gateway.main.gateway.get_game_state') as mock_get_state:
             mock_get_state.return_value = {
                 "success": False,
                 "error": "Game not found: invalid-game"
@@ -217,7 +219,7 @@ class TestGameStateEndpoint:
 
         client = TestClient(app)
 
-        with patch('main.gateway.get_game_state') as mock_get_state:
+        with patch('llm_gateway.main.gateway.get_game_state') as mock_get_state:
             mock_get_state.return_value = {
                 "success": False,
                 "error": "Player 999 not authorized for game game-123"
@@ -273,7 +275,7 @@ class TestActionSubmissionEndpoint:
             "player_id": 1
         }
 
-        with patch('main.gateway.submit_action') as mock_submit:
+        with patch('llm_gateway.main.gateway.submit_action') as mock_submit:
             mock_submit.return_value = {
                 "success": True,
                 "action_id": "action-456",
@@ -338,7 +340,7 @@ class TestActionSubmissionEndpoint:
             "player_id": 1
         }
 
-        with patch('main.gateway.submit_action') as mock_submit:
+        with patch('llm_gateway.main.gateway.submit_action') as mock_submit:
             mock_submit.return_value = {
                 "success": False,
                 "error": "Unit 999 does not exist or is not owned by player 1"
@@ -364,7 +366,7 @@ class TestActionSubmissionEndpoint:
             "player_id": 1
         }
 
-        with patch('main.gateway.submit_action') as mock_submit:
+        with patch('llm_gateway.main.gateway.submit_action') as mock_submit:
             mock_submit.return_value = {
                 "success": False,
                 "error": "Game not found: invalid-game"
@@ -398,7 +400,7 @@ class TestActionSubmissionEndpoint:
             }
         ]
 
-        with patch('main.gateway.submit_actions_batch') as mock_submit_batch:
+        with patch('llm_gateway.main.gateway.submit_actions_batch') as mock_submit_batch:
             mock_submit_batch.return_value = {
                 "success": True,
                 "results": [
@@ -425,7 +427,7 @@ class TestHealthEndpoint:
 
         client = TestClient(app)
 
-        with patch('main.gateway.get_health_status') as mock_health:
+        with patch('llm_gateway.main.gateway.get_health_status') as mock_health:
             mock_health.return_value = {
                 "status": "healthy",
                 "active_games": 3,

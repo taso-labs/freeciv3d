@@ -49,9 +49,7 @@ class TestBasicIntegration:
         try:
             import sys
             import os
-            sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'llm-gateway'))
-
-            from main import LLMGateway
+            from llm_gateway.main import LLMGateway
 
             # Test gateway creation
             gateway = LLMGateway()
@@ -104,9 +102,7 @@ class TestBasicIntegration:
 
             # Add both component paths
             sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'freeciv-proxy', 'protocol'))
-            sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'llm-gateway'))
-
-            # Import from both components
+            from llm_gateway.config import Settings, get_freeciv_proxy_url
             from llm_protocol import MessageType, LLMMessage
             from message_handlers import MessageHandlerRegistry
             from main import LLMGateway
@@ -147,7 +143,7 @@ class TestBasicIntegration:
         try:
             import sys
             import os
-            sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'llm-gateway'))
+            sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'llm_gateway'))
 
             from config import Settings, get_freeciv_proxy_url
 

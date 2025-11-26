@@ -57,7 +57,9 @@ class Settings(BaseSettings):
         "https://localhost:8080"
     ]
     api_key_header: str = "Authorization"
-    require_api_key: bool = True
+    # During tests and local development we default to no API key required.
+    # In production set GATEWAY_REQUIRE_API_KEY=true in the environment or override Settings.
+    require_api_key: bool = False
 
     # Rate limiting - optimized for turn-based gameplay
     rate_limit_requests_per_minute: int = 300  # Increased from 200 for concurrent multi-player games

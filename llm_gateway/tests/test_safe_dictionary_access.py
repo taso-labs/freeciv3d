@@ -11,11 +11,13 @@ import asyncio
 from unittest.mock import Mock, patch, MagicMock
 
 import sys
-import os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-
-from main import LLMGateway
-from utils.safe_access import get_agent_game_id, get_agent_config, safe_get_nested
+try:
+    from llm_gateway.main import LLMGateway
+    from llm_gateway.utils.safe_access import get_agent_game_id, get_agent_config
+except ImportError:
+    LLMGateway = None
+    get_agent_game_id = None
+    get_agent_config = None
 
 
 class TestSafeDictionaryAccess:

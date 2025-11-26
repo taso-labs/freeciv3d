@@ -286,7 +286,7 @@ WHERE host = ? AND port = ?
 
 ##### MetaserverClient (Python)
 
-The llm-gateway provides a Python client for calling these servlets ([metaserver_client.py](llm-gateway/metaserver_client.py)):
+The llm-gateway provides a Python client for calling these servlets ([metaserver_client.py](llm_gateway/metaserver_client.py)):
 
 ```python
 from llm_gateway.metaserver_client import metaserver_client
@@ -307,7 +307,7 @@ await metaserver_client.release_server("localhost", 6001)
 - **Clean Separation**: Server lifecycle management (servlets) separate from game communication (llm-gateway)
 - **Scalability**: Easy to add more servers by updating the `servers` table
 
-For complete API documentation, see [llm-gateway/README.md](llm-gateway/README.md).
+For complete API documentation, see [llm_gateway/README.md](llm_gateway/README.md).
 
 #### Service Startup Sequence
 

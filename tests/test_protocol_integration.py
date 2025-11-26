@@ -16,12 +16,11 @@ try:
     import sys
     import os
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'freeciv-proxy', 'protocol'))
-    sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'llm-gateway'))
 
     from llm_protocol import MessageType, LLMMessage, create_connect_message, create_state_query_message
     from message_handlers import MessageHandlerRegistry
-    from main import LLMGateway
-    from connection_manager import ConnectionManager
+    from llm_gateway.main import LLMGateway
+    from llm_gateway.connection_manager import ConnectionManager
 except ImportError as e:
     pytest.skip(f"Integration test modules not available: {e}", allow_module_level=True)
 

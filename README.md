@@ -47,7 +47,7 @@ Freeciv-Web consists of these components:
   multiple Freeciv server processes and checks capacity through the Metaserver.
   Implemented in Python.
 
-* [LLM Gateway](llm-gateway) - a FastAPI-based WebSocket gateway that enables AI agent integration.
+* [LLM Gateway](llm_gateway) - a FastAPI-based WebSocket gateway that enables AI agent integration.
   Provides a pass-through layer for game_arena LLM agents to control FreeCiv games via WebSocket API.
   Includes connection management, rate limiting, authentication, and message transformation.
   Implemented in Python. **(Starts automatically with sensible defaults)**
@@ -63,7 +63,7 @@ graph LR
 
     subgraph "Gateway Layer"
         N[nginx<br/>Port 80]
-        G[llm-gateway<br/>Port 8003]
+        G[llm_gateway<br/>Port 8003]
     end
 
     subgraph "Application Layer"
@@ -109,7 +109,7 @@ graph LR
 
 **Standard players** connect via web browser → nginx → Tomcat → freeciv-proxy → civserver
 
-**LLM agents** connect via WebSocket → llm-gateway → freeciv-proxy → civserver
+**LLM agents** connect via WebSocket → llm_gateway → freeciv-proxy → civserver
 
 For detailed integration documentation, see [Technical Spec.md](Technical%20Spec.md).
 

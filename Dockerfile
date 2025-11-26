@@ -101,7 +101,7 @@ COPY --chown=docker:docker freeciv /docker/freeciv
 COPY --chown=docker:docker freeciv-proxy /docker/freeciv-proxy
 COPY --chown=docker:docker freeciv-web /docker/freeciv-web
 COPY --chown=docker:docker publite2 /docker/publite2
-COPY --chown=docker:docker llm-gateway /docker/llm-gateway
+COPY --chown=docker:docker llm_gateway /docker/llm_gateway
 COPY --chown=docker:docker LICENSE.md /docker/LICENSE.md
 COPY --chown=docker:docker --chmod=755 scripts /docker/scripts
 COPY --chown=docker:docker config /docker/config
@@ -135,12 +135,12 @@ COPY --from=tomcat-builder --chown=docker:docker /docker/config /docker/config
 COPY --from=tomcat-builder --chown=docker:docker /docker/freeciv-proxy /docker/freeciv-proxy
 COPY --from=tomcat-builder --chown=docker:docker /docker/freeciv-web/*.sh /docker/freeciv-web/
 COPY --from=tomcat-builder --chown=docker:docker /docker/LICENSE.md /docker/LICENSE.md
-COPY --from=tomcat-builder --chown=docker:docker /docker/llm-gateway /docker/llm-gateway
+COPY --from=tomcat-builder --chown=docker:docker /docker/llm_gateway /docker/llm_gateway
 COPY --from=tomcat-builder --chown=docker:docker /docker/publite2 /docker/publite2
 COPY --from=tomcat-builder --chown=docker:docker /docker/scripts /docker/scripts
 
 # Install Python dependencies for freeciv-proxy and LLM Gateway
-WORKDIR /docker/llm-gateway
+WORKDIR /docker/llm_gateway
 RUN --mount=type=cache,uid=1001,gid=1001,target=/root/.cache/pip \
     --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \

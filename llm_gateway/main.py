@@ -1002,9 +1002,10 @@ async def health_check(request: Request):
 def setup_routes():
     """Setup API routes and WebSocket handlers"""
     try:
-        from api_endpoints import router as api_router
+        # Prefer package-relative imports so this module works when loaded as a package
+        from . import api_endpoints
+        api_router = api_endpoints.router
         # Update the gateway reference in api_endpoints
-        import api_endpoints
         api_endpoints.gateway = gateway
         app.include_router(api_router, prefix="/api")
         logger.info("API endpoints registered")
@@ -1012,11 +1013,10 @@ def setup_routes():
         logger.warning(f"API endpoints not available: {e}")
 
     try:
-        from websocket_handlers import register_websocket_routes
+        from . import websocket_handlers
         # Update the gateway reference in websocket_handlers
-        import websocket_handlers
         websocket_handlers.gateway = gateway
-        register_websocket_routes(app)
+        websocket_handlers.register_websocket_routes(app)
         logger.info("WebSocket handlers registered")
     except ImportError as e:
         logger.warning(f"WebSocket handlers not available: {e}")

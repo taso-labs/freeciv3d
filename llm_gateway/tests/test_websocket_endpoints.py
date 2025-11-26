@@ -11,15 +11,11 @@ import json
 from unittest.mock import Mock, AsyncMock, patch, MagicMock
 from fastapi.testclient import TestClient
 
-# Import the modules we're testing (these don't exist yet - TDD!)
+# Import the modules we're testing from the package
 try:
-    import sys
-    import os
-    sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
-    from main import app
-    from websocket_handlers import AgentWebSocketHandler
+    from llm_gateway.main import app
+    from llm_gateway.websocket_handlers import AgentWebSocketHandler
 except ImportError:
-    # Will fail initially until we implement the module
     app = None
     AgentWebSocketHandler = None
 
@@ -63,7 +59,7 @@ class TestAgentWebSocketEndpoint:
                 websocket.receive_json()
 
                 # Send authentication
-                with patch('main.gateway.authenticate_agent') as mock_auth:
+                with patch('llm_gateway.main.gateway.authenticate_agent') as mock_auth:
                     mock_auth.return_value = {
                         "success": True,
                         "session_id": "session-456",
@@ -100,7 +96,7 @@ class TestAgentWebSocketEndpoint:
                 websocket.receive_json()
 
                 # Send authentication
-                with patch('main.gateway.authenticate_agent') as mock_auth:
+                with patch('llm_gateway.main.gateway.authenticate_agent') as mock_auth:
                     mock_auth.return_value = {
                         "success": False,
                         "error": "Invalid API token"
@@ -135,7 +131,7 @@ class TestAgentWebSocketEndpoint:
                 self._authenticate_agent(websocket)
 
                 # Send state query
-                with patch('main.gateway.get_game_state') as mock_state:
+                with patch('llm_gateway.main.gateway.get_game_state') as mock_state:
                     mock_state.return_value = {
                         "success": True,
                         "format": "llm_optimized",
@@ -176,7 +172,7 @@ class TestAgentWebSocketEndpoint:
                 self._authenticate_agent(websocket)
 
                 # Send action
-                with patch('main.gateway.submit_action') as mock_action:
+                with patch('llm_gateway.main.gateway.submit_action') as mock_action:
                     mock_action.return_value = {
                         "success": True,
                         "action_id": "action-789"
@@ -196,7 +192,7 @@ class TestAgentWebSocketEndpoint:
             pytest.skip("FastAPI app not implemented yet")
 
         with TestClient(app) as client:
-            with patch('main.gateway.handle_agent_disconnect') as mock_disconnect:
+            with patch('llm_gateway.main.gateway.handle_agent_disconnect') as mock_disconnect:
                 with client.websocket_connect("/ws/agent/test-agent") as websocket:
                     # Authenticate
                     self._authenticate_agent(websocket)
@@ -265,7 +261,7 @@ class TestAgentWebSocketEndpoint:
             }
         }
 
-        with patch('main.gateway.authenticate_agent') as mock_auth:
+        with patch('llm_gateway.main.gateway.authenticate_agent') as mock_auth:
             mock_auth.return_value = {
                 "success": True,
                 "session_id": "session-456",
@@ -295,7 +291,7 @@ class TestWebSocketConnectionLimits:
                     connections.append(ws.__enter__())
 
                 # Third connection should be rejected or limited
-                with patch('main.gateway.check_connection_limit') as mock_limit:
+                with patch('llm_gateway.main.gateway.check_connection_limit') as mock_limit:
                     mock_limit.return_value = {"allowed": False, "reason": "Too many connections"}
 
                     with client.websocket_connect("/ws/agent/test-agent-overflow") as ws:
@@ -314,7 +310,7 @@ class TestWebSocketConnectionLimits:
             pytest.skip("FastAPI app not implemented yet")
 
         with TestClient(app) as client:
-            with patch('main.gateway.get_connection_timeout') as mock_timeout:
+            with patch('llm_gateway.main.gateway.get_connection_timeout') as mock_timeout:
                 mock_timeout.return_value = 1  # 1 second timeout for testing
 
                 with client.websocket_connect("/ws/agent/timeout-test") as websocket:

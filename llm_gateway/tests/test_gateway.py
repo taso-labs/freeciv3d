@@ -11,14 +11,11 @@ import json
 from unittest.mock import Mock, AsyncMock, patch, MagicMock
 from fastapi.testclient import TestClient
 
-# Import the modules we're testing (these don't exist yet - TDD!)
+# Import the modules we're testing from the package
 try:
-    import sys
-    import os
-    sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
-    from main import app, LLMGateway
-    from connection_manager import ConnectionManager
-    from config import Settings
+    from llm_gateway.main import app, LLMGateway
+    from llm_gateway.connection_manager import ConnectionManager
+    from llm_gateway.config import Settings
 except ImportError:
     # Will fail initially until we implement the module
     app = None
