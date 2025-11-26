@@ -80,7 +80,6 @@ from packet_constants import (
 )
 
 logger = logging.getLogger("freeciv-proxy")
-logger.setLevel(logging.DEBUG)
 
 # Add file handler for persistent debug logging
 import os

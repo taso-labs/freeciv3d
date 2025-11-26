@@ -3,13 +3,11 @@ import secrets
 import pytest
 from unittest.mock import Mock
 
-@pytest.fixture(autouse=True, scope="session")
-def test_env():
-    """Ensure required env vars exist for tests."""
-    os.environ.setdefault("CACHE_HMAC_SECRET", secrets.token_hex(32))
-    os.environ.setdefault("AUTH_ENABLED", "false")
-    os.environ.setdefault("API_KEY_SECRET", "test-secret")
-    yield
+# Set environment variables at module import time (before any test modules import their dependencies)
+# This ensures CACHE_HMAC_SECRET is available when state_cache.py is imported
+os.environ.setdefault("CACHE_HMAC_SECRET", secrets.token_hex(32))
+os.environ.setdefault("AUTH_ENABLED", "false")
+os.environ.setdefault("API_KEY_SECRET", "test-secret")
 
 @pytest.fixture
 def civcom_factory():

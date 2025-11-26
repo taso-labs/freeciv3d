@@ -3,12 +3,7 @@
 import unittest
 import sys
 import os
-import secrets
 from unittest.mock import Mock
-
-# Ensure environment secrets
-if 'CACHE_HMAC_SECRET' not in os.environ:
-    os.environ['CACHE_HMAC_SECRET'] = secrets.token_hex(32)
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))

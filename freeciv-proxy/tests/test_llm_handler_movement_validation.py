@@ -1,10 +1,5 @@
 import types
 import os
-import secrets
-
-# Generate HMAC secret for testing if not already set
-if 'CACHE_HMAC_SECRET' not in os.environ:
-    os.environ['CACHE_HMAC_SECRET'] = secrets.token_hex(32)
 
 from llm_handler import LLMWSHandler
 

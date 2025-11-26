@@ -5,8 +5,9 @@ import os
 import secrets
 
 # Generate HMAC secret for testing if not already set
-if 'CACHE_HMAC_SECRET' not in os.environ:
-    os.environ['CACHE_HMAC_SECRET'] = secrets.token_hex(32)
+import unittest
+import sys
+import os
 
 # Add proxy directory to path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))

@@ -21,8 +21,8 @@ from typing import List, Dict, Any
 from unittest.mock import Mock
 
 # Generate HMAC secret for testing if not already set
-if 'CACHE_HMAC_SECRET' not in os.environ:
-    os.environ['CACHE_HMAC_SECRET'] = secrets.token_hex(32)
+import sys
+import os
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
