@@ -10,9 +10,23 @@ import json
 import logging
 import traceback
 import time
+import os
+import sys
 from typing import Dict, Any, Optional, Callable
 from enum import Enum
 from security import SecurityLogger
+
+# Ensure repository root is on sys.path for importing shared modules like `common`
+_ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _ROOT_DIR not in sys.path:
+    sys.path.insert(0, _ROOT_DIR)
+
+from common.error_codes import (
+    E_RATE_LIMIT,
+    E_CONNECTION_LOST,
+    E_INTERNAL,
+    to_canonical,
+)
 
 logger = logging.getLogger("freeciv-proxy")
 
@@ -43,7 +57,7 @@ class ErrorCode:
     AUTH_SESSION_EXPIRED = "E102"
 
     # Rate limiting errors (E120-E139)
-    RATE_LIMIT_EXCEEDED = "E101"
+    RATE_LIMIT_EXCEEDED = E_RATE_LIMIT  # canonical E429
 
     # Validation errors (E140-E179)
     VALIDATION_FAILED = "E116"
@@ -54,7 +68,7 @@ class ErrorCode:
     # System errors (E180-E199)
     SYSTEM_CAPACITY = "E100"
     SYSTEM_INTERNAL = "E199"
-    SYSTEM_CIVSERVER_CONNECTION = "E140"
+    SYSTEM_CIVSERVER_CONNECTION = E_CONNECTION_LOST  # canonical E123
 
     # Security errors (E200-E219)
     SECURITY_VIOLATION = "E200"
@@ -79,7 +93,7 @@ class ErrorResponse:
         """Convert to dictionary for JSON serialization"""
         response = {
             'type': 'error',
-            'code': self.code,
+            'code': to_canonical(self.code),
             'message': self.message,
             'timestamp': self.timestamp
         }
@@ -192,7 +206,8 @@ class ErrorHandler:
             message = "Game server connection error"
             severity = ErrorSeverity.HIGH
         else:
-            code = ErrorCode.SYSTEM_INTERNAL
+            # Prefer canonical internal code if available
+            code = E_INTERNAL
             message = "Internal server error"
             severity = ErrorSeverity.CRITICAL
 

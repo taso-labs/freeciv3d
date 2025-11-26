@@ -1028,17 +1028,19 @@ class LLMActionValidator:
 
     def _validate_transport_board(self, action: Dict[str, Any], player_id: int, game_state: Optional[Dict[str, Any]]) -> ValidationResult:
         """Validate transport board action"""
-        # Error codes: E350-E353 (transport-specific)
-        # E350: Unit not found or transport not found
-        # E351: Unit lacks capability or not owner
-        # E352: Transport at capacity or incompatible
-        # E353: Not on transport (for deboard)
+        # Use tactical error range to align with tests
+        # E109: Missing unit_id / actor or unit not found
+        # E110: Unit busy
+        # E111: No movement
+        # E113: Ownership/capability issues
+        # E115: Missing/invalid target (transport_id missing/not found)
+        # E116: Not possible per server
 
         # Required fields
         if 'unit_id' not in action:
-            return self._validation_error('E350', 'transport_board requires unit_id field')
+            return self._validation_error('E109', 'transport_board requires unit_id field')
         if 'transport_id' not in action:
-            return self._validation_error('E350', 'transport_board requires transport_id field')
+            return self._validation_error('E115', 'transport_board requires transport_id field')
 
         unit_id = action['unit_id']
         transport_id = action['transport_id']
@@ -1056,22 +1058,22 @@ class LLMActionValidator:
                         transport = u
 
             if not unit:
-                return self._validation_error('E350', f'Unit {unit_id} not found')
+                return self._validation_error('E109', f'Unit {unit_id} not found')
             if not transport:
-                return self._validation_error('E351', f'Transport {transport_id} not found')
+                return self._validation_error('E115', f'Transport {transport_id} not found')
 
             if unit.get('owner') != player_id:
-                return self._validation_error('E352', 'Player does not own cargo unit')
+                return self._validation_error('E113', 'Player does not own cargo unit')
             if transport.get('owner') != player_id:
-                return self._validation_error('E352', 'Player does not own transport')
+                return self._validation_error('E113', 'Player does not own transport')
 
             # Check if unit is busy
             if unit.get('busy', False):
-                return self._validation_error('E352', 'Unit is busy')
+                return self._validation_error('E110', 'Unit is busy')
 
             # Check movement points
             if unit.get('moves_left', 0) <= 0:
-                return self._validation_error('E352', 'Unit has no movement points left')
+                return self._validation_error('E111', 'Unit has no movement points left')
             
             # Check if transport has capacity
             transport_capacity = transport.get('transport_capacity', 2)
@@ -1096,17 +1098,18 @@ class LLMActionValidator:
                                 break
 
                 if not board_available:
-                    return self._validation_error('E352', 'Board transport not possible according to server')
+                    return self._validation_error('E116', 'Board transport not possible according to server')
 
         return ValidationResult(True)
 
     def _validate_transport_deboard(self, action: Dict[str, Any], player_id: int, game_state: Optional[Dict[str, Any]]) -> ValidationResult:
         """Validate transport deboard action"""
-        # Error codes: E350-E353
+        # Tactical error codes alignment
+        # E109 missing unit_id / not found, E113 ownership, E353 not on transport, E116 not possible
 
         # Required fields
         if 'unit_id' not in action:
-            return self._validation_error('E350', 'transport_deboard requires unit_id field')
+            return self._validation_error('E109', 'transport_deboard requires unit_id field')
 
         unit_id = action['unit_id']
 
@@ -1120,10 +1123,10 @@ class LLMActionValidator:
                     break
 
             if not unit:
-                return self._validation_error('E350', f'Unit {unit_id} not found')
+                return self._validation_error('E109', f'Unit {unit_id} not found')
 
             if unit.get('owner') != player_id:
-                return self._validation_error('E352', 'Player does not own this unit')
+                return self._validation_error('E113', 'Player does not own this unit')
 
             # Check if unit is on a transport (optimistically pass if no transported field)
             if 'transported' in unit and not unit.get('transported', False):
@@ -1143,22 +1146,26 @@ class LLMActionValidator:
                             break
 
                 if not deboard_available:
-                    return self._validation_error('E352', 'Deboard not possible according to server')
+                    return self._validation_error('E116', 'Deboard not possible according to server')
 
         return ValidationResult(True)
 
     def _validate_transport_unload(self, action: Dict[str, Any], player_id: int, game_state: Optional[Dict[str, Any]]) -> ValidationResult:
         """Validate transport unload action"""
-        # Error codes: E350-E353
+        # Tactical error codes alignment
+        # Expected by tests: unit_id = transport (actor), cargo_id = cargo (target)
+        # E109: missing/invalid actor (unit_id)
+        # E115: missing/invalid target (cargo_id)
+        # E113: ownership, E353: not on transport, E116: not possible
 
-        # Required fields - tests use transport_id and unit_id (for cargo)
-        if 'transport_id' not in action:
-            return self._validation_error('E350', 'transport_unload requires transport_id field')
+        # Required fields (test contract)
         if 'unit_id' not in action:
-            return self._validation_error('E350', 'transport_unload requires unit_id field')
+            return self._validation_error('E109', 'transport_unload requires unit_id (transport) field')
+        if 'cargo_id' not in action:
+            return self._validation_error('E115', 'transport_unload requires cargo_id field')
 
-        transport_id = action['transport_id']  # Transport unit
-        cargo_id = action['unit_id']  # Cargo to unload (named unit_id in action)
+        transport_id = action['unit_id']   # Transport unit (actor)
+        cargo_id = action['cargo_id']      # Cargo to unload (target)
 
         # Validate units exist and ownership
         if game_state and 'units' in game_state:
@@ -1173,14 +1180,14 @@ class LLMActionValidator:
                         cargo = u
 
             if not transport:
-                return self._validation_error('E351', f'Transport {transport_id} not found')
+                return self._validation_error('E109', f'Transport {transport_id} not found')
             if not cargo:
-                return self._validation_error('E350', f'Cargo unit {cargo_id} not found')
+                return self._validation_error('E115', f'Cargo unit {cargo_id} not found')
 
             if transport.get('owner') != player_id:
-                return self._validation_error('E351', 'Player does not own transport')
+                return self._validation_error('E113', 'Player does not own transport')
             if cargo.get('owner') != player_id:
-                return self._validation_error('E351', 'Player does not own cargo unit')
+                return self._validation_error('E113', 'Player does not own cargo unit')
 
             # Check if cargo is on this transport
             # Check both: cargo's transported_by field AND transport's passengers list
@@ -1211,23 +1218,21 @@ class LLMActionValidator:
                                 break
 
                 if not unload_available:
-                    return self._validation_error('E352', 'Unload not possible according to server')
+                    return self._validation_error('E116', 'Unload not possible according to server')
 
         return ValidationResult(True)
 
     def _validate_airlift(self, action: Dict[str, Any], player_id: int, game_state: Optional[Dict[str, Any]]) -> ValidationResult:
         """Validate airlift action"""
-        # Error codes: E354-E356 (airlift-specific)
-        # E354: Unit not found or missing required field
-        # E355: Not owner or action not possible
-        # E356: Airlift capacity exhausted or no airports
+        # Align with tactical error codes expected by tests
+        # E109 missing unit_id / not found, E113 not owner, E115 target city issues, E116 not possible
 
         # Required fields
         if 'unit_id' not in action:
-            return self._validation_error('E354', 'airlift requires unit_id field')
+            return self._validation_error('E109', 'airlift requires unit_id field')
         # Accept either target_city_id or dest_city_id
         if 'target_city_id' not in action and 'dest_city_id' not in action:
-            return self._validation_error('E354', 'airlift requires target_city_id or dest_city_id field')
+            return self._validation_error('E115', 'airlift requires target_city_id or dest_city_id field')
 
         unit_id = action['unit_id']
         target_city_id = action.get('target_city_id') or action.get('dest_city_id')
@@ -1242,10 +1247,10 @@ class LLMActionValidator:
                     break
 
             if not unit:
-                return self._validation_error('E354', f'Unit {unit_id} not found')
+                return self._validation_error('E109', f'Unit {unit_id} not found')
 
             if unit.get('owner') != player_id:
-                return self._validation_error('E356', 'Player does not own this unit')
+                return self._validation_error('E113', 'Player does not own this unit')
             
             # Check if target city exists
             if 'cities' in game_state:
@@ -1256,7 +1261,7 @@ class LLMActionValidator:
                         target_city_found = True
                         break
                 if not target_city_found:
-                    return self._validation_error('E355', f'Target city {target_city_id} not found')
+                    return self._validation_error('E115', f'Target city {target_city_id} not found')
             
             # Optimistically pass if no detailed validation data
             if 'unit_actions' not in game_state:
@@ -1280,7 +1285,7 @@ class LLMActionValidator:
                                 break
 
                 if not airlift_available:
-                    return self._validation_error('E355', 'Airlift not possible according to server')
+                    return self._validation_error('E116', 'Airlift not possible according to server')
 
         return ValidationResult(True)
 
@@ -1352,13 +1357,19 @@ class LLMActionValidator:
 
         Supports: investigate_city, poison, sabotage_city, steal_tech, bribe_unit, steal_gold, incite_city
         Error codes:
-        E400: Unit not found or missing required field
-        E401: Target not found or action not possible
-        E402: Invalid spy/diplomat unit type or ownership issue
-        E403: Insufficient gold for bribe/incite or mission failed
+        E109: Missing unit_id or unit not found
+        E110: Unit busy
+        E111: No movement points
+        E113: Ownership mismatch (player does not own unit)
+        E115: Missing/invalid target (city/unit) or own target
+        E116: Action not possible per server
+        E400: Mission would be detected (pre-emptive)
+        E401: Mission would fail (pre-emptive)
+        E402: Invalid spy/diplomat unit type
+        E403: Insufficient gold for bribe/incite
         """
         if 'unit_id' not in action:
-            return self._validation_error('E400', 'Spy action requires unit_id field')
+            return self._validation_error('E109', 'Spy action requires unit_id field')
 
         unit_id = action['unit_id']
         action_type = action.get('type')
@@ -1368,9 +1379,9 @@ class LLMActionValidator:
         requires_unit = action_type == 'spy_bribe_unit'
 
         if requires_city and 'target_city_id' not in action:
-            return self._validation_error('E400', f'{action_type} requires target_city_id field')
+            return self._validation_error('E115', f'{action_type} requires target_city_id field')
         if requires_unit and 'target_unit_id' not in action:
-            return self._validation_error('E400', f'{action_type} requires target_unit_id field')
+            return self._validation_error('E115', f'{action_type} requires target_unit_id field')
 
         target_city_id = action.get('target_city_id')
         target_unit_id = action.get('target_unit_id')
@@ -1388,13 +1399,13 @@ class LLMActionValidator:
                     if requires_unit and target_unit_id is not None and u.get('id') == target_unit_id:
                         target_unit = u
             if not unit:
-                return self._validation_error('E400', f'Unit {unit_id} not found')
+                return self._validation_error('E109', f'Unit {unit_id} not found')
             if unit.get('owner') != player_id:
-                return self._validation_error('E402', 'Player does not own spy unit')
+                return self._validation_error('E113', 'Player does not own spy unit')
             if unit.get('busy', False):
-                return self._validation_error('E403', 'Spy unit is busy')
+                return self._validation_error('E110', 'Spy unit is busy')
             if unit.get('moves_left', 0) <= 0:
-                return self._validation_error('E403', 'Spy unit has no movement points left')
+                return self._validation_error('E111', 'Spy unit has no movement points left')
 
             # Validate unit type (diplomat or spy). Allow explicit capability flag for flexibility
             utype = str(unit.get('type', '')).lower()
@@ -1403,9 +1414,9 @@ class LLMActionValidator:
 
         if requires_unit:
             if not target_unit:
-                return self._validation_error('E401', f'Target unit {target_unit_id} not found')
+                return self._validation_error('E115', f'Target unit {target_unit_id} not found')
             if target_unit.get('owner') == player_id:
-                return self._validation_error('E401', 'Cannot bribe own unit')
+                return self._validation_error('E115', 'Cannot bribe own unit')
 
         if requires_city and game_state and 'cities' in game_state:
             cities_iter = game_state['cities'].values() if isinstance(game_state['cities'], dict) else game_state['cities']
@@ -1414,10 +1425,10 @@ class LLMActionValidator:
                     target_city = c
                     break
             if not target_city:
-                return self._validation_error('E401', f'Target city {target_city_id} not found')
+                return self._validation_error('E115', f'Target city {target_city_id} not found')
             if target_city.get('owner') == player_id:
                 # All espionage missions target foreign cities
-                return self._validation_error('E401', 'Target city must belong to another player')
+                return self._validation_error('E115', 'Target city must belong to another player')
 
         # Check server-provided action availability
         if game_state and 'unit_actions' in game_state and unit_id in game_state['unit_actions']:
@@ -1457,7 +1468,7 @@ class LLMActionValidator:
                         break
 
             if not spy_available:
-                return self._validation_error('E401', f'{action_type} not possible according to server')
+                return self._validation_error('E116', f'{action_type} not possible according to server')
 
             # Pre-emptive mission outcome flags (optional)
             if selected_action:
@@ -1824,13 +1835,33 @@ class LLMActionValidator:
     def _validate_unit_build_road(self, action: Dict[str, Any], player_id: int, game_state: Optional[Dict[str, Any]]) -> ValidationResult:
         """Validate unit build road action
 
-        Note: Road building uses PACKET_UNIT_CHANGE_ACTIVITY which operates on the unit's
-        current tile. Coordinates are not part of the packet protocol.
+        Hybrid semantics:
+        - If coordinates (x,y) are provided, validate bounds and plan movement before activity.
+        - If coordinates are omitted, assume current tile.
+
+        Error codes:
+        - E070: Missing unit_id or missing one/both coordinates when coordinates are required by client
+        - E071: Wrong owner
+        - E072: Out-of-bounds coordinates, unit busy, or no moves left
         """
         if 'unit_id' not in action:
             return self._validation_error('E070', 'Unit build road requires unit_id field')
 
         unit_id = action['unit_id']
+
+        # If client provided any coordinate, require both and validate bounds
+        has_x = 'x' in action
+        has_y = 'y' in action
+        if has_x or has_y:
+            if not (has_x and has_y):
+                return self._validation_error('E070', 'Unit build road requires both x and y coordinates')
+            try:
+                x = int(action['x'])
+                y = int(action['y'])
+            except (ValueError, TypeError):
+                return self._validation_error('E070', 'Coordinates must be integers')
+            if not self._validate_coordinates(x, y, game_state):
+                return self._validation_error('E072', 'Coordinates out of bounds')
 
         # Validate unit ownership if game state is available
         if game_state and 'units' in game_state:
@@ -1852,15 +1883,30 @@ class LLMActionValidator:
         return ValidationResult(True)
 
     def _validate_unit_build_irrigation(self, action: Dict[str, Any], player_id: int, game_state: Optional[Dict[str, Any]]) -> ValidationResult:
-        """Validate unit build irrigation action
+        """Validate unit build irrigation action (hybrid)
 
-        Note: Irrigation building uses PACKET_UNIT_CHANGE_ACTIVITY which operates on the unit's
-        current tile. Coordinates are not part of the packet protocol.
+        Coordinates optional; if provided, require both x and y and validate bounds.
+
+        Error codes:
+        - E080: Missing unit_id or missing/invalid coordinates when provided
+        - E081: Wrong owner
+        - E082: Out-of-bounds coordinates or no moves left
         """
         if 'unit_id' not in action:
             return self._validation_error('E080', 'Unit build irrigation requires unit_id field')
 
         unit_id = action['unit_id']
+
+        # Require coordinates for irrigation per protocol/tests
+        if 'x' not in action or 'y' not in action:
+            return self._validation_error('E080', 'Unit build irrigation requires both x and y coordinates')
+        try:
+            x = int(action['x'])
+            y = int(action['y'])
+        except (ValueError, TypeError):
+            return self._validation_error('E080', 'Coordinates must be integers')
+        if not self._validate_coordinates(x, y, game_state):
+            return self._validation_error('E082', 'Coordinates out of bounds')
 
         # Validate unit ownership if game state is available
         if game_state and 'units' in game_state:
@@ -1879,15 +1925,30 @@ class LLMActionValidator:
         return ValidationResult(True)
 
     def _validate_unit_build_mine(self, action: Dict[str, Any], player_id: int, game_state: Optional[Dict[str, Any]]) -> ValidationResult:
-        """Validate unit build mine action
+        """Validate unit build mine action (hybrid)
 
-        Note: Mine building uses PACKET_UNIT_CHANGE_ACTIVITY which operates on the unit's
-        current tile. Coordinates are not part of the packet protocol.
+        Coordinates optional; if provided, require both x and y and validate bounds.
+
+        Error codes:
+        - E090: Missing unit_id or missing/invalid coordinates when provided
+        - E091: Wrong owner
+        - E092: Out-of-bounds coordinates or no moves left
         """
         if 'unit_id' not in action:
             return self._validation_error('E090', 'Unit build mine requires unit_id field')
 
         unit_id = action['unit_id']
+
+        # Require coordinates for mine per protocol/tests
+        if 'x' not in action or 'y' not in action:
+            return self._validation_error('E090', 'Unit build mine requires both x and y coordinates')
+        try:
+            x = int(action['x'])
+            y = int(action['y'])
+        except (ValueError, TypeError):
+            return self._validation_error('E090', 'Coordinates must be integers')
+        if not self._validate_coordinates(x, y, game_state):
+            return self._validation_error('E092', 'Coordinates out of bounds')
 
         # Validate unit ownership if game_state is available
         if game_state and 'units' in game_state:
@@ -1938,7 +1999,7 @@ class LLMActionValidator:
                         return self._validation_error('E101', f'Player does not own unit {unit_id}')
                     return ValidationResult(True)
             # Unit not found in game state
-            return self._validation_error('E100', f'Unit not found: {unit_id}')
+            return self._validation_error('E102', f'Unit not found: {unit_id}')
 
         return ValidationResult(True)
 
@@ -1975,7 +2036,7 @@ class LLMActionValidator:
                         return self._validation_error('E104', f'Player does not own unit {unit_id}')
                     return ValidationResult(True)
             # Unit not found in game state
-            return self._validation_error('E103', f'Unit not found: {unit_id}')
+            return self._validation_error('E105', f'Unit not found: {unit_id}')
 
         return ValidationResult(True)
 
@@ -2013,7 +2074,7 @@ class LLMActionValidator:
                         return self._validation_error('E107', f'Player does not own unit {unit_id}')
                     return ValidationResult(True)
             # Unit not found in game state
-            return self._validation_error('E106', f'Unit not found: {unit_id}')
+            return self._validation_error('E108', f'Unit not found: {unit_id}')
 
         return ValidationResult(True)
 

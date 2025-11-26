@@ -2042,9 +2042,9 @@ Error codes are grouped by action for fast triage:
 | E040-E041 | tech_research | Missing tech_name, invalid tech |
 | E050-E052 | unit_fortify | Missing unit_id, unit not found, ownership |
 | E060-E062 | unit_sentry | Same pattern as fortify |
-| E070-E072 | unit_build_road | Missing unit, ownership, not found |
-| E080-E082 | unit_build_irrigation | Missing unit, ownership, not found |
-| E090-E092 | unit_build_mine | Missing unit, ownership, not found |
+| E070-E072 | unit_build_road | Missing required field/unit not found, ownership, out-of-bounds/busy/no moves |
+| E080-E082 | unit_build_irrigation | Missing required field/unit not found, ownership, out-of-bounds/no moves |
+| E090-E092 | unit_build_mine | Missing required field/unit not found, ownership, out-of-bounds/no moves |
 | E100-E102 | unit_clean_pollution | Missing unit, ownership, not found |
 | E103-E105 | unit_clean_fallout | Missing unit, ownership, not found |
 | E106-E108 | unit_transform_terrain | Missing unit, ownership, not found |
@@ -2058,6 +2058,12 @@ Error codes are grouped by action for fast triage:
 | E300-E304 | player_ready | Session/lifecycle validation failures (see player_ready section) |
 | E109 | unit_attack | Missing required field (unit_id/target_id) |
 | E110-E116 | unit_attack | Attacker missing, ownership, target missing, friendly target, adjacency/movement, server reports attack unavailable |
+
+**Worker Build Actions (unit_build_road/irrigation/mine):**
+- Coordinates (x, y) are **required** per protocol/tests.
+- Validation enforces bounds (0 ≤ x < map_width, 0 ≤ y < map_height) before attempting orchestration.
+- If unit is not at (x, y), the gateway plans and executes movement before starting the activity.
+- Movement failures result in tactical errors (e.g., E110 busy, E111 no moves, E116 not possible).
 
 Server authoritative action availability check (when cached actions present):
 If an ACTION_ATTACK (id=45) is not listed in the unit's cached `unit_action_cache`, validation fails with `E116`.
@@ -2638,6 +2644,15 @@ Put unit on sentry mode. Unit will skip turns until enemy units are nearby.
 
 Build a road at specified coordinates to improve movement speed.
 
+**Orchestration Semantics:**
+- Coordinates (x, y) are **required**.
+- If the unit is not already at (x, y), the gateway will:
+  1. Validate ownership, bounds, and unit availability.
+  2. Plan and execute movement ("goto") to the destination tile.
+  3. Once the unit arrives, issue the road-building activity.
+- If the unit is already at (x, y), the activity starts immediately.
+- Negative coordinates are invalid (Freeciv uses 0-based indexing).
+
 **Request:**
 ```json
 {
@@ -2657,24 +2672,32 @@ Build a road at specified coordinates to improve movement speed.
 **Required Fields:**
 - `unit_id`: ID of the worker/engineer unit
 - `player_id`: Player ID (must match authenticated player)
-- `x`: X coordinate (0-199 for default 200x200 map)
-- `y`: Y coordinate (0-199 for default 200x200 map)
+- `x`: X coordinate (0 ≤ x < map_width; default map is 200×200, so 0-199)
+- `y`: Y coordinate (0 ≤ y < map_height)
 
 **Error Codes:**
-- `E070`: Missing required field (unit_id, x, or y)
-- `E071`: Coordinates must be integers
-- `E072`: Coordinates out of bounds
-- `E073`: Player does not own this unit
-- `E074`: Unit not found
+- `E070`: Missing required field (unit_id, x, or y) or unit not found
+- `E071`: Player does not own this unit
+- `E072`: Coordinates out of bounds, unit busy, or no moves left
 
 **Notes:**
-- Only worker/engineer units can build roads
-- Building takes multiple turns depending on terrain
-- Roads increase unit movement speed
+- Only worker/engineer units can build roads.
+- Building takes multiple turns depending on terrain.
+- Roads increase unit movement speed.
+- If movement fails (path blocked, no moves left), a tactical error is returned (e.g., E110 busy, E111 no moves, E116 not possible).
 
 #### unit_build_irrigation
 
 Build irrigation at specified coordinates to improve food production.
+
+**Orchestration Semantics:**
+- Coordinates (x, y) are **required**.
+- If the unit is not already at (x, y), the gateway will:
+  1. Validate ownership, bounds, and unit availability.
+  2. Plan and execute movement to the destination tile.
+  3. Once the unit arrives, issue the irrigation-building activity.
+- If the unit is already at (x, y), the activity starts immediately.
+- Negative coordinates are invalid.
 
 **Request:**
 ```json
@@ -2695,23 +2718,32 @@ Build irrigation at specified coordinates to improve food production.
 **Required Fields:**
 - `unit_id`: ID of the worker/engineer unit
 - `player_id`: Player ID
-- `x`, `y`: Coordinates for irrigation
+- `x`: X coordinate (0 ≤ x < map_width)
+- `y`: Y coordinate (0 ≤ y < map_height)
 
 **Error Codes:**
-- `E080`: Missing required field
-- `E081`: Coordinates must be integers
-- `E082`: Coordinates out of bounds
-- `E083`: Player does not own this unit
-- `E084`: Unit not found
+- `E080`: Missing required field (unit_id, x, or y) or unit not found
+- `E081`: Player does not own this unit
+- `E082`: Coordinates out of bounds or no moves left
 
 **Notes:**
-- Requires water source nearby (river or ocean)
-- Increases food output of tile
-- Building takes multiple turns
+- Requires water source nearby (river or ocean).
+- Increases food output of tile.
+- Building takes multiple turns.
+- If movement fails, a tactical error is returned (e.g., E110 busy, E111 no moves, E116 not possible).
 
 #### unit_build_mine
 
 Build a mine at specified coordinates to improve production.
+
+**Orchestration Semantics:**
+- Coordinates (x, y) are **required**.
+- If the unit is not already at (x, y), the gateway will:
+  1. Validate ownership, bounds, and unit availability.
+  2. Plan and execute movement to the destination tile.
+  3. Once the unit arrives, issue the mine-building activity.
+- If the unit is already at (x, y), the activity starts immediately.
+- Negative coordinates are invalid.
 
 **Request:**
 ```json
@@ -2732,19 +2764,19 @@ Build a mine at specified coordinates to improve production.
 **Required Fields:**
 - `unit_id`: ID of the worker/engineer unit
 - `player_id`: Player ID
-- `x`, `y`: Coordinates for mine
+- `x`: X coordinate (0 ≤ x < map_width)
+- `y`: Y coordinate (0 ≤ y < map_height)
 
 **Error Codes:**
-- `E090`: Missing required field
-- `E091`: Coordinates must be integers
-- `E092`: Coordinates out of bounds
-- `E093`: Player does not own this unit
-- `E094`: Unit not found
+- `E090`: Missing required field (unit_id, x, or y) or unit not found
+- `E091`: Player does not own this unit
+- `E092`: Coordinates out of bounds or no moves left
 
 **Notes:**
-- Works best on hills and mountains
-- Increases production output of tile
-- Cannot mine ocean tiles
+- Works best on hills and mountains.
+- Increases production output of tile.
+- Cannot mine ocean tiles.
+- If movement fails, a tactical error is returned (e.g., E110 busy, E111 no moves, E116 not possible).
 
 #### unit_clean_pollution
 

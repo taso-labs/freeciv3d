@@ -87,16 +87,35 @@ MAP_SIZE_DIMENSIONS = {
 # Default coordinate limits (when map size is unknown)
 DEFAULT_MAX_COORDINATE = 9999
 
-# Error codes
-ERROR_CODE_INTERNAL = "E500"
-ERROR_CODE_RATE_LIMIT = "E429"
-ERROR_CODE_UNAUTHORIZED = "E403"
-ERROR_CODE_NOT_FOUND = "E404"
-ERROR_CODE_VALIDATION = "E400"
-ERROR_CODE_NOT_AUTHENTICATED = "E120"  # Not authenticated / session expired
-ERROR_CODE_STATE_QUERY_FAILED = "E121"  # State query failed
-ERROR_CODE_CONNECTION_LOST = "E123"  # Connection to game server lost
-ERROR_CODE_UNKNOWN = "E999"  # Unknown error (with context)
+# Error codes (import canonical definitions)
+# Ensure repository root is on sys.path for importing shared modules like `common`
+import os
+import sys
+_ROOT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if _ROOT_DIR not in sys.path:
+    sys.path.insert(0, _ROOT_DIR)
+
+from common.error_codes import (
+    E_INTERNAL,
+    E_RATE_LIMIT,
+    E_UNAUTHORIZED,
+    E_NOT_FOUND,
+    E_VALIDATION,
+    E_NOT_AUTHENTICATED,
+    E_STATE_QUERY_FAILED,
+    E_CONNECTION_LOST,
+    E_UNKNOWN,
+)
+
+ERROR_CODE_INTERNAL = E_INTERNAL
+ERROR_CODE_RATE_LIMIT = E_RATE_LIMIT
+ERROR_CODE_UNAUTHORIZED = E_UNAUTHORIZED
+ERROR_CODE_NOT_FOUND = E_NOT_FOUND
+ERROR_CODE_VALIDATION = E_VALIDATION
+ERROR_CODE_NOT_AUTHENTICATED = E_NOT_AUTHENTICATED  # Not authenticated / session expired
+ERROR_CODE_STATE_QUERY_FAILED = E_STATE_QUERY_FAILED  # State query failed
+ERROR_CODE_CONNECTION_LOST = E_CONNECTION_LOST  # Connection to game server lost
+ERROR_CODE_UNKNOWN = E_UNKNOWN  # Unknown error (with context)
 
 # HTTP status codes
 HTTP_OK = 200
