@@ -25,6 +25,20 @@ class TestProductionValidators(unittest.TestCase):
         """Set up test fixtures"""
         self.validator = LLMActionValidator()
         
+        # Mock civcom with valid production types
+        mock_civcom = Mock()
+        mock_civcom.unit_types = {
+            '1': {'name': 'Warriors', 'id': 1},
+            '2': {'name': 'Phalanx', 'id': 2},
+            '3': {'name': 'Archers', 'id': 3}
+        }
+        mock_civcom.improvements = {
+            '1': {'name': 'Barracks', 'id': 1},
+            '2': {'name': 'Granary', 'id': 2},
+            '3': {'name': 'Library', 'id': 3}
+        }
+        self.validator.civcom = mock_civcom
+        
         # Sample game state with cities and ruleset data
         self.sample_game_state = {
             'map': {'width': 80, 'height': 50},

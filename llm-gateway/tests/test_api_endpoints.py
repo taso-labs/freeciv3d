@@ -11,18 +11,11 @@ from unittest.mock import Mock, AsyncMock, patch, MagicMock
 from fastapi.testclient import TestClient
 
 # Import the modules we're testing (these don't exist yet - TDD!)
-try:
-    import sys
-    import os
-    sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
-    from main import app
-    from api_endpoints import GameConfig, FreeCivAction
-except ImportError:
-    # Will fail initially until we implement the module
-    app = None
-    GameConfig = None
-    FreeCivAction = None
-
+import sys
+import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+from main import app
+from api_endpoints import GameConfig, FreeCivAction
 
 class TestGameCreationEndpoint:
     """Test /api/game/create endpoint"""
