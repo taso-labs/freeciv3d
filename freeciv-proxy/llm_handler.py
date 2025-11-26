@@ -26,6 +26,8 @@ from session_manager import session_manager, SessionState
 from error_handler import error_handler, ErrorSeverity, ErrorCategory
 from game_session_manager import game_session_manager
 from ruleset_mapper import RulesetMapper, clean_production_name
+from unit_action_cache import get_unit_action_cache, invalidate_unit_actions
+from probability_utils import encode_probability, decode_probability_to_percent
 from typing import Dict, Any, Optional, List
 from fc_constants import (
     VUT_ADVANCE,
@@ -284,6 +286,12 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 self._handle_ping(msg_data)
             elif msg_type == 'player_ready':
                 self._handle_player_ready(msg_data)
+            elif msg_type == 'unit_action_query':
+                # v2.0 server-authoritative per-unit action query
+                await self._handle_unit_action_query(msg_data)
+            elif msg_type == 'unit_action_query_batch':
+                # v2.0 batch query - iterate queries and respond individually for now
+                await self._handle_unit_action_query_batch(msg_data)
             elif self.is_llm_agent:
                 # Forward other messages to civcom if authenticated
                 self._forward_to_civcom(message)
@@ -1196,11 +1204,23 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 SecurityLogger.log_connection_event(self.agent_id, "ACTION_EXECUTED",
                                                   f"type={sanitized_action.get('type')}")
 
-                self.write_message(json.dumps({
-                    'type': 'action_accepted',
-                    'action': sanitized_action,
-                    'timestamp': time.time()
-                }))
+                # Protocol v2.0: Return action_result structure instead of simple action_accepted
+                action_result = {
+                    'type': 'action_result',
+                    'success': True,  # Optimistic success - actual result comes from server packets
+                    'action_type': sanitized_action.get('type'),
+                    'result': {
+                        'action': sanitized_action,
+                        'timestamp': time.time(),
+                        'status': 'queued'  # Will update to 'confirmed' or 'failed' upon server response
+                    }
+                }
+                
+                # Preserve correlation_id if present (for batch tracking)
+                if 'correlation_id' in msg_data:
+                    action_result['correlation_id'] = msg_data['correlation_id']
+                
+                self.write_message(json.dumps(action_result))
             else:
                 self.write_message(json.dumps({
                     'type': 'error',
@@ -1280,6 +1300,123 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 'code': 'E404',
                 'message': 'Not connected to game server'
             }))
+
+        return
+
+    # ---------------------------------------------------------------------
+    # Server-Authoritative Action Query (v2.0) - INITIAL STUB IMPLEMENTATION
+    # ---------------------------------------------------------------------
+    async def _handle_unit_action_query(self, msg_data: Dict[str, Any]):
+        """Handle per-unit action query (stub - returns empty action list until integrated with CivCom).
+
+        Protocol spec fields:
+          Request: unit_id (required), optional target_* fields, request_kind
+          Response: actions[] with probability metadata
+
+        This initial version validates basic connectivity and returns an empty
+        actions array so client logic can be developed incrementally.
+        """
+        correlation_id = msg_data.get('correlation_id')
+        unit_id = msg_data.get('unit_id')
+        target_unit_id = msg_data.get('target_unit_id', 0)
+        target_tile_id = msg_data.get('target_tile_id', 0)
+        target_extra_id = msg_data.get('target_extra_id', 0)
+        request_kind = msg_data.get('request_kind', 0)
+
+        # Basic validation
+        if not self.is_llm_agent or self.player_id is None:
+            self.write_message(json.dumps({
+                'type': 'error',
+                'correlation_id': correlation_id,
+                'data': {
+                    'type': 'error',
+                    'success': False,
+                    'code': 'E500',  # action query unit/player context failure
+                    'message': 'Unit action query rejected - not authenticated or player not assigned'
+                }
+            }))
+            return
+
+        if unit_id is None:
+            self.write_message(json.dumps({
+                'type': 'error',
+                'correlation_id': correlation_id,
+                'data': {
+                    'type': 'error',
+                    'success': False,
+                    'code': 'E500',
+                    'message': 'Missing unit_id field in unit_action_query'
+                }
+            }))
+            return
+
+        # Check cache first
+        cache = get_unit_action_cache()
+        game_state = self._get_current_game_state()
+        current_turn = game_state.get('turn', 1) if game_state else 1
+        
+        cached_actions = cache.get(unit_id, current_turn)
+        if cached_actions is not None:
+            logger.debug(f"Using cached actions for unit {unit_id} turn {current_turn}")
+            response_payload = cached_actions
+        else:
+            # FUTURE: Integrate with CivCom to send PACKET_UNIT_GET_ACTIONS / PACKET_UNIT_ACTION_QUERY
+            # and parse PACKET_UNIT_ACTIONS for server authoritative probabilities.
+            # For now, return stub with empty actions list and metadata.
+            response_payload = {
+                'unit_id': unit_id,
+                'target_unit_id': target_unit_id,
+                'target_tile_id': target_tile_id,
+                'target_extra_id': target_extra_id,
+                'request_kind': request_kind,
+                'actions': [],  # Empty until server integration
+                'queried_at': time.time()
+            }
+            
+            # Cache the result
+            cache.set(unit_id, current_turn, response_payload)
+
+        response = {
+            'type': 'unit_action_response',
+            'agent_id': self.agent_id,
+            'timestamp': time.time(),
+            'correlation_id': correlation_id,
+            'data': response_payload
+        }
+        self.write_message(json.dumps(response))
+
+    async def _handle_unit_action_query_batch(self, msg_data: Dict[str, Any]):
+        """Handle batch unit action queries (stub).
+
+        Strategy: respond with multiple unit_action_response messages (one per query)
+        so clients can reuse single response handler. Future optimization may
+        bundle into a single batch response type.
+        """
+        correlation_id = msg_data.get('correlation_id')
+        queries = msg_data.get('queries', [])
+
+        if not isinstance(queries, list):
+            self.write_message(json.dumps({
+                'type': 'error',
+                'correlation_id': correlation_id,
+                'data': {
+                    'type': 'error',
+                    'success': False,
+                    'code': 'E500',
+                    'message': 'Invalid queries field (expected list)'
+                }
+            }))
+            return
+
+        # Sequentially process each query (stubbed)
+        for q in queries:
+            if not isinstance(q, dict):
+                continue
+            single_msg = {'type': 'unit_action_query', **q}
+            # Reuse single query handler; ensure correlation id chains
+            if correlation_id and 'correlation_id' not in single_msg:
+                single_msg['correlation_id'] = correlation_id
+            await self._handle_unit_action_query(single_msg)
 
     def _build_optimized_state(self, format_type: str, include_actions: bool) -> Dict[str, Any]:
         """Build optimized game state for LLM consumption using StateExtractor"""
@@ -1365,9 +1502,10 @@ class LLMWSHandler(websocket.WebSocketHandler):
             state['opportunities'] = self._identify_opportunities()
 
             if include_actions:
-                legal_actions = self._get_legal_actions_optimized(full_state)
-                logger.info(f"✓ Generated {len(legal_actions)} legal actions for agent {self.agent_id}")
-                state['legal_actions'] = legal_actions
+                # NEW v2.0: Use unit_actions dict keyed by unit_id instead of flat legal_actions list
+                unit_actions_dict = self._get_unit_actions_dict(full_state)
+                logger.info(f"✓ Generated unit_actions dict for {len(unit_actions_dict)} units")
+                state['unit_actions'] = unit_actions_dict
 
         # For delta format, add change tracking
         elif format_type == 'delta':
@@ -1969,8 +2107,73 @@ class LLMWSHandler(websocket.WebSocketHandler):
         else:
             return True, "No existing cities to check against"
 
+    def _get_unit_actions_dict(self, game_state: Optional[Dict[str, Any]] = None) -> Dict[str, Dict[str, Any]]:
+        """
+        Generate unit actions dictionary for protocol v2.0 server-authoritative action queries.
+        
+        Returns:
+            Dict[str, Dict[str, Any]]: Dictionary keyed by unit_id (as string) containing:
+                - unit_id (int): Unit ID
+                - available_actions (List[Dict]): Cached or computed action possibilities
+                - last_updated (Optional[float]): Cache timestamp
+        
+        This method checks the unit_action_cache for each unit first, falling back to
+        empty action lists for cache misses (until full integration with 
+        PACKET_UNIT_ACTION_ANSWER is complete).
+        """
+        unit_actions = {}
+        
+        if not game_state and self.civcom and hasattr(self.civcom, 'get_full_state'):
+            try:
+                game_state = self.civcom.get_full_state(self.player_id)
+            except Exception as e:
+                logger.warning(f"Failed to get game state for unit actions: {e}")
+                game_state = {}
+        
+        if not game_state:
+            return {}
+        
+        units_raw = game_state.get('units', {})
+        units = list(units_raw.values()) if isinstance(units_raw, dict) else units_raw
+        our_units = [u for u in units if u.get('owner') == self.player_id]
+        
+        current_turn = game_state.get('turn', 0)
+        
+        # Build dictionary keyed by unit_id string
+        for unit in our_units:
+            unit_id = unit.get('id')
+            if unit_id is None:
+                continue
+            
+            unit_id_str = str(unit_id)
+            
+            # Check cache for this unit
+            cached_data = self.unit_action_cache.get(unit_id, current_turn)
+            
+            if cached_data:
+                # Use cached action data
+                unit_actions[unit_id_str] = {
+                    'unit_id': unit_id,
+                    'available_actions': cached_data.get('actions', []),
+                    'last_updated': cached_data.get('timestamp')
+                }
+            else:
+                # Cache miss - populate with placeholder until real server data arrives
+                # In production, this would trigger a unit_action_query to the server
+                unit_actions[unit_id_str] = {
+                    'unit_id': unit_id,
+                    'available_actions': [],  # Empty until server responds
+                    'last_updated': None
+                }
+        
+        return unit_actions
+
     def _get_legal_actions_optimized(self, game_state: dict[str, Any] | None = None) -> list[dict[str, Any]]:
-        """Get top legal actions for LLM (limited to ~20 most important)"""
+        """Get top legal actions for LLM (limited to ~20 most important)
+        
+        DEPRECATED: This method returns a flat list format. Use _get_unit_actions_dict() 
+        for protocol v2.0 compliant unit_actions dictionary structure.
+        """
         actions = []
 
         if not game_state and self.civcom and hasattr(self.civcom, 'get_full_state'):
@@ -3266,6 +3469,18 @@ class LLMWSHandler(websocket.WebSocketHandler):
             # Create CivCom connection
             self.civcom = CivCom(self.agent_id, port, f"{self.agent_id}_{self.id}", self)
             logger.debug(f"Created CivCom instance for {self.agent_id}")
+            
+            # Register packet callbacks for unit action queries (protocol v2.0)
+            self.civcom.action_answer_callback = self._handle_action_answer_packet
+            self.civcom.unit_actions_callback = self._handle_unit_actions_packet
+            
+            # Register cache invalidation callbacks
+            self.civcom.unit_state_changed_callback = self._invalidate_unit_cache
+            self.civcom.unit_removed_callback = self._invalidate_unit_cache
+            self.civcom.turn_changed_callback = self._invalidate_all_cache
+            
+            logger.debug(f"Registered unit action packet callbacks for {self.agent_id}")
+            
             self.civcom.start()
             logger.debug(f"CivCom thread started: is_alive={self.civcom.is_alive()}, daemon={self.civcom.daemon}")
 
@@ -3366,6 +3581,125 @@ class LLMWSHandler(websocket.WebSocketHandler):
             return True  # Allow if no agent ID set yet
 
         return distributed_rate_limiter.check_limit(self.agent_id, 'legacy')
+
+    def _handle_action_answer_packet(self, unit_id: int, packet: Dict[str, Any], turn: int):
+        """
+        Callback for PACKET_UNIT_ACTION_ANSWER from civserver.
+        Populates cache with server-authoritative action data.
+        
+        Args:
+            unit_id: Unit ID for which actions are available
+            packet: Raw packet from server containing action possibilities
+            turn: Current game turn
+        """
+        try:
+            # Extract action data from packet
+            # FreeCiv packet structure: actor_unit_id, target fields, action_type, etc.
+            actions = []
+            
+            # The packet may contain a single action possibility or multiple
+            # Based on FreeCiv protocol, PACKET_UNIT_ACTION_ANSWER has fields like:
+            # - actor_unit_id (int)
+            # - target_unit_id (int, optional)
+            # - target_city_id (int, optional)
+            # - target_tile_id (int, optional)
+            # - action_type (int)
+            # - action_prob (int) - probability in server format (0-200)
+            
+            action_type = packet.get('action_type')
+            action_prob = packet.get('action_prob')
+            
+            if action_type is not None:
+                action_entry = {
+                    'action_type': action_type,
+                    'probability': action_prob,  # Raw server format (0-200)
+                    'target_unit_id': packet.get('target_unit_id'),
+                    'target_city_id': packet.get('target_city_id'),
+                    'target_tile_id': packet.get('target_tile_id'),
+                    'target_extra_id': packet.get('target_extra_id')
+                }
+                actions.append(action_entry)
+            
+            # Store in cache
+            cache_entry = {
+                'actions': actions,
+                'timestamp': time.time(),
+                'turn': turn
+            }
+            
+            self.unit_action_cache.set(unit_id, turn, cache_entry)
+            logger.info(f"Cached action answer for unit {unit_id}: {len(actions)} actions")
+            
+        except Exception as e:
+            logger.error(f"Failed to process action answer packet for unit {unit_id}: {e}")
+
+    def _handle_unit_actions_packet(self, unit_id: int, packet: Dict[str, Any], turn: int):
+        """
+        Callback for PACKET_UNIT_ACTIONS from civserver.
+        Populates cache with list of available actions.
+        
+        Args:
+            unit_id: Unit ID for which actions are available
+            packet: Raw packet from server containing actions list
+            turn: Current game turn
+        """
+        try:
+            # Extract actions list from packet
+            # FreeCiv packet structure: actor_unit_id, actions (array)
+            actions_raw = packet.get('actions', [])
+            
+            actions = []
+            for action_data in actions_raw:
+                if isinstance(action_data, dict):
+                    actions.append({
+                        'action_type': action_data.get('action_type'),
+                        'probability': action_data.get('probability', 200),  # Default to certain
+                        'target_unit_id': action_data.get('target_unit_id'),
+                        'target_city_id': action_data.get('target_city_id'),
+                        'target_tile_id': action_data.get('target_tile_id'),
+                        'target_extra_id': action_data.get('target_extra_id')
+                    })
+            
+            # Store in cache
+            cache_entry = {
+                'actions': actions,
+                'timestamp': time.time(),
+                'turn': turn
+            }
+            
+            self.unit_action_cache.set(unit_id, turn, cache_entry)
+            logger.info(f"Cached unit actions for unit {unit_id}: {len(actions)} actions")
+            
+        except Exception as e:
+            logger.error(f"Failed to process unit actions packet for unit {unit_id}: {e}")
+
+    def _invalidate_unit_cache(self, unit_id: int, turn: Optional[int] = None):
+        """
+        Invalidate cache entry for a specific unit when its state changes.
+        
+        Args:
+            unit_id: Unit ID to invalidate
+            turn: Optional turn number (not used in invalidation, but passed by callbacks)
+        """
+        try:
+            self.unit_action_cache.invalidate(unit_id)
+            logger.debug(f"Invalidated action cache for unit {unit_id}")
+        except Exception as e:
+            logger.error(f"Failed to invalidate cache for unit {unit_id}: {e}")
+
+    def _invalidate_all_cache(self, turn: int):
+        """
+        Invalidate entire cache when turn changes.
+        All unit actions need to be re-queried from server on new turn.
+        
+        Args:
+            turn: New turn number
+        """
+        try:
+            self.unit_action_cache.clear()
+            logger.info(f"Cleared action cache for turn {turn}")
+        except Exception as e:
+            logger.error(f"Failed to clear cache for turn {turn}: {e}")
 
     def on_close(self):
         """Handle WebSocket connection close"""

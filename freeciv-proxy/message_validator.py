@@ -29,6 +29,9 @@ class MessageType(Enum):
     PLAYER_READY = "player_ready"
     CONN_PING = "conn_ping"  # FreeCiv keepalive ping from civserver
     CONN_PONG = "conn_pong"  # FreeCiv keepalive pong response
+    UNIT_ACTION_QUERY = "unit_action_query"  # Server-authoritative per-unit action query (v2.0)
+    UNIT_ACTION_QUERY_BATCH = "unit_action_query_batch"  # Batch version for efficiency
+    ACTION_RESULT = "action_result"  # Action execution result (v2.0 replacement for action_accepted)
 
 class MessageValidator:
     """
@@ -124,6 +127,67 @@ class MessageValidator:
             }
         }
     }
+
+    # Extended schemas injected for action queries (protocol v2.0)
+    # NOTE: We append them AFTER initial SCHEMAS declaration to keep diff minimal and avoid
+    # interfering with legacy initialization ordering.
+    SCHEMAS.update({
+        MessageType.UNIT_ACTION_QUERY: {
+            'required_fields': ['type', 'unit_id'],
+            'optional_fields': [
+                'target_unit_id', 'target_tile_id', 'target_extra_id', 'request_kind', 'correlation_id'
+            ],
+            'field_types': {
+                'type': str,
+                'unit_id': int,
+                'target_unit_id': int,
+                'target_tile_id': int,
+                'target_extra_id': int,
+                'request_kind': int,
+                'correlation_id': str
+            },
+            'field_constraints': {
+                'unit_id': {'min_value': 0, 'max_value': 2**31 - 1},
+                'target_unit_id': {'min_value': 0, 'max_value': 2**31 - 1},
+                'target_tile_id': {'min_value': 0, 'max_value': 2**31 - 1},
+                'target_extra_id': {'min_value': 0, 'max_value': 2**31 - 1},
+                'request_kind': {'min_value': 0, 'max_value': 10},  # Future expansion
+                'correlation_id': {'max_length': 128}
+            }
+        },
+        MessageType.UNIT_ACTION_QUERY_BATCH: {
+            'required_fields': ['type', 'queries'],
+            'optional_fields': ['correlation_id'],
+            'field_types': {
+                'type': str,
+                'queries': list,
+                'correlation_id': str
+            },
+            'field_constraints': {
+                'queries': {'max_length': 100},  # Guard against excessively large batches
+                'correlation_id': {'max_length': 128}
+            }
+        },
+        MessageType.ACTION_RESULT: {
+            'required_fields': ['type', 'success', 'action_type', 'result'],
+            'optional_fields': ['correlation_id', 'error_code', 'error_message'],
+            'field_types': {
+                'type': str,
+                'success': bool,
+                'action_type': str,
+                'result': dict,
+                'correlation_id': str,
+                'error_code': str,
+                'error_message': str
+            },
+            'field_constraints': {
+                'action_type': {'max_length': 50},
+                'correlation_id': {'max_length': 128},
+                'error_code': {'max_length': 10},
+                'error_message': {'max_length': 500}
+            }
+        }
+    })
 
     def __init__(self, max_message_size: int = None):
         self.max_message_size = max_message_size or self.MAX_MESSAGE_SIZE

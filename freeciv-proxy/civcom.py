@@ -46,6 +46,8 @@ from packet_constants import (
     PACKET_RULESET_ACTION_AUTO,
     PACKET_CONN_PING,
     PACKET_CONN_PONG,
+    PACKET_UNIT_ACTION_ANSWER,
+    PACKET_UNIT_ACTIONS,
     get_packet_name
 )
 # Import activity constants for worker action validation
@@ -621,7 +623,14 @@ class CivCom(Thread):
 
             # Game info packet (turn number, etc)
             elif packet_type == PACKET_GAME_INFO:
+                old_turn = self.game_turn
                 self.game_turn = packet.get('turn', self.game_turn)
+                
+                # Invalidate cache on turn change
+                if old_turn != self.game_turn:
+                    if hasattr(self, 'turn_changed_callback') and callable(self.turn_changed_callback):
+                        self.turn_changed_callback(self.game_turn)
+                
                 # Capture minimum city distance rule if present.
                 # Field name in Freeciv packets.def: citymindist (UINT8)
                 if 'citymindist' in packet:
@@ -729,6 +738,10 @@ class CivCom(Thread):
 
                     self.player_units[unit_id] = unit_data
                     logger.info(f"✓ Stored unit {unit_id} (type={unit_type_name}, type_id={unit_type_raw}) for owner {owner}")
+                    
+                    # Invalidate action cache for this unit (state changed)
+                    if hasattr(self, 'unit_state_changed_callback') and callable(self.unit_state_changed_callback):
+                        self.unit_state_changed_callback(unit_id, self.game_turn)
 
             # City info packet - stores cities by ID for all players
             elif packet_type == PACKET_CITY_INFO:
@@ -779,6 +792,10 @@ class CivCom(Thread):
                         removed_unit = self.player_units.pop(unit_id)
                         unit_type = removed_unit.get('utype', 'unknown')
                         logger.info(f"✓ Removed unit {unit_id} (type={unit_type}) - consumed/destroyed")
+                        
+                        # Invalidate action cache for removed unit
+                        if hasattr(self, 'unit_removed_callback') and callable(self.unit_removed_callback):
+                            self.unit_removed_callback(unit_id)
                     else:
                         logger.debug(f"Received PACKET_UNIT_REMOVE for unit {unit_id} (not in our tracked units)")
 
@@ -816,6 +833,31 @@ class CivCom(Thread):
                 if unit_id is not None:
                     logger.debug(f"Unit short info for unit {unit_id} (owner={owner})")
                     # Could update existing unit data in self.player_units if needed
+
+            # Unit action answer packet - server response to action query
+            # Contains available actions with probabilities for a specific unit
+            elif packet_type == PACKET_UNIT_ACTION_ANSWER:
+                unit_id = packet.get('actor_unit_id')
+                if unit_id is not None:
+                    logger.info(f"Received action answer for unit {unit_id}")
+                    # Notify any registered LLM handlers about this action data
+                    if hasattr(self, 'action_answer_callback') and callable(self.action_answer_callback):
+                        self.action_answer_callback(unit_id, packet, self.game_turn)
+                    else:
+                        logger.debug(f"No action_answer_callback registered for unit {unit_id}")
+
+            # Unit actions packet - list of available actions for a unit
+            # Sent periodically by server with updated action possibilities
+            elif packet_type == PACKET_UNIT_ACTIONS:
+                unit_id = packet.get('actor_unit_id')
+                if unit_id is not None:
+                    actions_list = packet.get('actions', [])
+                    logger.info(f"Received {len(actions_list)} actions for unit {unit_id}")
+                    # Notify any registered LLM handlers about this action data
+                    if hasattr(self, 'unit_actions_callback') and callable(self.unit_actions_callback):
+                        self.unit_actions_callback(unit_id, packet, self.game_turn)
+                    else:
+                        logger.debug(f"No unit_actions_callback registered for unit {unit_id}")
 
             # Ruleset nation packet - stores nation ID to name mappings
             elif packet_type == PACKET_RULESET_NATION:

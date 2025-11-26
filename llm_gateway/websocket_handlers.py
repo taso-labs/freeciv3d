@@ -572,6 +572,41 @@ class AgentWebSocketHandler:
             if "timestamp" in message:
                 transformed["timestamp"] = message["timestamp"]
         # For other types, pass through as-is
+        elif msg_type == "unit_action_query":
+            # Protocol v2.0 per-unit server authoritative action query
+            # Keep all allowed query fields, drop unrelated top-level agent metadata already flattened
+            allowed_fields = {
+                "type", "unit_id", "target_unit_id", "target_tile_id",
+                "target_extra_id", "request_kind", "correlation_id"
+            }
+            transformed = {k: v for k, v in transformed.items() if k in allowed_fields}
+        elif msg_type == "unit_action_query_batch":
+            # Batch query - list of query objects under 'queries'
+            allowed_fields = {"type", "queries", "correlation_id"}
+            transformed = {k: v for k, v in transformed.items() if k in allowed_fields}
+        elif msg_type == "unit_action_response":
+            # Responses from proxy to agent should retain original structure; re-nest data if needed
+            # If data fields were flattened (unlikely for responses), rebuild expected agent structure
+            if "actions" in transformed and "data" not in message:
+                # Build data payload using known response fields
+                response_fields = {
+                    'unit_id': transformed.get('unit_id'),
+                    'target_unit_id': transformed.get('target_unit_id'),
+                    'target_tile_id': transformed.get('target_tile_id'),
+                    'target_extra_id': transformed.get('target_extra_id'),
+                    'request_kind': transformed.get('request_kind'),
+                    'actions': transformed.get('actions', []),
+                    'queried_at': transformed.get('queried_at')
+                }
+                rebuilt = {
+                    'type': 'unit_action_response',
+                    'agent_id': self.agent_id,
+                    'timestamp': time.time(),
+                }
+                if 'correlation_id' in transformed:
+                    rebuilt['correlation_id'] = transformed.get('correlation_id')
+                rebuilt['data'] = response_fields
+                transformed = rebuilt
 
         return transformed
 
