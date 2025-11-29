@@ -4,12 +4,12 @@
 
 This document specifies the WebSocket protocol for LLM agent communication between Game Arena and FreeCiv3D. The protocol enables reliable, bidirectional communication for LLM-driven gameplay.
 
-**Version**: 1.0.0
-**Date**: September 18, 2025
+**Version**: 2.0.0
+**Date**: November 29, 2025
 
 ## Architecture
 
-```
+```text
 Game Arena → LLM Gateway (port 8003) → FreeCiv Proxy (port 8002) → FreeCiv Server
 ```
 
@@ -20,6 +20,7 @@ Game Arena → LLM Gateway (port 8003) → FreeCiv Proxy (port 8002) → FreeCiv
 All collections (units, cities, players) are returned as **dictionaries keyed by ID** for efficient access:
 
 **Example State Response:**
+
 ```json
 {
   "status": "success",
@@ -46,6 +47,7 @@ All collections (units, cities, players) are returned as **dictionaries keyed by
 
 2. **O(1) Access by ID**
    Direct lookup by ID instead of O(n) array filtering:
+
    ```python
    # Efficient dictionary access
    warrior = state['units']['123']
@@ -60,6 +62,7 @@ All collections (units, cities, players) are returned as **dictionaries keyed by
    - `activity`: "idle" instead of enum value `0`
 
 **Accessing Collections:**
+
 ```python
 # Get specific unit
 unit = state['units'].get('123')
@@ -95,12 +98,14 @@ All messages follow this structure:
 ```
 
 ### Required Fields
+
 - `type`: Message type (see Message Types below)
 - `agent_id`: Unique identifier for the LLM agent
 - `timestamp`: Unix timestamp with millisecond precision
 - `data`: Message payload (structure varies by type)
 
 ### Optional Fields
+
 - `correlation_id`: For request/response correlation in async operations
 
 ## Message Types
@@ -108,6 +113,7 @@ All messages follow this structure:
 ### 1. Connection Management
 
 #### LLM_CONNECT (Request)
+
 ```json
 {
   "type": "llm_connect",
@@ -123,6 +129,7 @@ All messages follow this structure:
 ```
 
 #### AUTH_SUCCESS (Response)
+
 ```json
 {
   "type": "llm_connect",
@@ -142,6 +149,7 @@ All messages follow this structure:
 ### 2. Game State Queries
 
 #### STATE_QUERY (Request)
+
 ```json
 {
   "type": "state_query",
@@ -157,11 +165,13 @@ All messages follow this structure:
 ```
 
 **Format Options:**
+
 - `full`: Complete game state with all details
 - `delta`: Changes since last query
 - `llm_optimized`: Compressed state optimized for LLM consumption
 
 #### STATE_UPDATE (Response)
+
 ```json
 {
   "type": "state_update",
@@ -227,9 +237,168 @@ All messages follow this structure:
 
 **Note**: The `players`, `units`, and `cities` fields are always returned as **dictionaries** (objects) keyed by ID, not arrays. This provides efficient O(1) lookups by ID.
 
-### 3. Action Submission
+### 3. Per-Entity Action Queries
+
+These query types allow clients to request available actions for a specific unit or city. The returned actions are complete and directly submittable—clients can send them back as ACTION requests without modification.
+
+#### UNIT_ACTIONS_QUERY (Request)
+
+Query all legal actions available for a specific unit.
+
+```json
+{
+  "type": "unit_actions_query",
+  "agent_id": "my-agent",
+  "timestamp": 1234567890.123,
+  "correlation_id": "unit-query-001",
+  "data": {
+    "unit_id": 42
+  }
+}
+```
+
+#### UNIT_ACTIONS_RESPONSE (Response)
+
+Returns a flat list of all legal actions the unit can perform. Each action object is complete and can be directly submitted as an ACTION request.
+
+```json
+{
+  "type": "unit_actions_response",
+  "agent_id": "my-agent",
+  "timestamp": 1234567890.125,
+  "correlation_id": "unit-query-001",
+  "data": {
+    "success": true,
+    "unit_id": 42,
+    "actions": [
+      {
+        "action_type": "unit_move",
+        "actor_id": 42,
+        "target": {"x": 11, "y": 21}
+      },
+      {
+        "action_type": "unit_move",
+        "actor_id": 42,
+        "target": {"x": 10, "y": 21}
+      },
+      {
+        "action_type": "unit_fortify",
+        "actor_id": 42
+      },
+      {
+        "action_type": "unit_sentry",
+        "actor_id": 42
+      },
+      {
+        "action_type": "unit_attack",
+        "actor_id": 42,
+        "target": {"unit_id": 99}
+      }
+    ]
+  }
+}
+```
+
+**Usage Pattern:**
+
+```python
+# 1. Query actions for a unit
+await ws.send(json.dumps({
+    "type": "unit_actions_query",
+    "agent_id": "my-agent",
+    "timestamp": time.time(),
+    "data": {"unit_id": 42}
+}))
+
+response = json.loads(await ws.recv())
+actions = response['data']['actions']
+
+# 2. Pick an action and submit it directly
+chosen_action = actions[0]  # e.g., {"action_type": "unit_move", "actor_id": 42, "target": {"x": 11, "y": 21}}
+
+await ws.send(json.dumps({
+    "type": "action",
+    "agent_id": "my-agent",
+    "timestamp": time.time(),
+    "data": chosen_action  # Send directly without modification
+}))
+```
+
+**Error Codes:**
+
+- `E230`: Unit not found
+- `E231`: Unit not owned by player
+- `E503`: Query timeout (server did not respond in time)
+
+#### CITY_ACTIONS_QUERY (Request)
+
+Query all legal actions available for a specific city.
+
+```json
+{
+  "type": "city_actions_query",
+  "agent_id": "my-agent",
+  "timestamp": 1234567890.123,
+  "correlation_id": "city-query-001",
+  "data": {
+    "city_id": 5
+  }
+}
+```
+
+#### CITY_ACTIONS_RESPONSE (Response)
+
+Returns a flat list of all legal actions for the city.
+
+```json
+{
+  "type": "city_actions_response",
+  "agent_id": "my-agent",
+  "timestamp": 1234567890.125,
+  "correlation_id": "city-query-001",
+  "data": {
+    "success": true,
+    "city_id": 5,
+    "actions": [
+      {
+        "action_type": "city_production",
+        "actor_id": 5,
+        "target": {"production": "Warrior"}
+      },
+      {
+        "action_type": "city_production",
+        "actor_id": 5,
+        "target": {"production": "Settler"}
+      },
+      {
+        "action_type": "city_production",
+        "actor_id": 5,
+        "target": {"production": "Granary"}
+      },
+      {
+        "action_type": "city_buy",
+        "actor_id": 5
+      },
+      {
+        "action_type": "city_sell_improvement",
+        "actor_id": 5,
+        "target": {"improvement": "Barracks"}
+      }
+    ]
+  }
+}
+```
+
+**Error Codes:**
+
+- `E240`: City not found
+- `E241`: City not owned by player
+- `E503`: Query timeout (server did not respond in time)
+
+### 4. Action Submission
 
 #### ACTION (Request)
+
 ```json
 {
   "type": "action",
@@ -239,30 +408,382 @@ All messages follow this structure:
   "data": {
     "action_type": "unit_move",
     "actor_id": 42,
-    "target": {"x": 11, "y": 21},
-    "parameters": {"validate": true}
+    "target": {"x": 11, "y": 21}
   }
 }
 ```
 
-**Action Types:**
-- `unit_move`: Move unit to coordinates
-- `unit_attack`: Attack target unit/city
-- `unit_build_city`: Build city at current location
-- `unit_explore`: Set unit to auto-explore
-- `unit_fortify`: Fortify unit for defensive bonus
-- `unit_sentry`: Put unit on sentry mode (skip turn until enemy nearby)
-- `unit_build_road`: Build road at specified coordinates
-- `unit_build_irrigation`: Build irrigation at specified coordinates
-- `unit_build_mine`: Build mine at specified coordinates
-- `city_production`: Set city production
-- `city_build_unit`: Build specific unit type
-- `city_build_improvement`: Build city improvement
-- `tech_research`: Research technology
-- `diplomacy_message`: Send diplomatic message
-- `end_turn`: End current turn
+#### Action Request Fields
+
+| Field         | Type    | Required | Description                                                  |
+| ------------- | ------- | -------- | ------------------------------------------------------------ |
+| `action_type` | string  | Yes      | The type of action to perform                                |
+| `actor_id`    | integer | Yes      | ID of the unit or city performing the action                 |
+| `target`      | object  | Varies   | Target of the action (coordinates, unit, city, or player)    |
+| `sub_target`  | object  | No       | Secondary target for targeted actions (building, tech, etc.) |
+
+#### Target Field Structures
+
+Depending on the action type, the `target` field uses different structures:
+
+- **Tile target**: `{"x": int, "y": int}` — for movement, terrain improvements
+- **Unit target**: `{"unit_id": int}` — for attacks, bribes, healing
+- **City target**: `{"city_id": int}` — for trade routes, espionage
+- **Player target**: `{"player_id": int}` — for diplomacy actions
+- **Production target**: `{"production": string}` — for city production (unit or building name)
+- **Improvement target**: `{"improvement": string}` — for selling city improvements
+
+#### Sub-Target Field (for Targeted Actions)
+
+Some espionage actions allow targeting specific buildings or technologies:
+
+```json
+{
+  "action_type": "spy_targeted_sabotage_city",
+  "actor_id": 42,
+  "target": {"city_id": 5},
+  "sub_target": {"type": "building", "name": "Granary"}
+}
+```
+
+```json
+{
+  "action_type": "spy_targeted_steal_tech",
+  "actor_id": 42,
+  "target": {"city_id": 5},
+  "sub_target": {"type": "tech", "name": "Bronze Working"}
+}
+```
+
+---
+
+## Action Types Reference
+
+All available action types organized by category. Actions returned from `unit_actions_query` and `city_actions_query` use these exact formats.
+
+### Diplomacy Actions
+
+Player-to-player diplomatic interactions. These actions enable declaring war, making peace, and managing alliances.
+
+| Action Type                   | Description                                         | Target                                  |
+| ----------------------------- | --------------------------------------------------- | --------------------------------------- |
+| `diplomacy_declare_war`       | Declare war on another player                       | `{"player_id": int}`                    |
+| `diplomacy_cancel_treaty`     | Cancel existing treaty (peace, alliance, ceasefire) | `{"player_id": int}`                    |
+| `diplomacy_propose_ceasefire` | Propose a ceasefire                                 | `{"player_id": int}`                    |
+| `diplomacy_propose_peace`     | Propose peace treaty                                | `{"player_id": int}`                    |
+| `diplomacy_propose_alliance`  | Propose an alliance                                 | `{"player_id": int}`                    |
+| `diplomacy_accept_treaty`     | Accept a pending treaty proposal                    | `{"player_id": int}`                    |
+| `diplomacy_reject_treaty`     | Reject a pending treaty proposal                    | `{"player_id": int}`                    |
+| `diplomacy_share_vision`      | Share map vision with ally                          | `{"player_id": int}`                    |
+| `diplomacy_withdraw_vision`   | Stop sharing vision                                 | `{"player_id": int}`                    |
+| `diplomacy_message`           | Send diplomatic message                             | `{"player_id": int, "message": string}` |
+
+**Example — Declare War:**
+
+```json
+{
+  "type": "action",
+  "agent_id": "my-agent",
+  "timestamp": 1234567890.123,
+  "data": {
+    "action_type": "diplomacy_declare_war",
+    "actor_id": 0,
+    "target": {"player_id": 2}
+  }
+}
+```
+
+**Example — Propose Peace:**
+
+```json
+{
+  "type": "action",
+  "agent_id": "my-agent",
+  "timestamp": 1234567890.123,
+  "data": {
+    "action_type": "diplomacy_propose_peace",
+    "actor_id": 0,
+    "target": {"player_id": 2}
+  }
+}
+```
+
+### Espionage Actions (Diplomat/Spy Units)
+
+Actions performed by Diplomat and Spy units for intelligence and sabotage.
+
+| Action Type                  | Description                       | Target             | Sub-Target                             |
+| ---------------------------- | --------------------------------- | ------------------ | -------------------------------------- |
+| `unit_establish_embassy`     | Establish embassy in city         | `{"city_id": int}` | —                                      |
+| `spy_investigate_city`       | Investigate city (view details)   | `{"city_id": int}` | —                                      |
+| `spy_poison`                 | Poison city water supply          | `{"city_id": int}` | —                                      |
+| `spy_sabotage_city`          | Random sabotage in city           | `{"city_id": int}` | —                                      |
+| `spy_targeted_sabotage_city` | Sabotage specific building        | `{"city_id": int}` | `{"type": "building", "name": string}` |
+| `spy_steal_tech`             | Steal random technology           | `{"city_id": int}` | —                                      |
+| `spy_targeted_steal_tech`    | Steal specific technology         | `{"city_id": int}` | `{"type": "tech", "name": string}`     |
+| `spy_incite_city`            | Incite city to revolt             | `{"city_id": int}` | —                                      |
+| `spy_steal_gold`             | Steal gold from city              | `{"city_id": int}` | —                                      |
+| `spy_steal_maps`             | Steal enemy maps                  | `{"city_id": int}` | —                                      |
+| `spy_nuke`                   | Suitcase nuke (destroy city)      | `{"city_id": int}` | —                                      |
+| `spy_spread_plague`          | Spread plague in city             | `{"city_id": int}` | —                                      |
+| `spy_bribe_unit`             | Bribe enemy unit to defect        | `{"unit_id": int}` | —                                      |
+| `spy_sabotage_unit`          | Sabotage enemy unit               | `{"unit_id": int}` | —                                      |
+| `spy_attack`                 | Spy attacks defending spy         | `{"unit_id": int}` | —                                      |
+| `unit_expel`                 | Expel foreign unit from territory | `{"unit_id": int}` | —                                      |
+
+**Example — Steal Technology:**
+
+```json
+{
+  "type": "action",
+  "agent_id": "my-agent",
+  "timestamp": 1234567890.123,
+  "data": {
+    "action_type": "spy_targeted_steal_tech",
+    "actor_id": 42,
+    "target": {"city_id": 5},
+    "sub_target": {"type": "tech", "name": "Iron Working"}
+  }
+}
+```
+
+### Combat Actions
+
+Military and offensive actions.
+
+| Action Type           | Description                             | Target                                       |
+| --------------------- | --------------------------------------- | -------------------------------------------- |
+| `unit_attack`         | Attack enemy unit or city               | `{"unit_id": int}` or `{"x": int, "y": int}` |
+| `unit_suicide_attack` | Attack with unit destruction guaranteed | `{"unit_id": int}` or `{"x": int, "y": int}` |
+| `unit_bombard`        | Artillery bombardment (no retaliation)  | `{"x": int, "y": int}`                       |
+| `unit_capture`        | Capture enemy units                     | `{"x": int, "y": int}`                       |
+| `unit_wipe`           | Wipe all units on tile                  | `{"x": int, "y": int}`                       |
+| `unit_conquer_city`   | Conquer enemy city                      | `{"city_id": int}`                           |
+| `unit_nuke`           | Nuclear strike on tile                  | `{"x": int, "y": int}`                       |
+| `unit_nuke_city`      | Nuclear strike on city                  | `{"city_id": int}`                           |
+| `unit_nuke_units`     | Nuclear strike on units                 | `{"x": int, "y": int}`                       |
+
+**Example — Attack:**
+
+```json
+{
+  "type": "action",
+  "agent_id": "my-agent",
+  "timestamp": 1234567890.123,
+  "data": {
+    "action_type": "unit_attack",
+    "actor_id": 42,
+    "target": {"unit_id": 99}
+  }
+}
+```
+
+### Movement & Transport Actions
+
+Unit movement, transportation, and logistics.
+
+| Action Type      | Description                                 | Target                 |
+| ---------------- | ------------------------------------------- | ---------------------- |
+| `unit_move`      | Move unit to adjacent tile                  | `{"x": int, "y": int}` |
+| `unit_teleport`  | Teleport to location (if capability exists) | `{"x": int, "y": int}` |
+| `unit_airlift`   | Airlift unit between cities                 | `{"city_id": int}`     |
+| `unit_paradrop`  | Paradrop to location                        | `{"x": int, "y": int}` |
+| `unit_embark`    | Embark onto transport                       | `{"unit_id": int}`     |
+| `unit_disembark` | Disembark from transport to tile            | `{"x": int, "y": int}` |
+| `unit_board`     | Board transport (same tile)                 | `{"unit_id": int}`     |
+| `unit_deboard`   | Deboard from transport (same tile)          | —                      |
+| `unit_load`      | Load cargo onto transport                   | `{"unit_id": int}`     |
+| `unit_unload`    | Unload cargo from transport                 | `{"unit_id": int}`     |
+
+**Example — Move:**
+
+```json
+{
+  "type": "action",
+  "agent_id": "my-agent",
+  "timestamp": 1234567890.123,
+  "data": {
+    "action_type": "unit_move",
+    "actor_id": 42,
+    "target": {"x": 11, "y": 21}
+  }
+}
+```
+
+### City Foundation & Management
+
+City creation and unit-city interactions.
+
+| Action Type       | Description                        | Target                        |
+| ----------------- | ---------------------------------- | ----------------------------- |
+| `unit_found_city` | Found new city at current location | `{"name": string}` (optional) |
+| `unit_join_city`  | Join city to add population        | `{"city_id": int}`            |
+| `unit_home_city`  | Change unit's home city            | `{"city_id": int}`            |
+
+**Example — Found City:**
+
+```json
+{
+  "type": "action",
+  "agent_id": "my-agent",
+  "timestamp": 1234567890.123,
+  "data": {
+    "action_type": "unit_found_city",
+    "actor_id": 456,
+    "target": {"name": "New Rome"}
+  }
+}
+```
+
+### Trade Actions
+
+Economic and trade-related unit actions.
+
+| Action Type        | Description                               | Target             |
+| ------------------ | ----------------------------------------- | ------------------ |
+| `unit_trade_route` | Establish trade route with city           | `{"city_id": int}` |
+| `unit_marketplace` | Enter marketplace (sell goods)            | `{"city_id": int}` |
+| `unit_help_wonder` | Contribute shields to wonder construction | `{"city_id": int}` |
+
+### Terrain Improvement Actions
+
+Worker/Engineer actions for tile improvements.
+
+| Action Type             | Description                                | Target                       |
+| ----------------------- | ------------------------------------------ | ---------------------------- |
+| `unit_build_road`       | Build road on tile                         | — (uses unit's current tile) |
+| `unit_build_irrigation` | Build irrigation on tile                   | —                            |
+| `unit_build_mine`       | Build mine on tile                         | —                            |
+| `unit_build_base`       | Build fortress or airbase                  | —                            |
+| `unit_pillage`          | Pillage tile improvements                  | — or `{"extra": string}`     |
+| `unit_clean`            | Clean pollution or fallout                 | —                            |
+| `unit_transform`        | Transform terrain type                     | —                            |
+| `unit_cultivate`        | Cultivate terrain (e.g., forest to plains) | —                            |
+| `unit_plant`            | Plant forest or jungle                     | —                            |
+
+**Note:** Terrain improvement actions operate on the unit's current tile. No target coordinates needed.
+
+**Example — Build Road:**
+
+```json
+{
+  "type": "action",
+  "agent_id": "my-agent",
+  "timestamp": 1234567890.123,
+  "data": {
+    "action_type": "unit_build_road",
+    "actor_id": 789
+  }
+}
+```
+
+### Unit Status Actions
+
+Unit state and capability management.
+
+| Action Type    | Description                                    | Target             |
+| -------------- | ---------------------------------------------- | ------------------ |
+| `unit_fortify` | Fortify unit for defense bonus                 | —                  |
+| `unit_sentry`  | Put on sentry (wake on enemy approach)         | —                  |
+| `unit_explore` | Auto-explore unknown territory                 | —                  |
+| `unit_disband` | Disband unit (recover some shields if in city) | —                  |
+| `unit_upgrade` | Upgrade unit type (costs gold)                 | —                  |
+| `unit_convert` | Convert unit to different type                 | —                  |
+| `unit_heal`    | Heal nearby friendly unit                      | `{"unit_id": int}` |
+
+**Example — Fortify:**
+
+```json
+{
+  "type": "action",
+  "agent_id": "my-agent",
+  "timestamp": 1234567890.123,
+  "data": {
+    "action_type": "unit_fortify",
+    "actor_id": 123
+  }
+}
+```
+
+### City Actions
+
+City production and management (actor_id is the city ID).
+
+| Action Type             | Description                      | Target                    |
+| ----------------------- | -------------------------------- | ------------------------- |
+| `city_production`       | Change city production           | `{"production": string}`  |
+| `city_buy`              | Buy current production with gold | —                         |
+| `city_sell_improvement` | Sell city improvement for gold   | `{"improvement": string}` |
+
+**Example — Set Production:**
+
+```json
+{
+  "type": "action",
+  "agent_id": "my-agent",
+  "timestamp": 1234567890.123,
+  "data": {
+    "action_type": "city_production",
+    "actor_id": 5,
+    "target": {"production": "Warrior"}
+  }
+}
+```
+
+**Example — Buy Production:**
+
+```json
+{
+  "type": "action",
+  "agent_id": "my-agent",
+  "timestamp": 1234567890.123,
+  "data": {
+    "action_type": "city_buy",
+    "actor_id": 5
+  }
+}
+```
+
+### Research & Game Control
+
+| Action Type     | Description           | Target             |
+| --------------- | --------------------- | ------------------ |
+| `tech_research` | Research a technology | `{"tech": string}` |
+| `end_turn`      | End current turn      | —                  |
+
+**Example — Research Technology:**
+
+```json
+{
+  "type": "action",
+  "agent_id": "my-agent",
+  "timestamp": 1234567890.123,
+  "data": {
+    "action_type": "tech_research",
+    "actor_id": 0,
+    "target": {"tech": "Bronze Working"}
+  }
+}
+```
+
+**Example — End Turn:**
+
+```json
+{
+  "type": "action",
+  "agent_id": "my-agent",
+  "timestamp": 1234567890.123,
+  "data": {
+    "action_type": "end_turn",
+    "actor_id": 0
+  }
+}
+```
+
+---
 
 #### ACTION_RESULT (Response)
+
 ```json
 {
   "type": "action_result",
@@ -284,9 +805,10 @@ All messages follow this structure:
 }
 ```
 
-### 4. Turn Management
+### 5. Turn Management
 
 #### TURN_START
+
 ```json
 {
   "type": "turn_start",
@@ -302,6 +824,7 @@ All messages follow this structure:
 ```
 
 #### TURN_END
+
 ```json
 {
   "type": "turn_end",
@@ -318,9 +841,10 @@ All messages follow this structure:
 }
 ```
 
-### 5. Heartbeat
+### 6. Heartbeat
 
 #### PING
+
 ```json
 {
   "type": "ping",
@@ -331,6 +855,7 @@ All messages follow this structure:
 ```
 
 #### PONG (Response)
+
 ```json
 {
   "type": "pong",
@@ -339,9 +864,10 @@ All messages follow this structure:
 }
 ```
 
-### 6. Error Handling
+### 7. Error Handling
 
 #### ERROR (Response)
+
 ```json
 {
   "type": "error",
@@ -365,6 +891,7 @@ All messages follow this structure:
 ```
 
 **Enhanced Error Response Fields:**
+
 - `code`: Specific error code (E120, E123, E429, E999, etc.)
 - `message`: Human-readable error description
 - `details`: Context object with diagnostic information:
@@ -376,6 +903,7 @@ All messages follow this structure:
   - `exception_type`: Type of exception (for E999 errors)
 
 **Rate Limit Error Example:**
+
 ```json
 {
   "type": "rate_limit_error",
@@ -407,27 +935,69 @@ All messages follow this structure:
 ```
 
 **Error Codes:**
+
+**System & Connection:**
+
 - `E101`: Missing required field
 - `E102`: Invalid API token
 - `E103`: Unknown message type
 - `E120`: Not authenticated (session expired or not yet authenticated)
 - `E121`: State query failed
 - `E123`: Connection to game server lost
-- `E130`: Action validation failed
-- `E131`: Action execution failed
 - `E429`: Rate limit exceeded (with grace period details)
 - `E500`: Internal server error
+- `E503`: Query timeout (server did not respond in time)
 - `E999`: Unknown error (with diagnostic context)
+
+**Action Validation:**
+
+- `E130`: Action validation failed (generic)
+- `E131`: Action execution failed
+- `E220`: Missing required field (action-specific)
+- `E221`: Invalid field type
+- `E222`: Field value out of valid range
+
+**Unit Validation:**
+
+- `E230`: Unit not found
+- `E231`: Unit not owned by player
+- `E232`: Unit is busy or has no moves left
+- `E233`: Insufficient movement points
+- `E234`: Unit lacks required capability
+
+**City Validation:**
+
+- `E240`: City not found
+- `E241`: City not owned by player
+- `E242`: City at maximum capacity
+
+**Target Validation:**
+
+- `E250`: Insufficient gold or resources
+- `E251`: Invalid coordinates
+- `E252`: Target out of range
+- `E253`: Target not visible
+- `E254`: Terrain incompatible with action
+
+**Diplomacy:**
+
+- `E260`: Target player not found
+- `E261`: Cannot perform diplomatic action (e.g., already at war)
+- `E262`: Treaty already exists
+- `E263`: No pending treaty to accept/reject
+- `E264`: Invalid diplomatic state for action
 
 ## Connection Management
 
 ### Endpoints
 
 #### LLM Gateway (port 8003)
+
 - **Agent WebSocket**: `ws://localhost:8003/ws/agent/{agent_id}`
 - **REST API**: `http://localhost:8003/api/`
 
 #### FreeCiv Proxy (port 8002)
+
 - **LLM WebSocket**: `ws://localhost:8002/llmsocket/8002`
 
 ### Authentication
@@ -540,6 +1110,7 @@ Complete game state with all details. **Note**: `players`, `units`, and `cities`
 ```
 
 **Field Types**:
+
 - `units[].type`: string (e.g., `"warrior"`, `"settler"`)
 - `units[].activity`: string or null (e.g., `"idle"`, `"sentry"`, `"fortified"`, or `null` for no activity)
 - `players[].nation`: string (e.g., `"Romans"`, `"Americans"`, `"Greeks"`)
@@ -641,192 +1212,9 @@ async def submit_action(websocket):
     print(f"Action result: {result}")
 ```
 
-### New Unit Actions (v2.0)
-
-The following unit actions were added to provide richer gameplay capabilities:
-
-#### unit_fortify
-
-Fortify a unit to increase defensive strength. Fortified units cannot move but receive defense bonuses.
-
-**Request:**
-```json
-{
-  "type": "action",
-  "agent_id": "my-agent",
-  "timestamp": 1234567890.123,
-  "data": {
-    "action_type": "unit_fortify",
-    "unit_id": 123,
-    "player_id": 0
-  }
-}
-```
-
-**Success Response:**
-```json
-{
-  "type": "action_result",
-  "data": {
-    "success": true,
-    "action_type": "unit_fortify",
-    "unit_id": 123
-  }
-}
-```
-
-**Error Codes:**
-- `E050`: Missing required field `unit_id`
-- `E051`: Unit not found
-- `E052`: Player does not own this unit
-
-**Notes:**
-- Unit must have movement points remaining
-- Some unit types cannot fortify (e.g., settlers)
-- Fortified units must be unfortified before moving
-
-#### unit_sentry
-
-Put unit on sentry mode. Unit will skip turns until enemy units are nearby.
-
-**Request:**
-```json
-{
-  "type": "action",
-  "agent_id": "my-agent",
-  "timestamp": 1234567890.123,
-  "data": {
-    "action_type": "unit_sentry",
-    "unit_id": 456,
-    "player_id": 0
-  }
-}
-```
-
-**Error Codes:**
-- `E060`: Missing required field `unit_id`
-- `E061`: Unit not found
-- `E062`: Player does not own this unit
-
-**Notes:**
-- Sentry mode automatically wakes unit when enemies approach
-- Useful for border patrol and defensive positions
-
-#### unit_build_road
-
-Build a road at specified coordinates to improve movement speed.
-
-**Request:**
-```json
-{
-  "type": "action",
-  "agent_id": "my-agent",
-  "timestamp": 1234567890.123,
-  "data": {
-    "action_type": "unit_build_road",
-    "unit_id": 789,
-    "player_id": 0,
-    "x": 10,
-    "y": 15
-  }
-}
-```
-
-**Required Fields:**
-- `unit_id`: ID of the worker/engineer unit
-- `player_id`: Player ID (must match authenticated player)
-- `x`: X coordinate (0-199 for default 200x200 map)
-- `y`: Y coordinate (0-199 for default 200x200 map)
-
-**Error Codes:**
-- `E070`: Missing required field (unit_id, x, or y)
-- `E071`: Coordinates must be integers
-- `E072`: Coordinates out of bounds
-- `E073`: Player does not own this unit
-- `E074`: Unit not found
-
-**Notes:**
-- Only worker/engineer units can build roads
-- Building takes multiple turns depending on terrain
-- Roads increase unit movement speed
-
-#### unit_build_irrigation
-
-Build irrigation at specified coordinates to improve food production.
-
-**Request:**
-```json
-{
-  "type": "action",
-  "agent_id": "my-agent",
-  "timestamp": 1234567890.123,
-  "data": {
-    "action_type": "unit_build_irrigation",
-    "unit_id": 789,
-    "player_id": 0,
-    "x": 12,
-    "y": 18
-  }
-}
-```
-
-**Required Fields:**
-- `unit_id`: ID of the worker/engineer unit
-- `player_id`: Player ID
-- `x`, `y`: Coordinates for irrigation
-
-**Error Codes:**
-- `E080`: Missing required field
-- `E081`: Coordinates must be integers
-- `E082`: Coordinates out of bounds
-- `E083`: Player does not own this unit
-- `E084`: Unit not found
-
-**Notes:**
-- Requires water source nearby (river or ocean)
-- Increases food output of tile
-- Building takes multiple turns
-
-#### unit_build_mine
-
-Build a mine at specified coordinates to improve production.
-
-**Request:**
-```json
-{
-  "type": "action",
-  "agent_id": "my-agent",
-  "timestamp": 1234567890.123,
-  "data": {
-    "action_type": "unit_build_mine",
-    "unit_id": 789,
-    "player_id": 0,
-    "x": 25,
-    "y": 30
-  }
-}
-```
-
-**Required Fields:**
-- `unit_id`: ID of the worker/engineer unit
-- `player_id`: Player ID
-- `x`, `y`: Coordinates for mine
-
-**Error Codes:**
-- `E090`: Missing required field
-- `E091`: Coordinates must be integers
-- `E092`: Coordinates out of bounds
-- `E093`: Player does not own this unit
-- `E094`: Unit not found
-
-**Notes:**
-- Works best on hills and mountains
-- Increases production output of tile
-- Cannot mine ocean tiles
-
 ### Complete Multi-Turn Game Flow Example
 
-This example demonstrates a typical LLM agent gameplay session using the new actions:
+This example demonstrates a typical LLM agent gameplay session using per-unit action queries and diplomacy:
 
 ```python
 import asyncio
@@ -850,84 +1238,98 @@ async def play_game():
         }))
 
         auth_response = json.loads(await ws.recv())
-        print(f"Authenticated: {auth_response['data']['success']}")
+        player_id = auth_response['data']['player_id']
+        print(f"Authenticated as player {player_id}")
 
         # 2. Get current state
         await ws.send(json.dumps({
             "type": "state_query",
             "agent_id": "my-agent",
             "timestamp": time.time(),
-            "data": {"format": "llm_optimized"}
+            "data": {"format": "full", "include_legal_actions": True}
         }))
 
         state = json.loads(await ws.recv())
-        units = state['data']['units']  # Dict format: {"123": {...}, "456": {...}}
+        units = state['data']['data']['units']  # Dict: {"123": {...}, "456": {...}}
 
-        # 3. Access specific unit by ID (O(1) lookup)
+        # 3. Query available actions for a specific unit
+        warrior_id = 123
+        await ws.send(json.dumps({
+            "type": "unit_actions_query",
+            "agent_id": "my-agent",
+            "timestamp": time.time(),
+            "data": {"unit_id": warrior_id}
+        }))
+
+        actions_response = json.loads(await ws.recv())
+        available_actions = actions_response['data']['actions']
+        print(f"Unit {warrior_id} has {len(available_actions)} available actions")
+
+        # 4. Pick and submit an action directly (no modification needed)
+        for action in available_actions:
+            if action['action_type'] == 'unit_move':
+                await ws.send(json.dumps({
+                    "type": "action",
+                    "agent_id": "my-agent",
+                    "timestamp": time.time(),
+                    "data": action  # Submit directly as returned
+                }))
+                break
+
+        # 5. Declare war on another player (diplomacy)
+        enemy_player_id = 2
+        await ws.send(json.dumps({
+            "type": "action",
+            "agent_id": "my-agent",
+            "timestamp": time.time(),
+            "data": {
+                "action_type": "diplomacy_declare_war",
+                "actor_id": player_id,
+                "target": {"player_id": enemy_player_id}
+            }
+        }))
+
+        # 6. Found a city with settler
         settler = units.get('456')
         if settler:
-            # Build city with settler
             await ws.send(json.dumps({
                 "type": "action",
                 "agent_id": "my-agent",
                 "timestamp": time.time(),
                 "data": {
-                    "action_type": "unit_build_city",
-                    "unit_id": 456,
-                    "player_id": 0,
-                    "city_name": "NewCity"
+                    "action_type": "unit_found_city",
+                    "actor_id": 456,
+                    "target": {"name": "New Rome"}
                 }
             }))
 
-        # 4. Use worker to build road
-        worker = units.get('789')
-        if worker:
-            await ws.send(json.dumps({
-                "type": "action",
-                "agent_id": "my-agent",
-                "timestamp": time.time(),
-                "data": {
-                    "action_type": "unit_build_road",
-                    "unit_id": 789,
-                    "player_id": 0,
-                    "x": 10,
-                    "y": 15
-                }
-            }))
+        # 7. Build road with worker
+        await ws.send(json.dumps({
+            "type": "action",
+            "agent_id": "my-agent",
+            "timestamp": time.time(),
+            "data": {
+                "action_type": "unit_build_road",
+                "actor_id": 789
+            }
+        }))
 
-        # 5. Fortify warrior for defense
-        warrior = units.get('123')
-        if warrior:
-            await ws.send(json.dumps({
-                "type": "action",
-                "agent_id": "my-agent",
-                "timestamp": time.time(),
-                "data": {
-                    "action_type": "unit_fortify",
-                    "unit_id": 123,
-                    "player_id": 0
-                }
-            }))
-
-        # 6. End turn
+        # 8. End turn
         await ws.send(json.dumps({
             "type": "action",
             "agent_id": "my-agent",
             "timestamp": time.time(),
             "data": {
                 "action_type": "end_turn",
-                "player_id": 0
+                "actor_id": player_id
             }
         }))
 
-        # 7. Process state updates
+        # 9. Wait for next turn
         while True:
             message = json.loads(await ws.recv())
-            if message['type'] == 'state_update':
-                # Analyze new state (dict format)
-                new_units = message['data']['units']
-                for unit_id, unit in new_units.items():
-                    print(f"Unit {unit_id}: {unit['type']} at ({unit.get('x')}, {unit.get('y')})")
+            if message['type'] == 'turn_start':
+                print(f"Turn {message['data']['turn']} started")
                 break
 
 asyncio.run(play_game())
@@ -951,22 +1353,35 @@ asyncio.run(play_game())
 ## Monitoring and Debugging
 
 ### Health Check Endpoint
+
 ```http
 GET http://localhost:8003/health
 ```
 
 ### Metrics Endpoint
+
 ```http
 GET http://localhost:8003/api/metrics
 ```
 
 ### Log Levels
+
 - `DEBUG`: Detailed protocol messages
 - `INFO`: Connection events and state changes
 - `WARN`: Validation failures and retries
 - `ERROR`: Connection failures and system errors
 
 ## Version History
+
+- **2.0.0** (Nov 2025): Per-entity action queries and comprehensive action types
+  - Added `unit_actions_query` and `city_actions_query` for per-entity action discovery
+  - Returned actions are directly submittable without modification
+  - Comprehensive action types covering all FreeCiv gameplay actions
+  - Priority on diplomacy actions: declare war, propose peace, alliances, treaties
+  - Full espionage action support for Diplomat/Spy units
+  - Combat, movement, transport, terrain improvement actions
+  - Consolidated error codes with semantic groupings (E2xx for validation, etc.)
+  - Updated section numbering (7 message type sections)
 
 - **1.0.0** (Sept 2025): Initial protocol specification
   - Basic message types for connection, state, and actions
