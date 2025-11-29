@@ -584,6 +584,261 @@ class StateExtractor:
                 cause=e
             )
 
+    def get_unit_actions(self, unit_id: int, player_id: int) -> Dict[str, Any]:
+        """
+        Get available actions for a specific unit.
+        
+        Args:
+            unit_id: The ID of the unit to query
+            player_id: The ID of the player making the query
+            
+        Returns:
+            Dictionary with:
+            - 'unit_type': str - Type name of the unit
+            - 'actions': list - Available actions for this unit
+            - 'location': dict - Current x, y coordinates
+            
+            Or on error:
+            - 'error': str - Error message
+            - 'error_code': str - Error code (E230, E231, etc.)
+        """
+        try:
+            # Get civcom for current game
+            civcom = self._get_civcom_for_player(player_id)
+            if not civcom:
+                return {
+                    'error': 'Not connected to game server',
+                    'error_code': 'E500'
+                }
+            
+            # Get full state to find the unit
+            state = civcom.get_full_state(player_id)
+            units = state.get('units', {})
+            
+            # Handle both dict and list formats
+            if isinstance(units, list):
+                units = {str(u.get('id', i)): u for i, u in enumerate(units)}
+            
+            unit_key = str(unit_id)
+            if unit_key not in units:
+                return {
+                    'error': f'Unit {unit_id} not found',
+                    'error_code': 'E230'  # UNIT_NOT_FOUND
+                }
+            
+            unit = units[unit_key]
+            
+            # Check ownership
+            if unit.get('owner') != player_id:
+                return {
+                    'error': f'Unit {unit_id} is not owned by player {player_id}',
+                    'error_code': 'E231'  # UNIT_NOT_OWNED
+                }
+            
+            # Generate available actions based on unit type
+            unit_type = unit.get('type_name', unit.get('type', 'Unknown'))
+            actions = self._generate_unit_actions(unit, state, player_id)
+            
+            return {
+                'unit_type': unit_type,
+                'location': {'x': unit.get('x', 0), 'y': unit.get('y', 0)},
+                'actions': actions
+            }
+            
+        except Exception as e:
+            logger.error(f"Error getting unit actions for unit {unit_id}: {e}")
+            return {
+                'error': str(e),
+                'error_code': 'E500'
+            }
+    
+    def get_city_actions(self, city_id: int, player_id: int) -> Dict[str, Any]:
+        """
+        Get available actions for a specific city.
+        
+        Args:
+            city_id: The ID of the city to query
+            player_id: The ID of the player making the query
+            
+        Returns:
+            Dictionary with:
+            - 'city_name': str - Name of the city
+            - 'actions': list - Available actions for this city
+            - 'location': dict - Current x, y coordinates
+            
+            Or on error:
+            - 'error': str - Error message
+            - 'error_code': str - Error code (E240, E241, etc.)
+        """
+        try:
+            # Get civcom for current game
+            civcom = self._get_civcom_for_player(player_id)
+            if not civcom:
+                return {
+                    'error': 'Not connected to game server',
+                    'error_code': 'E500'
+                }
+            
+            # Get full state to find the city
+            state = civcom.get_full_state(player_id)
+            cities = state.get('cities', {})
+            
+            # Handle both dict and list formats
+            if isinstance(cities, list):
+                cities = {str(c.get('id', i)): c for i, c in enumerate(cities)}
+            
+            city_key = str(city_id)
+            if city_key not in cities:
+                return {
+                    'error': f'City {city_id} not found',
+                    'error_code': 'E240'  # CITY_NOT_FOUND
+                }
+            
+            city = cities[city_key]
+            
+            # Check ownership
+            if city.get('owner') != player_id:
+                return {
+                    'error': f'City {city_id} is not owned by player {player_id}',
+                    'error_code': 'E241'  # CITY_NOT_OWNED
+                }
+            
+            # Generate available actions based on city state
+            city_name = city.get('name', 'Unknown')
+            actions = self._generate_city_actions(city, state, player_id)
+            
+            return {
+                'city_name': city_name,
+                'location': {'x': city.get('x', 0), 'y': city.get('y', 0)},
+                'actions': actions
+            }
+            
+        except Exception as e:
+            logger.error(f"Error getting city actions for city {city_id}: {e}")
+            return {
+                'error': str(e),
+                'error_code': 'E500'
+            }
+    
+    def _get_civcom_for_player(self, player_id: int) -> Optional[CivCom]:
+        """Get CivCom instance for a player from the registry"""
+        # Try to find civcom in registry
+        for key, civcom in civcom_registry._civcom_instances.items():
+            if civcom and hasattr(civcom, 'player_id'):
+                if civcom.player_id == player_id:
+                    return civcom
+        # Fallback: use self.civcom if available
+        if hasattr(self, 'civcom') and self.civcom:
+            return self.civcom
+        return None
+    
+    def _generate_unit_actions(self, unit: Dict[str, Any], state: Dict[str, Any], player_id: int) -> List[Dict[str, Any]]:
+        """Generate available actions for a unit based on its type and state"""
+        actions = []
+        unit_type = unit.get('type_name', unit.get('type', '')).lower()
+        moves_left = unit.get('moves_left', unit.get('moves', 0))
+        activity = unit.get('activity', 'idle')
+        
+        # Movement actions (if has moves)
+        if moves_left > 0:
+            for direction in ['n', 'ne', 'e', 'se', 's', 'sw', 'w', 'nw']:
+                actions.append({
+                    'action': 'move',
+                    'params': {'direction': direction},
+                    'is_valid': True
+                })
+        
+        # Fortify (most units can fortify)
+        if activity != 'fortified':
+            actions.append({
+                'action': 'fortify',
+                'params': {},
+                'is_valid': True
+            })
+        
+        # Settler-specific actions
+        if 'settler' in unit_type or 'settlers' in unit_type:
+            actions.append({
+                'action': 'build_city',
+                'params': {},
+                'is_valid': True
+            })
+        
+        # Worker/Engineer actions
+        if 'worker' in unit_type or 'engineer' in unit_type:
+            for improvement in ['road', 'irrigation', 'mine', 'railroad', 'fortress']:
+                actions.append({
+                    'action': 'build_improvement',
+                    'params': {'improvement': improvement},
+                    'is_valid': True
+                })
+        
+        # Combat units can attack
+        if unit.get('attack_strength', 0) > 0:
+            # Check for adjacent enemy units
+            x, y = unit.get('x', 0), unit.get('y', 0)
+            for direction in ['n', 'ne', 'e', 'se', 's', 'sw', 'w', 'nw']:
+                actions.append({
+                    'action': 'attack',
+                    'params': {'direction': direction},
+                    'is_valid': True  # Would need to check for actual enemies
+                })
+        
+        # Skip turn action
+        actions.append({
+            'action': 'skip',
+            'params': {},
+            'is_valid': True
+        })
+        
+        return actions
+    
+    def _generate_city_actions(self, city: Dict[str, Any], state: Dict[str, Any], player_id: int) -> List[Dict[str, Any]]:
+        """Generate available actions for a city based on its state"""
+        actions = []
+        
+        # Production change
+        productions = city.get('can_build', [])
+        if not productions:
+            # Default buildable units/buildings
+            productions = ['Warrior', 'Settler', 'Worker', 'Barracks', 'Granary']
+        
+        for prod in productions:
+            actions.append({
+                'action': 'change_production',
+                'params': {'to': prod},
+                'is_valid': True
+            })
+        
+        # Buy current production
+        buy_cost = city.get('buy_cost', 0)
+        treasury = state.get('player', {}).get('gold', 0)
+        actions.append({
+            'action': 'buy',
+            'params': {},
+            'is_valid': treasury >= buy_cost if buy_cost > 0 else False
+        })
+        
+        # Sell improvements
+        improvements = city.get('improvements', [])
+        for imp in improvements:
+            imp_name = imp if isinstance(imp, str) else imp.get('name', 'Unknown')
+            actions.append({
+                'action': 'sell_improvement',
+                'params': {'improvement': imp_name},
+                'is_valid': True
+            })
+        
+        # Specialist management
+        for specialist in ['scientist', 'taxman', 'entertainer']:
+            actions.append({
+                'action': 'add_specialist',
+                'params': {'type': specialist},
+                'is_valid': True
+            })
+        
+        return actions
+
     def _extract_delta_state(self, game_id: str, player_id: int, since_turn: int, civcom: CivCom) -> Dict[str, Any]:
         """Extract changes since specified turn"""
         current_state = civcom.get_full_state(player_id)

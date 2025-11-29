@@ -4,6 +4,15 @@
 """
 Message validation system for LLM WebSocket connections
 Provides input validation, size limits, and schema validation
+
+Error codes per LLM WebSocket Protocol v2.0.1:
+- E101: Missing required field
+- E103: Unknown message type  
+- E220: Missing required field (action-specific)
+- E221: Invalid field type
+- E222: Value out of range
+- E223: Invalid characters
+- E224: String too long
 """
 
 import json
@@ -12,6 +21,19 @@ from typing import Dict, Any, Optional, List
 from enum import Enum
 
 logger = logging.getLogger("freeciv-proxy")
+
+
+# Protocol v2.0.1 Error Codes
+class ErrorCodes:
+    """Error codes for message validation"""
+    MISSING_REQUIRED_FIELD = "E101"
+    UNKNOWN_MESSAGE_TYPE = "E103"
+    INPUT_MISSING_FIELD = "E220"
+    INPUT_INVALID_TYPE = "E221"
+    INPUT_OUT_OF_RANGE = "E222"
+    INPUT_INVALID_CHARS = "E223"
+    INPUT_STRING_TOO_LONG = "E224"
+
 
 class ValidationError(Exception):
     """Custom exception for validation errors"""
@@ -29,6 +51,8 @@ class MessageType(Enum):
     PLAYER_READY = "player_ready"
     CONN_PING = "conn_ping"  # FreeCiv keepalive ping from civserver
     CONN_PONG = "conn_pong"  # FreeCiv keepalive pong response
+    UNIT_ACTIONS_QUERY = "unit_actions_query"  # Query available actions for a unit
+    CITY_ACTIONS_QUERY = "city_actions_query"  # Query available actions for a city
 
 class MessageValidator:
     """
@@ -122,6 +146,36 @@ class MessageValidator:
             'field_types': {
                 'type': str
             }
+        },
+        MessageType.UNIT_ACTIONS_QUERY: {
+            'required_fields': ['type', 'data'],
+            'optional_fields': ['agent_id', 'timestamp', 'correlation_id'],
+            'field_types': {
+                'type': str,
+                'data': dict,
+                'agent_id': str,
+                'timestamp': (int, float),
+                'correlation_id': str
+            },
+            'field_constraints': {
+                'correlation_id': {'max_length': 64, 'pattern': r'^[a-zA-Z0-9_-]+$'},
+                'data': {'required_keys': ['unit_ids']}
+            }
+        },
+        MessageType.CITY_ACTIONS_QUERY: {
+            'required_fields': ['type', 'data'],
+            'optional_fields': ['agent_id', 'timestamp', 'correlation_id'],
+            'field_types': {
+                'type': str,
+                'data': dict,
+                'agent_id': str,
+                'timestamp': (int, float),
+                'correlation_id': str
+            },
+            'field_constraints': {
+                'correlation_id': {'max_length': 64, 'pattern': r'^[a-zA-Z0-9_-]+$'},
+                'data': {'required_keys': ['city_ids']}
+            }
         }
     }
 
@@ -180,7 +234,7 @@ class MessageValidator:
         if size > self.max_message_size:
             raise ValidationError(
                 f"Message too large: {size} bytes (max: {self.max_message_size})",
-                "V001"
+                ErrorCodes.INPUT_OUT_OF_RANGE
             )
 
     def _parse_json_safely(self, message: str) -> Dict[str, Any]:
@@ -188,10 +242,10 @@ class MessageValidator:
         try:
             parsed = json.loads(message)
         except json.JSONDecodeError as e:
-            raise ValidationError(f"Invalid JSON: {e}", "V002")
+            raise ValidationError(f"Invalid JSON: {e}", ErrorCodes.INPUT_INVALID_TYPE)
 
         if not isinstance(parsed, dict):
-            raise ValidationError("Message must be a JSON object", "V003")
+            raise ValidationError("Message must be a JSON object", ErrorCodes.INPUT_INVALID_TYPE)
 
         # Validate JSON depth and structure
         self._validate_json_structure(parsed, depth=0)
@@ -203,20 +257,20 @@ class MessageValidator:
         if depth > self.MAX_JSON_DEPTH:
             raise ValidationError(
                 f"JSON too deep: {depth} levels (max: {self.MAX_JSON_DEPTH})",
-                "V004"
+                ErrorCodes.INPUT_OUT_OF_RANGE
             )
 
         if isinstance(obj, dict):
             if len(obj) > self.MAX_OBJECT_KEYS:
                 raise ValidationError(
                     f"Too many object keys: {len(obj)} (max: {self.MAX_OBJECT_KEYS})",
-                    "V005"
+                    ErrorCodes.INPUT_OUT_OF_RANGE
                 )
             for key, value in obj.items():
                 if not isinstance(key, str) or len(key) > self.MAX_STRING_LENGTH:
                     raise ValidationError(
                         f"Invalid object key: {key}",
-                        "V006"
+                        ErrorCodes.INPUT_INVALID_CHARS
                     )
                 self._validate_json_structure(value, depth + 1)
 
@@ -224,7 +278,7 @@ class MessageValidator:
             if len(obj) > self.MAX_ARRAY_LENGTH:
                 raise ValidationError(
                     f"Array too long: {len(obj)} (max: {self.MAX_ARRAY_LENGTH})",
-                    "V007"
+                    ErrorCodes.INPUT_OUT_OF_RANGE
                 )
             for item in obj:
                 self._validate_json_structure(item, depth + 1)
@@ -233,28 +287,28 @@ class MessageValidator:
             if len(obj) > self.MAX_STRING_LENGTH:
                 raise ValidationError(
                     f"String too long: {len(obj)} (max: {self.MAX_STRING_LENGTH})",
-                    "V008"
+                    ErrorCodes.INPUT_STRING_TOO_LONG
                 )
 
     def _validate_message_schema(self, message: Dict[str, Any]):
         """Validate message against schema"""
         msg_type_str = message.get('type')
         if not msg_type_str:
-            raise ValidationError("Missing 'type' field", "V009")
+            raise ValidationError("Missing 'type' field", ErrorCodes.MISSING_REQUIRED_FIELD)
 
         try:
             msg_type = MessageType(msg_type_str)
         except ValueError:
-            raise ValidationError(f"Unknown message type: {msg_type_str}", "V010")
+            raise ValidationError(f"Unknown message type: {msg_type_str}", ErrorCodes.UNKNOWN_MESSAGE_TYPE)
 
         schema = self.SCHEMAS.get(msg_type)
         if not schema:
-            raise ValidationError(f"No schema defined for type: {msg_type_str}", "V011")
+            raise ValidationError(f"No schema defined for type: {msg_type_str}", ErrorCodes.UNKNOWN_MESSAGE_TYPE)
 
         # Check required fields
         for field in schema['required_fields']:
             if field not in message:
-                raise ValidationError(f"Missing required field: {field}", "V012")
+                raise ValidationError(f"Missing required field: {field}", ErrorCodes.INPUT_MISSING_FIELD)
 
         # Check field types
         field_types = schema.get('field_types', {})
@@ -265,14 +319,14 @@ class MessageValidator:
                     raise ValidationError(
                         f"Invalid type for field {field}: {type(value).__name__} "
                         f"(expected: {expected_type})",
-                        "V013"
+                        ErrorCodes.INPUT_INVALID_TYPE
                     )
 
         # Check for unexpected fields
         allowed_fields = set(schema['required_fields'] + schema.get('optional_fields', []))
         for field in message:
             if field not in allowed_fields:
-                raise ValidationError(f"Unexpected field: {field}", "V014")
+                raise ValidationError(f"Unexpected field: {field}", ErrorCodes.INPUT_INVALID_CHARS)
 
     def _validate_message_content(self, message: Dict[str, Any]):
         """Validate message content against constraints"""
@@ -292,14 +346,14 @@ class MessageValidator:
                     if len(value) < field_constraints['min_length']:
                         raise ValidationError(
                             f"Field {field} too short: {len(value)} < {field_constraints['min_length']}",
-                            "V015"
+                            ErrorCodes.INPUT_OUT_OF_RANGE
                         )
 
                 if 'max_length' in field_constraints:
                     if len(value) > field_constraints['max_length']:
                         raise ValidationError(
                             f"Field {field} too long: {len(value)} > {field_constraints['max_length']}",
-                            "V016"
+                            ErrorCodes.INPUT_STRING_TOO_LONG
                         )
 
                 if 'pattern' in field_constraints:
@@ -307,14 +361,14 @@ class MessageValidator:
                     if not re.match(field_constraints['pattern'], value):
                         raise ValidationError(
                             f"Field {field} doesn't match pattern: {field_constraints['pattern']}",
-                            "V017"
+                            ErrorCodes.INPUT_INVALID_CHARS
                         )
 
                 if 'allowed_values' in field_constraints:
                     if value not in field_constraints['allowed_values']:
                         raise ValidationError(
                             f"Field {field} has invalid value: {value}",
-                            "V018"
+                            ErrorCodes.INPUT_OUT_OF_RANGE
                         )
 
             # Numeric constraints
@@ -323,14 +377,14 @@ class MessageValidator:
                     if value < field_constraints['min_value']:
                         raise ValidationError(
                             f"Field {field} too small: {value} < {field_constraints['min_value']}",
-                            "V019"
+                            ErrorCodes.INPUT_OUT_OF_RANGE
                         )
 
                 if 'max_value' in field_constraints:
                     if value > field_constraints['max_value']:
                         raise ValidationError(
                             f"Field {field} too large: {value} > {field_constraints['max_value']}",
-                            "V020"
+                            ErrorCodes.INPUT_OUT_OF_RANGE
                         )
 
             # List constraints
@@ -339,7 +393,7 @@ class MessageValidator:
                     if len(value) > field_constraints['max_length']:
                         raise ValidationError(
                             f"Field {field} list too long: {len(value)} > {field_constraints['max_length']}",
-                            "V021"
+                            ErrorCodes.INPUT_OUT_OF_RANGE
                         )
 
             # Dict constraints
@@ -348,7 +402,7 @@ class MessageValidator:
                     if len(value) > field_constraints['max_keys']:
                         raise ValidationError(
                             f"Field {field} object too many keys: {len(value)} > {field_constraints['max_keys']}",
-                            "V022"
+                            ErrorCodes.INPUT_OUT_OF_RANGE
                         )
 
     def get_validation_stats(self) -> Dict[str, Any]:

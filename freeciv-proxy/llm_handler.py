@@ -244,6 +244,10 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 self._handle_ping(msg_data)
             elif msg_type == 'player_ready':
                 self._handle_player_ready(msg_data)
+            elif msg_type == 'unit_actions_query':
+                self._handle_unit_actions_query(msg_data)
+            elif msg_type == 'city_actions_query':
+                self._handle_city_actions_query(msg_data)
             elif self.is_llm_agent:
                 # Forward other messages to civcom if authenticated
                 self._forward_to_civcom(message)
@@ -1202,6 +1206,342 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 'code': 'E404',
                 'message': 'Not connected to game server'
             }))
+
+    def _handle_unit_actions_query(self, msg_data: Dict[str, Any]):
+        """Handle batch query for available actions on one or more units
+        
+        Request format (per protocol v2.0.1):
+        {
+            "type": "unit_actions_query",
+            "agent_id": "my-agent",
+            "timestamp": 1234567890.123,
+            "correlation_id": "unit-query-001",
+            "data": {
+                "unit_ids": [42, 43, 44]
+            }
+        }
+        
+        Response format:
+        {
+            "type": "unit_actions_response",
+            "agent_id": "my-agent",
+            "timestamp": 1234567890.125,
+            "correlation_id": "unit-query-001",
+            "data": {
+                "success": true,
+                "units": {
+                    "42": {"unit_id": 42, "success": true, "actions": [...]},
+                    "43": {"unit_id": 43, "success": true, "actions": [...]},
+                    "44": {"unit_id": 44, "success": false, "error": {...}, "actions": []}
+                },
+                "errors": [...]
+            }
+        }
+        """
+        import time as time_module
+        correlation_id = msg_data.get('correlation_id')
+        data = msg_data.get('data', {})
+        unit_ids = data.get('unit_ids', [])
+        
+        logger.info(f"🎯 UNIT_ACTIONS_QUERY received from agent {self.agent_id} for units {unit_ids}")
+        
+        if not self.is_llm_agent:
+            self.write_message(json.dumps({
+                'type': 'error',
+                'code': 'E120',
+                'message': 'Not authenticated as LLM agent',
+                'correlation_id': correlation_id
+            }))
+            return
+        
+        if self.player_id is None:
+            self.write_message(json.dumps({
+                'type': 'error',
+                'code': 'E230',
+                'message': 'No player ID assigned - cannot query units',
+                'correlation_id': correlation_id
+            }))
+            return
+        
+        if not unit_ids or not isinstance(unit_ids, list):
+            self.write_message(json.dumps({
+                'type': 'error',
+                'code': 'E220',
+                'message': 'Missing or invalid unit_ids array in data',
+                'correlation_id': correlation_id
+            }))
+            return
+        
+        try:
+            state_extractor = self._get_state_extractor()
+            if not state_extractor:
+                self.write_message(json.dumps({
+                    'type': 'error',
+                    'code': 'E500',
+                    'message': 'State extractor not available',
+                    'correlation_id': correlation_id
+                }))
+                return
+            
+            # Process each unit in batch
+            units_results = {}
+            errors = []
+            any_success = False
+            
+            for unit_id in unit_ids:
+                result = state_extractor.get_unit_actions(unit_id, self.player_id)
+                unit_key = str(unit_id)
+                
+                if result.get('error'):
+                    error_info = {
+                        'code': result.get('error_code', 'E230'),
+                        'message': result['error']
+                    }
+                    units_results[unit_key] = {
+                        'unit_id': unit_id,
+                        'success': False,
+                        'error': error_info,
+                        'actions': []
+                    }
+                    errors.append({'unit_id': unit_id, **error_info})
+                else:
+                    any_success = True
+                    # Format actions per protocol spec
+                    actions = self._format_unit_actions_for_response(unit_id, result)
+                    units_results[unit_key] = {
+                        'unit_id': unit_id,
+                        'success': True,
+                        'actions': actions
+                    }
+            
+            # Build response per protocol spec
+            response = {
+                'type': 'unit_actions_response',
+                'agent_id': self.agent_id,
+                'timestamp': time_module.time(),
+                'data': {
+                    'success': any_success,
+                    'units': units_results,
+                    'errors': errors
+                }
+            }
+            if correlation_id:
+                response['correlation_id'] = correlation_id
+            
+            self.write_message(json.dumps(response))
+            logger.info(f"✓ UNIT_ACTIONS_QUERY SUCCESS for agent {self.agent_id}: {len(unit_ids)} units queried, {len(errors)} errors")
+            
+        except Exception as e:
+            logger.error(f"❌ UNIT_ACTIONS_QUERY EXCEPTION for agent {self.agent_id}: {e}")
+            self.write_message(json.dumps({
+                'type': 'error',
+                'code': 'E500',
+                'message': f'Internal error: {str(e)}',
+                'correlation_id': correlation_id
+            }))
+    
+    def _format_unit_actions_for_response(self, unit_id: int, result: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Format unit actions to be directly submittable per protocol spec"""
+        formatted_actions = []
+        for action in result.get('actions', []):
+            action_type = action.get('action', '')
+            formatted = {
+                'action_type': self._map_action_type(action_type),
+                'actor_id': unit_id
+            }
+            # Add target based on action type
+            params = action.get('params', {})
+            if action_type == 'move' and 'direction' in params:
+                # Convert direction to coordinates (simplified)
+                formatted['target'] = {'direction': params['direction']}
+            elif action_type in ('build_city', 'build_improvement'):
+                if 'improvement' in params:
+                    formatted['target'] = {'improvement': params['improvement']}
+            formatted_actions.append(formatted)
+        return formatted_actions
+    
+    def _map_action_type(self, action: str) -> str:
+        """Map internal action names to protocol action_type values"""
+        mapping = {
+            'move': 'unit_move',
+            'fortify': 'unit_fortify',
+            'build_city': 'unit_build_city',
+            'build_improvement': 'unit_build_improvement',
+            'attack': 'unit_attack',
+            'skip': 'unit_skip'
+        }
+        return mapping.get(action, f'unit_{action}')
+    
+    def _handle_city_actions_query(self, msg_data: Dict[str, Any]):
+        """Handle batch query for available actions on one or more cities
+        
+        Request format (per protocol v2.0.1):
+        {
+            "type": "city_actions_query",
+            "agent_id": "my-agent",
+            "timestamp": 1234567890.123,
+            "correlation_id": "city-query-001",
+            "data": {
+                "city_ids": [5, 6]
+            }
+        }
+        
+        Response format:
+        {
+            "type": "city_actions_response",
+            "agent_id": "my-agent",
+            "timestamp": 1234567890.125,
+            "correlation_id": "city-query-001",
+            "data": {
+                "success": true,
+                "cities": {
+                    "5": {"city_id": 5, "success": true, "actions": [...]},
+                    "6": {"city_id": 6, "success": true, "actions": [...]}
+                },
+                "errors": []
+            }
+        }
+        """
+        import time as time_module
+        correlation_id = msg_data.get('correlation_id')
+        data = msg_data.get('data', {})
+        city_ids = data.get('city_ids', [])
+        
+        logger.info(f"🏙️ CITY_ACTIONS_QUERY received from agent {self.agent_id} for cities {city_ids}")
+        
+        if not self.is_llm_agent:
+            self.write_message(json.dumps({
+                'type': 'error',
+                'code': 'E120',
+                'message': 'Not authenticated as LLM agent',
+                'correlation_id': correlation_id
+            }))
+            return
+        
+        if self.player_id is None:
+            self.write_message(json.dumps({
+                'type': 'error',
+                'code': 'E240',
+                'message': 'No player ID assigned - cannot query cities',
+                'correlation_id': correlation_id
+            }))
+            return
+        
+        if not city_ids or not isinstance(city_ids, list):
+            self.write_message(json.dumps({
+                'type': 'error',
+                'code': 'E220',
+                'message': 'Missing or invalid city_ids array in data',
+                'correlation_id': correlation_id
+            }))
+            return
+        
+        try:
+            state_extractor = self._get_state_extractor()
+            if not state_extractor:
+                self.write_message(json.dumps({
+                    'type': 'error',
+                    'code': 'E500',
+                    'message': 'State extractor not available',
+                    'correlation_id': correlation_id
+                }))
+                return
+            
+            # Process each city in batch
+            cities_results = {}
+            errors = []
+            any_success = False
+            
+            for city_id in city_ids:
+                result = state_extractor.get_city_actions(city_id, self.player_id)
+                city_key = str(city_id)
+                
+                if result.get('error'):
+                    error_info = {
+                        'code': result.get('error_code', 'E240'),
+                        'message': result['error']
+                    }
+                    cities_results[city_key] = {
+                        'city_id': city_id,
+                        'success': False,
+                        'error': error_info,
+                        'actions': []
+                    }
+                    errors.append({'city_id': city_id, **error_info})
+                else:
+                    any_success = True
+                    # Format actions per protocol spec
+                    actions = self._format_city_actions_for_response(city_id, result)
+                    cities_results[city_key] = {
+                        'city_id': city_id,
+                        'success': True,
+                        'actions': actions
+                    }
+            
+            # Build response per protocol spec
+            response = {
+                'type': 'city_actions_response',
+                'agent_id': self.agent_id,
+                'timestamp': time_module.time(),
+                'data': {
+                    'success': any_success,
+                    'cities': cities_results,
+                    'errors': errors
+                }
+            }
+            if correlation_id:
+                response['correlation_id'] = correlation_id
+            
+            self.write_message(json.dumps(response))
+            logger.info(f"✓ CITY_ACTIONS_QUERY SUCCESS for agent {self.agent_id}: {len(city_ids)} cities queried, {len(errors)} errors")
+            
+        except Exception as e:
+            logger.error(f"❌ CITY_ACTIONS_QUERY EXCEPTION for agent {self.agent_id}: {e}")
+            self.write_message(json.dumps({
+                'type': 'error',
+                'code': 'E500',
+                'message': f'Internal error: {str(e)}',
+                'correlation_id': correlation_id
+            }))
+    
+    def _format_city_actions_for_response(self, city_id: int, result: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Format city actions to be directly submittable per protocol spec"""
+        formatted_actions = []
+        for action in result.get('actions', []):
+            action_type = action.get('action', '')
+            formatted = {
+                'action_type': self._map_city_action_type(action_type),
+                'actor_id': city_id
+            }
+            # Add target based on action type
+            params = action.get('params', {})
+            if action_type == 'change_production' and 'to' in params:
+                formatted['target'] = {'production': params['to']}
+            elif action_type == 'sell_improvement' and 'improvement' in params:
+                formatted['target'] = {'improvement': params['improvement']}
+            formatted_actions.append(formatted)
+        return formatted_actions
+    
+    def _map_city_action_type(self, action: str) -> str:
+        """Map internal city action names to protocol action_type values"""
+        mapping = {
+            'change_production': 'city_production',
+            'buy': 'city_buy',
+            'sell_improvement': 'city_sell_improvement',
+            'add_specialist': 'city_add_specialist'
+        }
+        return mapping.get(action, f'city_{action}')
+    
+    def _get_state_extractor(self) -> Optional[StateExtractor]:
+        """Get or create StateExtractor for current civcom connection"""
+        if not self.civcom:
+            return None
+        try:
+            # StateExtractor uses civcom_registry for access
+            return StateExtractor(None, self.player_id)
+        except Exception as e:
+            logger.error(f"Failed to create StateExtractor: {e}")
+            return None
 
     def _build_optimized_state(self, format_type: str, include_actions: bool) -> Dict[str, Any]:
         """Build optimized game state for LLM consumption using StateExtractor"""
