@@ -2265,6 +2265,515 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 'target': -1  # EXTRA_NONE (server decides mine type)
             }
 
+        # =================================================================
+        # Combat Actions
+        # =================================================================
+        elif action_type == 'unit_attack':
+            return {
+                'pid': 84,  # PACKET_UNIT_DO_ACTION
+                'actor_id': action['unit_id'],
+                'target_id': action.get('target_id', -1),
+                'sub_target': action.get('sub_target', -1),
+                'name': '',
+                'action_type': 45  # ACTION_ATTACK
+            }
+        elif action_type == 'unit_suicide_attack':
+            return {
+                'pid': 84,  # PACKET_UNIT_DO_ACTION
+                'actor_id': action['unit_id'],
+                'target_id': action.get('target_id', -1),
+                'sub_target': action.get('sub_target', -1),
+                'name': '',
+                'action_type': 46  # ACTION_SUICIDE_ATTACK
+            }
+        elif action_type == 'unit_bombard':
+            return {
+                'pid': 84,  # PACKET_UNIT_DO_ACTION
+                'actor_id': action['unit_id'],
+                'target_id': action.get('target_id', -1),
+                'sub_target': action.get('sub_target', -1),
+                'name': '',
+                'action_type': 53  # ACTION_BOMBARD
+            }
+        elif action_type == 'unit_capture':
+            return {
+                'pid': 84,  # PACKET_UNIT_DO_ACTION
+                'actor_id': action['unit_id'],
+                'target_id': action.get('target_id', -1),
+                'sub_target': action.get('sub_target', -1),
+                'name': '',
+                'action_type': 24  # ACTION_CAPTURE_UNITS
+            }
+        elif action_type == 'unit_conquer_city':
+            return {
+                'pid': 84,  # PACKET_UNIT_DO_ACTION
+                'actor_id': action['unit_id'],
+                'target_id': action.get('target_id', -1),
+                'sub_target': action.get('sub_target', -1),
+                'name': '',
+                'action_type': 49  # ACTION_CONQUER_CITY
+            }
+        elif action_type == 'unit_nuke':
+            return {
+                'pid': 84,  # PACKET_UNIT_DO_ACTION
+                'actor_id': action['unit_id'],
+                'target_id': action.get('target_id', -1),
+                'sub_target': action.get('sub_target', -1),
+                'name': '',
+                'action_type': 33  # ACTION_NUKE
+            }
+        elif action_type == 'unit_nuke_city':
+            return {
+                'pid': 84,  # PACKET_UNIT_DO_ACTION
+                'actor_id': action['unit_id'],
+                'target_id': action.get('target_id', -1),
+                'sub_target': action.get('sub_target', -1),
+                'name': '',
+                'action_type': 34  # ACTION_NUKE_CITY
+            }
+        elif action_type == 'unit_nuke_units':
+            return {
+                'pid': 84,  # PACKET_UNIT_DO_ACTION
+                'actor_id': action['unit_id'],
+                'target_id': action.get('target_id', -1),
+                'sub_target': action.get('sub_target', -1),
+                'name': '',
+                'action_type': 35  # ACTION_NUKE_UNITS
+            }
+        elif action_type == 'unit_expel':
+            return {
+                'pid': 84,  # PACKET_UNIT_DO_ACTION
+                'actor_id': action['unit_id'],
+                'target_id': action.get('target_id', -1),
+                'sub_target': action.get('sub_target', -1),
+                'name': '',
+                'action_type': 37  # ACTION_EXPEL_UNIT
+            }
+        elif action_type == 'unit_heal':
+            return {
+                'pid': 84,  # PACKET_UNIT_DO_ACTION
+                'actor_id': action['unit_id'],
+                'target_id': action.get('target_id', -1),
+                'sub_target': action.get('sub_target', -1),
+                'name': '',
+                'action_type': 98  # ACTION_HEAL_UNIT
+            }
+        elif action_type == 'unit_pillage':
+            return {
+                'pid': 84,  # PACKET_UNIT_DO_ACTION
+                'actor_id': action['unit_id'],
+                'target_id': action.get('target_id', action.get('tile_id', -1)),
+                'sub_target': action.get('extra_id', -1),  # Which improvement to pillage
+                'name': '',
+                'action_type': 65  # ACTION_PILLAGE
+            }
+
+        # =================================================================
+        # Transport Actions
+        # =================================================================
+        elif action_type == 'unit_board':
+            return {
+                'pid': 84,  # PACKET_UNIT_DO_ACTION
+                'actor_id': action['unit_id'],
+                'target_id': action.get('transport_id', action.get('target_id', -1)),
+                'sub_target': action.get('sub_target', -1),
+                'name': '',
+                'action_type': 68  # ACTION_TRANSPORT_BOARD
+            }
+        elif action_type == 'unit_embark':
+            return {
+                'pid': 84,  # PACKET_UNIT_DO_ACTION
+                'actor_id': action['unit_id'],
+                'target_id': action.get('transport_id', action.get('target_id', -1)),
+                'sub_target': action.get('sub_target', -1),
+                'name': '',
+                'action_type': 72  # ACTION_TRANSPORT_EMBARK
+            }
+        elif action_type == 'unit_disembark':
+            return {
+                'pid': 84,  # PACKET_UNIT_DO_ACTION
+                'actor_id': action['unit_id'],
+                'target_id': action.get('tile_id', action.get('target_id', -1)),
+                'sub_target': action.get('sub_target', -1),
+                'name': '',
+                'action_type': 76  # ACTION_TRANSPORT_DISEMBARK1
+            }
+        elif action_type == 'unit_unload':
+            # Unload a unit from transport at current location
+            return {
+                'pid': 84,  # PACKET_UNIT_DO_ACTION
+                'actor_id': action.get('transport_id', action['unit_id']),
+                'target_id': action.get('cargo_id', action.get('target_id', -1)),
+                'sub_target': action.get('sub_target', -1),
+                'name': '',
+                'action_type': 80  # ACTION_TRANSPORT_UNLOAD (approximate)
+            }
+        elif action_type == 'unit_airlift':
+            return {
+                'pid': 84,  # PACKET_UNIT_DO_ACTION
+                'actor_id': action['unit_id'],
+                'target_id': action.get('city_id', action.get('target_id', -1)),
+                'sub_target': action.get('sub_target', -1),
+                'name': '',
+                'action_type': 44  # ACTION_AIRLIFT
+            }
+        elif action_type == 'unit_paradrop':
+            return {
+                'pid': 84,  # PACKET_UNIT_DO_ACTION
+                'actor_id': action['unit_id'],
+                'target_id': action.get('tile_id', action.get('target_id', -1)),
+                'sub_target': action.get('sub_target', -1),
+                'name': '',
+                'action_type': 100  # ACTION_PARADROP
+            }
+
+        # =================================================================
+        # Espionage Actions
+        # =================================================================
+        elif action_type == 'spy_investigate_city':
+            return {
+                'pid': 84,  # PACKET_UNIT_DO_ACTION
+                'actor_id': action['unit_id'],
+                'target_id': action.get('city_id', action.get('target_id', -1)),
+                'sub_target': action.get('sub_target', -1),
+                'name': '',
+                'action_type': 2  # ACTION_SPY_INVESTIGATE_CITY
+            }
+        elif action_type == 'spy_poison':
+            return {
+                'pid': 84,  # PACKET_UNIT_DO_ACTION
+                'actor_id': action['unit_id'],
+                'target_id': action.get('city_id', action.get('target_id', -1)),
+                'sub_target': action.get('sub_target', -1),
+                'name': '',
+                'action_type': 4  # ACTION_SPY_POISON
+            }
+        elif action_type == 'spy_sabotage_city':
+            return {
+                'pid': 84,  # PACKET_UNIT_DO_ACTION
+                'actor_id': action['unit_id'],
+                'target_id': action.get('city_id', action.get('target_id', -1)),
+                'sub_target': action.get('building_id', -1),  # Specific building or -1 for random
+                'name': '',
+                'action_type': 8  # ACTION_SPY_SABOTAGE_CITY
+            }
+        elif action_type == 'spy_targeted_sabotage_city':
+            return {
+                'pid': 84,  # PACKET_UNIT_DO_ACTION
+                'actor_id': action['unit_id'],
+                'target_id': action.get('city_id', action.get('target_id', -1)),
+                'sub_target': action['building_id'],  # Required for targeted sabotage
+                'name': '',
+                'action_type': 10  # ACTION_SPY_TARGETED_SABOTAGE_CITY
+            }
+        elif action_type == 'spy_steal_tech':
+            return {
+                'pid': 84,  # PACKET_UNIT_DO_ACTION
+                'actor_id': action['unit_id'],
+                'target_id': action.get('city_id', action.get('target_id', -1)),
+                'sub_target': action.get('sub_target', -1),
+                'name': '',
+                'action_type': 14  # ACTION_SPY_STEAL_TECH
+            }
+        elif action_type == 'spy_targeted_steal_tech':
+            return {
+                'pid': 84,  # PACKET_UNIT_DO_ACTION
+                'actor_id': action['unit_id'],
+                'target_id': action.get('city_id', action.get('target_id', -1)),
+                'sub_target': action['tech_id'],  # Required - which tech to steal
+                'name': '',
+                'action_type': 16  # ACTION_SPY_TARGETED_STEAL_TECH
+            }
+        elif action_type == 'spy_incite_city':
+            return {
+                'pid': 84,  # PACKET_UNIT_DO_ACTION
+                'actor_id': action['unit_id'],
+                'target_id': action.get('city_id', action.get('target_id', -1)),
+                'sub_target': action.get('sub_target', -1),
+                'name': '',
+                'action_type': 18  # ACTION_SPY_INCITE_CITY
+            }
+        elif action_type == 'spy_bribe_unit':
+            return {
+                'pid': 84,  # PACKET_UNIT_DO_ACTION
+                'actor_id': action['unit_id'],
+                'target_id': action.get('target_unit_id', action.get('target_id', -1)),
+                'sub_target': action.get('sub_target', -1),
+                'name': '',
+                'action_type': 23  # ACTION_SPY_BRIBE_UNIT
+            }
+        elif action_type == 'establish_embassy':
+            return {
+                'pid': 84,  # PACKET_UNIT_DO_ACTION
+                'actor_id': action['unit_id'],
+                'target_id': action.get('city_id', action.get('target_id', -1)),
+                'sub_target': action.get('sub_target', -1),
+                'name': '',
+                'action_type': 0  # ACTION_ESTABLISH_EMBASSY
+            }
+        elif action_type == 'spy_steal_gold':
+            return {
+                'pid': 84,  # PACKET_UNIT_DO_ACTION
+                'actor_id': action['unit_id'],
+                'target_id': action.get('city_id', action.get('target_id', -1)),
+                'sub_target': action.get('sub_target', -1),
+                'name': '',
+                'action_type': 82  # ACTION_SPY_STEAL_GOLD (approximate)
+            }
+        elif action_type == 'spy_spread_plague':
+            return {
+                'pid': 84,  # PACKET_UNIT_DO_ACTION
+                'actor_id': action['unit_id'],
+                'target_id': action.get('city_id', action.get('target_id', -1)),
+                'sub_target': action.get('sub_target', -1),
+                'name': '',
+                'action_type': 84  # ACTION_SPY_SPREAD_PLAGUE (approximate)
+            }
+        elif action_type == 'spy_nuke_city':
+            return {
+                'pid': 84,  # PACKET_UNIT_DO_ACTION
+                'actor_id': action['unit_id'],
+                'target_id': action.get('city_id', action.get('target_id', -1)),
+                'sub_target': action.get('sub_target', -1),
+                'name': '',
+                'action_type': 86  # ACTION_SPY_NUKE_CITY (approximate)
+            }
+
+        # =================================================================
+        # Trade Actions
+        # =================================================================
+        elif action_type == 'unit_trade_route':
+            return {
+                'pid': 84,  # PACKET_UNIT_DO_ACTION
+                'actor_id': action['unit_id'],
+                'target_id': action.get('city_id', action.get('target_id', -1)),
+                'sub_target': action.get('sub_target', -1),
+                'name': '',
+                'action_type': 20  # ACTION_TRADE_ROUTE
+            }
+        elif action_type == 'unit_marketplace':
+            return {
+                'pid': 84,  # PACKET_UNIT_DO_ACTION
+                'actor_id': action['unit_id'],
+                'target_id': action.get('city_id', action.get('target_id', -1)),
+                'sub_target': action.get('sub_target', -1),
+                'name': '',
+                'action_type': 21  # ACTION_MARKETPLACE
+            }
+        elif action_type == 'unit_help_wonder':
+            return {
+                'pid': 84,  # PACKET_UNIT_DO_ACTION
+                'actor_id': action['unit_id'],
+                'target_id': action.get('city_id', action.get('target_id', -1)),
+                'sub_target': action.get('sub_target', -1),
+                'name': '',
+                'action_type': 22  # ACTION_HELP_WONDER
+            }
+
+        # =================================================================
+        # Diplomacy Actions
+        # =================================================================
+        elif action_type == 'diplomacy_start_negotiation':
+            return {
+                'pid': 95,  # PACKET_DIPLOMACY_INIT_MEETING_REQ
+                'counterpart': action['player_id']
+            }
+        elif action_type == 'diplomacy_cancel_meeting':
+            return {
+                'pid': 97,  # PACKET_DIPLOMACY_CANCEL_MEETING_REQ
+                'counterpart': action['player_id']
+            }
+        elif action_type == 'diplomacy_accept_treaty':
+            return {
+                'pid': 99,  # PACKET_DIPLOMACY_ACCEPT_TREATY_REQ
+                'counterpart': action['player_id']
+            }
+        elif action_type == 'diplomacy_cancel_pact':
+            # CLAUSE_CEASEFIRE = 5, CLAUSE_PEACE = 6, CLAUSE_ALLIANCE = 7
+            clause_type = action.get('clause_type', 6)  # Default to CLAUSE_PEACE
+            return {
+                'pid': 105,  # PACKET_DIPLOMACY_CANCEL_PACT
+                'other_player_id': action['player_id'],
+                'clause': clause_type
+            }
+        elif action_type == 'diplomacy_declare_war':
+            # Cancel all peace clauses to declare war
+            return {
+                'pid': 105,  # PACKET_DIPLOMACY_CANCEL_PACT
+                'other_player_id': action['player_id'],
+                'clause': 5  # CLAUSE_CEASEFIRE - canceling to declare war
+            }
+        elif action_type == 'diplomacy_propose_ceasefire':
+            return {
+                'pid': 101,  # PACKET_DIPLOMACY_CREATE_CLAUSE_REQ
+                'counterpart': action['player_id'],
+                'giver': action.get('giver', -1),  # Player giving the clause
+                'type': 5,  # CLAUSE_CEASEFIRE
+                'value': 0
+            }
+        elif action_type == 'diplomacy_propose_peace':
+            return {
+                'pid': 101,  # PACKET_DIPLOMACY_CREATE_CLAUSE_REQ
+                'counterpart': action['player_id'],
+                'giver': action.get('giver', -1),
+                'type': 6,  # CLAUSE_PEACE
+                'value': 0
+            }
+        elif action_type == 'diplomacy_propose_alliance':
+            return {
+                'pid': 101,  # PACKET_DIPLOMACY_CREATE_CLAUSE_REQ
+                'counterpart': action['player_id'],
+                'giver': action.get('giver', -1),
+                'type': 7,  # CLAUSE_ALLIANCE
+                'value': 0
+            }
+        elif action_type == 'diplomacy_share_vision':
+            return {
+                'pid': 101,  # PACKET_DIPLOMACY_CREATE_CLAUSE_REQ
+                'counterpart': action['player_id'],
+                'giver': action.get('giver', -1),
+                'type': 8,  # CLAUSE_VISION
+                'value': 0
+            }
+        elif action_type == 'diplomacy_withdraw_vision':
+            return {
+                'pid': 103,  # PACKET_DIPLOMACY_REMOVE_CLAUSE_REQ
+                'counterpart': action['player_id'],
+                'giver': action.get('giver', -1),
+                'type': 8,  # CLAUSE_VISION
+                'value': 0
+            }
+
+        # =================================================================
+        # City Actions
+        # =================================================================
+        elif action_type == 'city_buy':
+            return {
+                'pid': 34,  # PACKET_CITY_BUY
+                'city_id': action['city_id']
+            }
+        elif action_type == 'city_sell_improvement':
+            return {
+                'pid': 33,  # PACKET_CITY_SELL
+                'city_id': action['city_id'],
+                'build_id': action['improvement_id']
+            }
+        elif action_type == 'city_unload':
+            # Unload all units from city (equivalent to activating them)
+            return {
+                'pid': 222,  # PACKET_UNIT_CHANGE_ACTIVITY
+                'unit_id': action.get('unit_id', -1),
+                'activity': 0,  # ACTIVITY_IDLE - activate the unit
+                'target': -1
+            }
+        elif action_type == 'city_rename':
+            return {
+                'pid': 36,  # PACKET_CITY_RENAME
+                'city_id': action['city_id'],
+                'name': action['name']
+            }
+        elif action_type == 'city_worklist':
+            # Set city worklist - this typically uses multiple packets
+            # For simplicity, we handle the change production case
+            return {
+                'pid': 35,  # PACKET_CITY_CHANGE
+                'city_id': action['city_id'],
+                'production_kind': action.get('production_kind', 0),
+                'production_value': action.get('production_value', 0)
+            }
+
+        # =================================================================
+        # Unit Actions - Additional
+        # =================================================================
+        elif action_type == 'unit_upgrade':
+            return {
+                'pid': 84,  # PACKET_UNIT_DO_ACTION
+                'actor_id': action['unit_id'],
+                'target_id': action.get('city_id', action.get('target_id', -1)),
+                'sub_target': action.get('sub_target', -1),
+                'name': '',
+                'action_type': 42  # ACTION_UPGRADE_UNIT
+            }
+        elif action_type == 'unit_join_city':
+            return {
+                'pid': 84,  # PACKET_UNIT_DO_ACTION
+                'actor_id': action['unit_id'],
+                'target_id': action.get('city_id', action.get('target_id', -1)),
+                'sub_target': action.get('sub_target', -1),
+                'name': '',
+                'action_type': 28  # ACTION_JOIN_CITY
+            }
+        elif action_type == 'unit_clean_pollution':
+            return {
+                'pid': 222,  # PACKET_UNIT_CHANGE_ACTIVITY
+                'unit_id': action['unit_id'],
+                'activity': 7,  # ACTIVITY_POLLUTION (clean pollution)
+                'target': action.get('tile_id', -1)
+            }
+        elif action_type == 'unit_clean_fallout':
+            return {
+                'pid': 222,  # PACKET_UNIT_CHANGE_ACTIVITY
+                'unit_id': action['unit_id'],
+                'activity': 11,  # ACTIVITY_FALLOUT (clean fallout)
+                'target': action.get('tile_id', -1)
+            }
+        elif action_type == 'unit_transform':
+            return {
+                'pid': 222,  # PACKET_UNIT_CHANGE_ACTIVITY
+                'unit_id': action['unit_id'],
+                'activity': 8,  # ACTIVITY_TRANSFORM
+                'target': -1
+            }
+        elif action_type == 'unit_cultivate':
+            return {
+                'pid': 84,  # PACKET_UNIT_DO_ACTION
+                'actor_id': action['unit_id'],
+                'target_id': action.get('tile_id', action.get('target_id', -1)),
+                'sub_target': action.get('sub_target', -1),
+                'name': '',
+                'action_type': 64  # ACTION_CULTIVATE
+            }
+        elif action_type == 'unit_plant':
+            return {
+                'pid': 84,  # PACKET_UNIT_DO_ACTION
+                'actor_id': action['unit_id'],
+                'target_id': action.get('tile_id', action.get('target_id', -1)),
+                'sub_target': action.get('sub_target', -1),
+                'name': '',
+                'action_type': 66  # ACTION_PLANT
+            }
+        elif action_type == 'unit_disband':
+            return {
+                'pid': 84,  # PACKET_UNIT_DO_ACTION
+                'actor_id': action['unit_id'],
+                'target_id': action.get('target_id', -1),
+                'sub_target': action.get('sub_target', -1),
+                'name': '',
+                'action_type': 30  # ACTION_DISBAND_UNIT
+            }
+        elif action_type == 'unit_home_city':
+            return {
+                'pid': 84,  # PACKET_UNIT_DO_ACTION
+                'actor_id': action['unit_id'],
+                'target_id': action.get('city_id', action.get('target_id', -1)),
+                'sub_target': action.get('sub_target', -1),
+                'name': '',
+                'action_type': 32  # ACTION_HOME_CITY
+            }
+        elif action_type == 'unit_wake':
+            return {
+                'pid': 222,  # PACKET_UNIT_CHANGE_ACTIVITY
+                'unit_id': action['unit_id'],
+                'activity': 0,  # ACTIVITY_IDLE (wake up/activate)
+                'target': -1
+            }
+        elif action_type == 'unit_auto_worker':
+            return {
+                'pid': 74,  # PACKET_UNIT_SERVER_SIDE_AGENT_SET
+                'unit_id': action['unit_id'],
+                'agent': 1  # Auto-worker mode
+            }
+
         return action  # Fallback
 
     def _get_unit_tile(self, unit_id: int) -> int:
