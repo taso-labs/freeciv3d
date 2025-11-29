@@ -452,5 +452,62 @@ class StateCache:
             # Metrics removed for thread safety
             logger.info("Cache cleared")
 
-# Global cache instance
-state_cache = StateCache()
+class _LazyStateCache:
+    """Proxy for StateCache that defers construction until first use.
+
+    This avoids raising exceptions at module import time when env vars like
+    CACHE_HMAC_SECRET are not yet available in the environment during pytest
+    collection. Behavior mirrors StateCache by forwarding attribute access and
+    calls to a real StateCache instance created on first demand.
+    """
+    def __init__(self, *args, **kwargs):
+        self._lock = threading.RLock()
+        self._real_cache = None
+        self._constructor_args = args
+        self._constructor_kwargs = kwargs
+
+    def _ensure(self):
+        """Ensure the underlying StateCache object is created."""
+        with self._lock:
+            if self._real_cache is None:
+                # instantiate using any stored constructor args/kwargs
+                self._real_cache = StateCache(*self._constructor_args, **self._constructor_kwargs)
+
+    def __getattr__(self, item):
+        # Forward attribute access to the real StateCache, ensuring creation
+        self._ensure()
+        return getattr(self._real_cache, item)
+
+    def __setattr__(self, key, value):
+        # Allow setting of internal attributes without triggering _ensure
+        if key in {"_lock", "_real_cache", "_constructor_args", "_constructor_kwargs"}:
+            object.__setattr__(self, key, value)
+            return
+        # Otherwise set on the real cache after ensuring it's created
+        self._ensure()
+        setattr(self._real_cache, key, value)
+
+    def __repr__(self):
+        if self._real_cache is None:
+            return "<LazyStateCache: uninitialized>"
+        return repr(self._real_cache)
+
+    # Optional explicit method to return the real instance
+    def get_real_cache(self):
+        self._ensure()
+        return self._real_cache
+
+
+# Global lazy cache instance. Existing code that imports 'state_cache' will get
+# a proxy that behaves like a StateCache but does not trigger expensive or
+# environment-dependent initialization at import time.
+state_cache = _LazyStateCache()
+
+
+def get_state_cache() -> StateCache:
+    """Return the underlying real StateCache instance, constructing it if needed.
+
+    This function is helpful when callers need access to the actual object
+    (for example, to introspect internals, or pass the object explicitly).
+    """
+    return state_cache.get_real_cache()

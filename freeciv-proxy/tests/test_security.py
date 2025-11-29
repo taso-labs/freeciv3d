@@ -7,6 +7,7 @@ Tests input validation, authentication security, rate limiting, and cache integr
 """
 
 import unittest
+import secrets
 import json
 import time
 import hmac
@@ -19,6 +20,10 @@ from security import InputSanitizer, SecurityError, SecurityLogger
 from rate_limiter import DistributedRateLimiter, InMemoryRateLimiter
 from session_manager import SessionManager, SessionState
 from state_cache import StateCache
+
+# Make sure a secure cache HMAC secret exists for tests that directly construct StateCache
+import os
+os.environ.setdefault('CACHE_HMAC_SECRET', secrets.token_hex(32))
 from error_handler import ErrorHandler, ErrorSeverity, ErrorCategory
 
 

@@ -12,6 +12,7 @@ import json
 import time
 import sys
 import os
+import secrets
 from unittest.mock import Mock, AsyncMock, patch, MagicMock
 
 # Add parent directory to path for imports
@@ -29,6 +30,10 @@ class TestLLMIntegration(unittest.TestCase):
 
     def setUp(self):
         """Set up integration test fixtures"""
+        # Ensure a valid cache HMAC secret exists for tests that instantiate the
+        # StateCache during setup. This prevents CUDA ValueError when the
+        # StateCache checks for CACHE_HMAC_SECRET on construction.
+        os.environ.setdefault('CACHE_HMAC_SECRET', secrets.token_hex(32))
         # Clear global state
         llm_agents.clear()
         state_cache.clear()
