@@ -75,6 +75,21 @@ for unit_id, unit in state['units'].items():
 all_units = list(state['units'].values())
 ```
 
+## Terminology
+
+This section defines key terms used throughout the protocol specification.
+
+| Term | Definition |
+|------|------------|
+| **actor_id** | The ID of the entity performing an action. For unit actions, this is the unit ID. For city actions (`city_production`, `city_buy`, `city_sell_improvement`), this is the city ID. For player-level actions (`end_turn`, diplomacy), this is typically the player ID or 0. |
+| **agent_id** | Unique identifier for an LLM agent connection. Used in all messages to identify the sender/recipient. Format: alphanumeric with underscores/hyphens, max 50 characters. |
+| **building** / **improvement** | Used interchangeably to refer to city structures (e.g., Granary, Barracks, City Walls). The term "improvement" is used in `city_sell_improvement` action; "building" appears in `sub_target` for espionage. |
+| **correlation_id** | Optional field for matching requests to responses in async operations. Clients should include this for tracking; servers echo it back in responses. |
+| **target** | Primary target of an action. Structure varies by action type: coordinates `{x, y}`, entity ID `{unit_id}`, `{city_id}`, `{player_id}`, or names `{production}`, `{improvement}`. |
+| **sub_target** | Secondary target for targeted actions, currently used only for espionage. Contains `{type, name}` where type is `"building"` or `"tech"`. |
+| **session_id** | Server-assigned identifier for an authenticated session. HMAC-signed for security. Returned in auth response. |
+| **player_id** | Integer identifier (0-29) for a player in the game. Assigned during authentication. |
+
 ## Connection Flow
 
 1. **Agent Connection**: LLM agent connects to `/ws/agent/{agent_id}` on LLM Gateway
@@ -307,6 +322,7 @@ await ws.send(json.dumps({
     "type": "unit_actions_query",
     "agent_id": "my-agent",
     "timestamp": time.time(),
+    "correlation_id": "unit-query-001",  # Optional but recommended for tracking
     "data": {"unit_id": 42}
 }))
 
@@ -821,7 +837,7 @@ Used in `tech_research` and espionage actions:
 Used in `diplomacy_message` action:
 
 - **Max length**: 256 characters
-- **Allowed characters**: Alphanumeric, spaces, and basic punctuation
+- **Allowed characters**: `[a-zA-Z0-9 .,!?'"()-]` (alphanumeric, spaces, and common punctuation)
 - **Sanitization**: Automatic removal of control characters and null bytes
 
 #### Agent Identifiers
@@ -832,14 +848,34 @@ Used in all message types:
 - **Allowed characters**: Alphanumeric, underscores, hyphens `[a-zA-Z0-9_-]`
 - **Example**: `"my-agent-123"`, `"llm_agent_alpha"`
 
+#### Sub-Target Fields
+
+Used in `sub_target` object for targeted espionage actions (`spy_targeted_sabotage_city`, `spy_targeted_steal_tech`):
+
+**Building sub-target** (`sub_target.type` = `"building"`):
+
+- **`name` max length**: 30 characters
+- **Allowed characters**: `[a-zA-Z0-9_ ]` (alphanumeric, spaces, underscores)
+- **Case**: Case-insensitive matching against ruleset building names
+- **Examples**: `{"type": "building", "name": "Granary"}`, `{"type": "building", "name": "City Walls"}`
+
+**Technology sub-target** (`sub_target.type` = `"tech"`):
+
+- **`name` max length**: 50 characters
+- **Allowed characters**: `[a-zA-Z0-9_ ]` (alphanumeric, spaces, underscores)
+- **Case**: Case-insensitive matching against ruleset technology names
+- **Examples**: `{"type": "tech", "name": "Bronze Working"}`, `{"type": "tech", "name": "Iron Working"}`
+
+**Validation**: If `sub_target.name` does not match a valid building or technology in the current ruleset, the action fails with error **E130** (Action validation failed).
+
 ### Numeric Field Validation
 
 #### Coordinates (x, y)
 
-- **Range**: -9999 to 9999 (inclusive)
+- **Range**: 0 to 9999 (inclusive); negative coordinates are rejected
 - **Type**: Must be integers
-- **Map bounds**: Server validates coordinates are within current map dimensions
-- **Error**: Out-of-range coordinates rejected with E251 or E252
+- **Map bounds**: Server validates coordinates are within current map dimensions (typically 0 to map_width-1, 0 to map_height-1)
+- **Error**: Out-of-range coordinates rejected with E251; coordinates outside map bounds rejected with E252
 
 #### Unit IDs, City IDs
 
@@ -1444,6 +1480,16 @@ Rate limiting protects server resources and prevents abuse while accommodating l
 - **Max violations**: 3 violations within grace period before blocking
 - **Block duration**: 60 seconds after exceeding max violations
 - **Grace period reset**: Counter resets after 30 seconds of compliant behavior
+
+**Message Types Subject to Rate Limiting:**
+
+All message types count against the rate limit, including:
+
+- `state_query`, `unit_actions_query`, `city_actions_query` (queries)
+- `action` (action submissions)
+- `ping` (heartbeat messages)
+
+**Recommendation**: Cache query responses locally and avoid repeated queries for the same entity within a turn. Use `state_query` with `delta` format to reduce response size.
 
 #### Grace Period Behavior
 
@@ -2055,7 +2101,6 @@ Referrer-Policy: strict-origin-when-cross-origin
 - Rate limit violations with agent ID and IP
 - Input validation failures (E223, E224) with sanitized input samples
 - Administrative actions (configuration changes)
-
 
 ## Performance Guidelines
 
