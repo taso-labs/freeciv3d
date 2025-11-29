@@ -257,6 +257,11 @@ class LLMActionValidator:
         ActionType.UNIT_DISEMBARK,
         ActionType.UNIT_BOARD,
         ActionType.UNIT_DEBOARD,
+        ActionType.UNIT_LOAD,
+        ActionType.UNIT_UNLOAD,
+        ActionType.UNIT_AIRLIFT,
+        ActionType.UNIT_PARADROP,
+        ActionType.UNIT_TELEPORT,
         # Combat
         ActionType.UNIT_ATTACK,
         ActionType.UNIT_BOMBARD,
