@@ -79,16 +79,16 @@ all_units = list(state['units'].values())
 
 This section defines key terms used throughout the protocol specification.
 
-| Term | Definition |
-|------|------------|
-| **actor_id** | The ID of the entity performing an action. For unit actions, this is the unit ID. For city actions (`city_production`, `city_buy`, `city_sell_improvement`), this is the city ID. For player-level actions (`end_turn`, diplomacy), this is typically the player ID or 0. |
-| **agent_id** | Unique identifier for an LLM agent connection. Used in all messages to identify the sender/recipient. Format: alphanumeric with underscores/hyphens, max 50 characters. |
-| **building** / **improvement** | Used interchangeably to refer to city structures (e.g., Granary, Barracks, City Walls). The term "improvement" is used in `city_sell_improvement` action; "building" appears in `sub_target` for espionage. |
-| **correlation_id** | Optional field for matching requests to responses in async operations. Clients should include this for tracking; servers echo it back in responses. |
-| **target** | Primary target of an action. Structure varies by action type: coordinates `{x, y}`, entity ID `{unit_id}`, `{city_id}`, `{player_id}`, or names `{production}`, `{improvement}`. |
-| **sub_target** | Secondary target for targeted actions, currently used only for espionage. Contains `{type, name}` where type is `"building"` or `"tech"`. |
-| **session_id** | Server-assigned identifier for an authenticated session. HMAC-signed for security. Returned in auth response. |
-| **player_id** | Integer identifier (0-29) for a player in the game. Assigned during authentication. |
+| Term                           | Definition                                                                                                                                                                                                                                                                |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **actor_id**                   | The ID of the entity performing an action. For unit actions, this is the unit ID. For city actions (`city_production`, `city_buy`, `city_sell_improvement`), this is the city ID. For player-level actions (`end_turn`, diplomacy), this is typically the player ID or 0. |
+| **agent_id**                   | Unique identifier for an LLM agent connection. Used in all messages to identify the sender/recipient. Format: alphanumeric with underscores/hyphens, max 50 characters.                                                                                                   |
+| **building** / **improvement** | Used interchangeably to refer to city structures (e.g., Granary, Barracks, City Walls). The term "improvement" is used in `city_sell_improvement` action; "building" appears in `sub_target` for espionage.                                                               |
+| **correlation_id**             | Optional field for matching requests to responses in async operations. Clients should include this for tracking; servers echo it back in responses.                                                                                                                       |
+| **target**                     | Primary target of an action. Structure varies by action type: coordinates `{x, y}`, entity ID `{unit_id}`, `{city_id}`, `{player_id}`, or names `{production}`, `{improvement}`.                                                                                          |
+| **sub_target**                 | Secondary target for targeted actions, currently used only for espionage. Contains `{type, name}` where type is `"building"` or `"tech"`.                                                                                                                                 |
+| **session_id**                 | Server-assigned identifier for an authenticated session. HMAC-signed for security. Returned in auth response.                                                                                                                                                             |
+| **player_id**                  | Integer identifier (0-29) for a player in the game. Assigned during authentication.                                                                                                                                                                                       |
 
 ## Connection Flow
 
@@ -252,13 +252,13 @@ All messages follow this structure:
 
 **Note**: The `players`, `units`, and `cities` fields are always returned as **dictionaries** (objects) keyed by ID, not arrays. This provides efficient O(1) lookups by ID.
 
-### 3. Per-Entity Action Queries
+### 3. Per-Entity Action Queries (Batch)
 
-These query types allow clients to request available actions for a specific unit or city. The returned actions are complete and directly submittable—clients can send them back as ACTION requests without modification.
+These query types allow clients to request available actions for multiple units or cities in a single request. The returned actions are complete and directly submittable—clients can send them back as ACTION requests without modification.
 
 #### UNIT_ACTIONS_QUERY (Request)
 
-Query all legal actions available for a specific unit.
+Query all legal actions available for one or more units.
 
 ```json
 {
@@ -267,14 +267,18 @@ Query all legal actions available for a specific unit.
   "timestamp": 1234567890.123,
   "correlation_id": "unit-query-001",
   "data": {
-    "unit_id": 42
+    "unit_ids": [42, 43, 44]
   }
 }
 ```
 
+| Field      | Type              | Required | Description                           |
+| ---------- | ----------------- | -------- | ------------------------------------- |
+| `unit_ids` | array of integers | Yes      | List of unit IDs to query (1 or more) |
+
 #### UNIT_ACTIONS_RESPONSE (Response)
 
-Returns a flat list of all legal actions the unit can perform. Each action object is complete and can be directly submitted as an ACTION request.
+Returns actions grouped by unit ID. Each action object is complete and can be directly submitted as an ACTION request.
 
 ```json
 {
@@ -284,71 +288,108 @@ Returns a flat list of all legal actions the unit can perform. Each action objec
   "correlation_id": "unit-query-001",
   "data": {
     "success": true,
-    "unit_id": 42,
-    "actions": [
-      {
-        "action_type": "unit_move",
-        "actor_id": 42,
-        "target": {"x": 11, "y": 21}
+    "units": {
+      "42": {
+        "unit_id": 42,
+        "success": true,
+        "actions": [
+          {
+            "action_type": "unit_move",
+            "actor_id": 42,
+            "target": {"x": 11, "y": 21}
+          },
+          {
+            "action_type": "unit_fortify",
+            "actor_id": 42
+          }
+        ]
       },
-      {
-        "action_type": "unit_move",
-        "actor_id": 42,
-        "target": {"x": 10, "y": 21}
+      "43": {
+        "unit_id": 43,
+        "success": true,
+        "actions": [
+          {
+            "action_type": "unit_move",
+            "actor_id": 43,
+            "target": {"x": 15, "y": 25}
+          }
+        ]
       },
+      "44": {
+        "unit_id": 44,
+        "success": false,
+        "error": {
+          "code": "E230",
+          "message": "Unit not found"
+        },
+        "actions": []
+      }
+    },
+    "errors": [
       {
-        "action_type": "unit_fortify",
-        "actor_id": 42
-      },
-      {
-        "action_type": "unit_sentry",
-        "actor_id": 42
-      },
-      {
-        "action_type": "unit_attack",
-        "actor_id": 42,
-        "target": {"unit_id": 99}
+        "unit_id": 44,
+        "code": "E230",
+        "message": "Unit not found"
       }
     ]
   }
 }
 ```
 
+**Response Fields:**
+
+| Field               | Type    | Description                                                                 |
+| ------------------- | ------- | --------------------------------------------------------------------------- |
+| `success`           | boolean | `true` if at least one unit returned actions successfully                   |
+| `units`             | object  | Dictionary of results keyed by unit ID (string keys for JSON compatibility) |
+| `units[id].success` | boolean | Whether this specific unit query succeeded                                  |
+| `units[id].actions` | array   | List of available actions for this unit (empty if error)                    |
+| `units[id].error`   | object  | Error details if this unit query failed (optional)                          |
+| `errors`            | array   | Summary list of all unit-level errors (for quick checking)                  |
+
 **Usage Pattern:**
 
 ```python
-# 1. Query actions for a unit
+# 1. Query actions for multiple units at once
 await ws.send(json.dumps({
     "type": "unit_actions_query",
     "agent_id": "my-agent",
     "timestamp": time.time(),
-    "correlation_id": "unit-query-001",  # Optional but recommended for tracking
-    "data": {"unit_id": 42}
+    "correlation_id": "batch-query-001",
+    "data": {"unit_ids": [42, 43, 44]}
 }))
 
 response = json.loads(await ws.recv())
-actions = response['data']['actions']
+units_data = response['data']['units']
 
-# 2. Pick an action and submit it directly
-chosen_action = actions[0]  # e.g., {"action_type": "unit_move", "actor_id": 42, "target": {"x": 11, "y": 21}}
-
-await ws.send(json.dumps({
-    "type": "action",
-    "agent_id": "my-agent",
-    "timestamp": time.time(),
-    "data": chosen_action  # Send directly without modification
-}))
+# 2. Process each unit's actions
+for unit_id, unit_result in units_data.items():
+    if unit_result['success']:
+        actions = unit_result['actions']
+        # Pick and submit an action
+        if actions:
+            chosen_action = actions[0]
+            await ws.send(json.dumps({
+                "type": "action",
+                "agent_id": "my-agent",
+                "timestamp": time.time(),
+                "data": chosen_action
+            }))
+    else:
+        print(f"Unit {unit_id} error: {unit_result['error']['message']}")
 ```
 
-**Error Codes:**
+**Error Codes (per-unit):**
 
 - `E230`: Unit not found
 - `E231`: Unit not owned by player
 - `E503`: Query timeout (server did not respond in time)
 
+**Note:** Partial success is possible. If some units are valid and others are not, the response will include actions for valid units and errors for invalid ones.
+
 #### CITY_ACTIONS_QUERY (Request)
 
-Query all legal actions available for a specific city.
+Query all legal actions available for one or more cities.
 
 ```json
 {
@@ -357,14 +398,18 @@ Query all legal actions available for a specific city.
   "timestamp": 1234567890.123,
   "correlation_id": "city-query-001",
   "data": {
-    "city_id": 5
+    "city_ids": [5, 6]
   }
 }
 ```
 
+| Field      | Type              | Required | Description                           |
+| ---------- | ----------------- | -------- | ------------------------------------- |
+| `city_ids` | array of integers | Yes      | List of city IDs to query (1 or more) |
+
 #### CITY_ACTIONS_RESPONSE (Response)
 
-Returns a flat list of all legal actions for the city.
+Returns actions grouped by city ID.
 
 ```json
 {
@@ -374,38 +419,51 @@ Returns a flat list of all legal actions for the city.
   "correlation_id": "city-query-001",
   "data": {
     "success": true,
-    "city_id": 5,
-    "actions": [
-      {
-        "action_type": "city_production",
-        "actor_id": 5,
-        "target": {"production": "Warrior"}
+    "cities": {
+      "5": {
+        "city_id": 5,
+        "success": true,
+        "actions": [
+          {
+            "action_type": "city_production",
+            "actor_id": 5,
+            "target": {"production": "Warrior"}
+          },
+          {
+            "action_type": "city_buy",
+            "actor_id": 5
+          }
+        ]
       },
-      {
-        "action_type": "city_production",
-        "actor_id": 5,
-        "target": {"production": "Settler"}
-      },
-      {
-        "action_type": "city_production",
-        "actor_id": 5,
-        "target": {"production": "Granary"}
-      },
-      {
-        "action_type": "city_buy",
-        "actor_id": 5
-      },
-      {
-        "action_type": "city_sell_improvement",
-        "actor_id": 5,
-        "target": {"improvement": "Barracks"}
+      "6": {
+        "city_id": 6,
+        "success": true,
+        "actions": [
+          {
+            "action_type": "city_production",
+            "actor_id": 6,
+            "target": {"production": "Granary"}
+          }
+        ]
       }
-    ]
+    },
+    "errors": []
   }
 }
 ```
 
-**Error Codes:**
+**Response Fields:**
+
+| Field                | Type    | Description                                                                 |
+| -------------------- | ------- | --------------------------------------------------------------------------- |
+| `success`            | boolean | `true` if at least one city returned actions successfully                   |
+| `cities`             | object  | Dictionary of results keyed by city ID (string keys for JSON compatibility) |
+| `cities[id].success` | boolean | Whether this specific city query succeeded                                  |
+| `cities[id].actions` | array   | List of available actions for this city (empty if error)                    |
+| `cities[id].error`   | object  | Error details if this city query failed (optional)                          |
+| `errors`             | array   | Summary list of all city-level errors (for quick checking)                  |
+
+**Error Codes (per-city):**
 
 - `E240`: City not found
 - `E241`: City not owned by player
@@ -1763,29 +1821,30 @@ async def play_game():
         state = json.loads(await ws.recv())
         units = state['data']['data']['units']  # Dict: {"123": {...}, "456": {...}}
 
-        # 3. Query available actions for a specific unit
-        warrior_id = 123
+        # 3. Query available actions for multiple units at once
+        unit_ids = [123, 456]  # warrior and settler
         await ws.send(json.dumps({
             "type": "unit_actions_query",
             "agent_id": "my-agent",
             "timestamp": time.time(),
-            "data": {"unit_id": warrior_id}
+            "data": {"unit_ids": unit_ids}
         }))
 
         actions_response = json.loads(await ws.recv())
-        available_actions = actions_response['data']['actions']
-        print(f"Unit {warrior_id} has {len(available_actions)} available actions")
+        units_actions = actions_response['data']['units']
 
-        # 4. Pick and submit an action directly (no modification needed)
-        for action in available_actions:
-            if action['action_type'] == 'unit_move':
-                await ws.send(json.dumps({
-                    "type": "action",
-                    "agent_id": "my-agent",
-                    "timestamp": time.time(),
-                    "data": action  # Submit directly as returned
-                }))
-                break
+        # 4. Process warrior's actions
+        warrior_data = units_actions.get('123')
+        if warrior_data and warrior_data['success']:
+            for action in warrior_data['actions']:
+                if action['action_type'] == 'unit_move':
+                    await ws.send(json.dumps({
+                        "type": "action",
+                        "agent_id": "my-agent",
+                        "timestamp": time.time(),
+                        "data": action  # Submit directly as returned
+                    }))
+                    break
 
         # 5. Declare war on another player (diplomacy)
         enemy_player_id = 2
