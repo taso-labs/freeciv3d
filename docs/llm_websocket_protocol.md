@@ -953,29 +953,6 @@ All string inputs are scanned for SQL injection patterns:
 
 ---
 
-#### ACTION_RESULT (Response)
-
-```json
-{
-  "type": "action_result",
-  "agent_id": "my-agent",
-  "timestamp": 1234567890.126,
-  "correlation_id": "action-456",
-  "data": {
-    "type": "action_result",
-    "success": true,
-    "action_type": "unit_move",
-    "result": {
-      "action_id": "exec-789",
-      "state_change": {
-        "unit_moved": true,
-        "new_position": {"x": 11, "y": 21}
-      }
-    }
-  }
-}
-```
-
 ### 5. Turn Management
 
 #### TURN_START
