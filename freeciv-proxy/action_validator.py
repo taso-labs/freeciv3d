@@ -42,21 +42,206 @@ class ValidationResult:
         self.error_message = error_message
 
 class ActionType(Enum):
-    """Supported action types for LLM agents"""
+    """Supported action types for LLM agents per Protocol v2.0.1"""
+    
+    # === Movement & Transport ===
     UNIT_MOVE = "unit_move"
-    UNIT_BUILD_CITY = "unit_build_city"
-    UNIT_EXPLORE = "unit_explore"
-    CITY_PRODUCTION = "city_production"
-    CITY_BUY = "city_buy"
-    TECH_RESEARCH = "tech_research"
-    TRADE_ROUTE = "trade_route"
-    END_TURN = "end_turn"
-    # AGE-192: New action types for richer gameplay
-    UNIT_FORTIFY = "unit_fortify"
-    UNIT_SENTRY = "unit_sentry"
+    UNIT_TELEPORT = "unit_teleport"
+    UNIT_AIRLIFT = "unit_airlift"
+    UNIT_PARADROP = "unit_paradrop"
+    UNIT_EMBARK = "unit_embark"
+    UNIT_DISEMBARK = "unit_disembark"
+    UNIT_BOARD = "unit_board"
+    UNIT_DEBOARD = "unit_deboard"
+    UNIT_LOAD = "unit_load"
+    UNIT_UNLOAD = "unit_unload"
+    
+    # === Combat ===
+    UNIT_ATTACK = "unit_attack"
+    UNIT_SUICIDE_ATTACK = "unit_suicide_attack"
+    UNIT_BOMBARD = "unit_bombard"
+    UNIT_CAPTURE = "unit_capture"
+    UNIT_WIPE = "unit_wipe"
+    UNIT_CONQUER_CITY = "unit_conquer_city"
+    UNIT_NUKE = "unit_nuke"
+    UNIT_NUKE_CITY = "unit_nuke_city"
+    UNIT_NUKE_UNITS = "unit_nuke_units"
+    
+    # === City Foundation ===
+    UNIT_FOUND_CITY = "unit_found_city"
+    UNIT_BUILD_CITY = "unit_build_city"  # Legacy alias
+    UNIT_JOIN_CITY = "unit_join_city"
+    UNIT_HOME_CITY = "unit_home_city"
+    
+    # === Trade ===
+    UNIT_TRADE_ROUTE = "unit_trade_route"
+    TRADE_ROUTE = "trade_route"  # Legacy alias
+    UNIT_MARKETPLACE = "unit_marketplace"
+    UNIT_HELP_WONDER = "unit_help_wonder"
+    
+    # === Terrain Improvements ===
     UNIT_BUILD_ROAD = "unit_build_road"
     UNIT_BUILD_IRRIGATION = "unit_build_irrigation"
     UNIT_BUILD_MINE = "unit_build_mine"
+    UNIT_BUILD_BASE = "unit_build_base"
+    UNIT_PILLAGE = "unit_pillage"
+    UNIT_CLEAN = "unit_clean"
+    UNIT_TRANSFORM = "unit_transform"
+    UNIT_CULTIVATE = "unit_cultivate"
+    UNIT_PLANT = "unit_plant"
+    
+    # === Unit Status ===
+    UNIT_FORTIFY = "unit_fortify"
+    UNIT_SENTRY = "unit_sentry"
+    UNIT_EXPLORE = "unit_explore"
+    UNIT_DISBAND = "unit_disband"
+    UNIT_UPGRADE = "unit_upgrade"
+    UNIT_CONVERT = "unit_convert"
+    UNIT_HEAL = "unit_heal"
+    
+    # === Espionage (Diplomat/Spy) ===
+    UNIT_ESTABLISH_EMBASSY = "unit_establish_embassy"
+    UNIT_EXPEL = "unit_expel"
+    SPY_INVESTIGATE_CITY = "spy_investigate_city"
+    SPY_POISON = "spy_poison"
+    SPY_SABOTAGE_CITY = "spy_sabotage_city"
+    SPY_TARGETED_SABOTAGE_CITY = "spy_targeted_sabotage_city"
+    SPY_STEAL_TECH = "spy_steal_tech"
+    SPY_TARGETED_STEAL_TECH = "spy_targeted_steal_tech"
+    SPY_INCITE_CITY = "spy_incite_city"
+    SPY_STEAL_GOLD = "spy_steal_gold"
+    SPY_STEAL_MAPS = "spy_steal_maps"
+    SPY_NUKE = "spy_nuke"
+    SPY_SPREAD_PLAGUE = "spy_spread_plague"
+    SPY_BRIBE_UNIT = "spy_bribe_unit"
+    SPY_SABOTAGE_UNIT = "spy_sabotage_unit"
+    SPY_ATTACK = "spy_attack"
+    
+    # === Diplomacy ===
+    DIPLOMACY_DECLARE_WAR = "diplomacy_declare_war"
+    DIPLOMACY_CANCEL_TREATY = "diplomacy_cancel_treaty"
+    DIPLOMACY_PROPOSE_CEASEFIRE = "diplomacy_propose_ceasefire"
+    DIPLOMACY_PROPOSE_PEACE = "diplomacy_propose_peace"
+    DIPLOMACY_PROPOSE_ALLIANCE = "diplomacy_propose_alliance"
+    DIPLOMACY_ACCEPT_TREATY = "diplomacy_accept_treaty"
+    DIPLOMACY_REJECT_TREATY = "diplomacy_reject_treaty"
+    DIPLOMACY_SHARE_VISION = "diplomacy_share_vision"
+    DIPLOMACY_WITHDRAW_VISION = "diplomacy_withdraw_vision"
+    DIPLOMACY_MESSAGE = "diplomacy_message"
+    
+    # === City Management ===
+    CITY_PRODUCTION = "city_production"
+    CITY_BUY = "city_buy"
+    CITY_SELL_IMPROVEMENT = "city_sell_improvement"
+    
+    # === Research & Game Control ===
+    TECH_RESEARCH = "tech_research"
+    END_TURN = "end_turn"
+
+
+# Categories for organizing action validation
+class ActionCategory(Enum):
+    """Categorization of action types for validation routing"""
+    MOVEMENT = "movement"
+    COMBAT = "combat"
+    CITY_FOUNDATION = "city_foundation"
+    TRADE = "trade"
+    TERRAIN = "terrain"
+    UNIT_STATUS = "unit_status"
+    ESPIONAGE = "espionage"
+    DIPLOMACY = "diplomacy"
+    CITY_MANAGEMENT = "city_management"
+    RESEARCH = "research"
+
+
+# Map action types to their categories
+ACTION_CATEGORIES = {
+    # Movement
+    ActionType.UNIT_MOVE: ActionCategory.MOVEMENT,
+    ActionType.UNIT_TELEPORT: ActionCategory.MOVEMENT,
+    ActionType.UNIT_AIRLIFT: ActionCategory.MOVEMENT,
+    ActionType.UNIT_PARADROP: ActionCategory.MOVEMENT,
+    ActionType.UNIT_EMBARK: ActionCategory.MOVEMENT,
+    ActionType.UNIT_DISEMBARK: ActionCategory.MOVEMENT,
+    ActionType.UNIT_BOARD: ActionCategory.MOVEMENT,
+    ActionType.UNIT_DEBOARD: ActionCategory.MOVEMENT,
+    ActionType.UNIT_LOAD: ActionCategory.MOVEMENT,
+    ActionType.UNIT_UNLOAD: ActionCategory.MOVEMENT,
+    # Combat
+    ActionType.UNIT_ATTACK: ActionCategory.COMBAT,
+    ActionType.UNIT_SUICIDE_ATTACK: ActionCategory.COMBAT,
+    ActionType.UNIT_BOMBARD: ActionCategory.COMBAT,
+    ActionType.UNIT_CAPTURE: ActionCategory.COMBAT,
+    ActionType.UNIT_WIPE: ActionCategory.COMBAT,
+    ActionType.UNIT_CONQUER_CITY: ActionCategory.COMBAT,
+    ActionType.UNIT_NUKE: ActionCategory.COMBAT,
+    ActionType.UNIT_NUKE_CITY: ActionCategory.COMBAT,
+    ActionType.UNIT_NUKE_UNITS: ActionCategory.COMBAT,
+    # City Foundation
+    ActionType.UNIT_FOUND_CITY: ActionCategory.CITY_FOUNDATION,
+    ActionType.UNIT_BUILD_CITY: ActionCategory.CITY_FOUNDATION,
+    ActionType.UNIT_JOIN_CITY: ActionCategory.CITY_FOUNDATION,
+    ActionType.UNIT_HOME_CITY: ActionCategory.CITY_FOUNDATION,
+    # Trade
+    ActionType.UNIT_TRADE_ROUTE: ActionCategory.TRADE,
+    ActionType.TRADE_ROUTE: ActionCategory.TRADE,
+    ActionType.UNIT_MARKETPLACE: ActionCategory.TRADE,
+    ActionType.UNIT_HELP_WONDER: ActionCategory.TRADE,
+    # Terrain
+    ActionType.UNIT_BUILD_ROAD: ActionCategory.TERRAIN,
+    ActionType.UNIT_BUILD_IRRIGATION: ActionCategory.TERRAIN,
+    ActionType.UNIT_BUILD_MINE: ActionCategory.TERRAIN,
+    ActionType.UNIT_BUILD_BASE: ActionCategory.TERRAIN,
+    ActionType.UNIT_PILLAGE: ActionCategory.TERRAIN,
+    ActionType.UNIT_CLEAN: ActionCategory.TERRAIN,
+    ActionType.UNIT_TRANSFORM: ActionCategory.TERRAIN,
+    ActionType.UNIT_CULTIVATE: ActionCategory.TERRAIN,
+    ActionType.UNIT_PLANT: ActionCategory.TERRAIN,
+    # Unit Status
+    ActionType.UNIT_FORTIFY: ActionCategory.UNIT_STATUS,
+    ActionType.UNIT_SENTRY: ActionCategory.UNIT_STATUS,
+    ActionType.UNIT_EXPLORE: ActionCategory.UNIT_STATUS,
+    ActionType.UNIT_DISBAND: ActionCategory.UNIT_STATUS,
+    ActionType.UNIT_UPGRADE: ActionCategory.UNIT_STATUS,
+    ActionType.UNIT_CONVERT: ActionCategory.UNIT_STATUS,
+    ActionType.UNIT_HEAL: ActionCategory.UNIT_STATUS,
+    # Espionage
+    ActionType.UNIT_ESTABLISH_EMBASSY: ActionCategory.ESPIONAGE,
+    ActionType.UNIT_EXPEL: ActionCategory.ESPIONAGE,
+    ActionType.SPY_INVESTIGATE_CITY: ActionCategory.ESPIONAGE,
+    ActionType.SPY_POISON: ActionCategory.ESPIONAGE,
+    ActionType.SPY_SABOTAGE_CITY: ActionCategory.ESPIONAGE,
+    ActionType.SPY_TARGETED_SABOTAGE_CITY: ActionCategory.ESPIONAGE,
+    ActionType.SPY_STEAL_TECH: ActionCategory.ESPIONAGE,
+    ActionType.SPY_TARGETED_STEAL_TECH: ActionCategory.ESPIONAGE,
+    ActionType.SPY_INCITE_CITY: ActionCategory.ESPIONAGE,
+    ActionType.SPY_STEAL_GOLD: ActionCategory.ESPIONAGE,
+    ActionType.SPY_STEAL_MAPS: ActionCategory.ESPIONAGE,
+    ActionType.SPY_NUKE: ActionCategory.ESPIONAGE,
+    ActionType.SPY_SPREAD_PLAGUE: ActionCategory.ESPIONAGE,
+    ActionType.SPY_BRIBE_UNIT: ActionCategory.ESPIONAGE,
+    ActionType.SPY_SABOTAGE_UNIT: ActionCategory.ESPIONAGE,
+    ActionType.SPY_ATTACK: ActionCategory.ESPIONAGE,
+    # Diplomacy
+    ActionType.DIPLOMACY_DECLARE_WAR: ActionCategory.DIPLOMACY,
+    ActionType.DIPLOMACY_CANCEL_TREATY: ActionCategory.DIPLOMACY,
+    ActionType.DIPLOMACY_PROPOSE_CEASEFIRE: ActionCategory.DIPLOMACY,
+    ActionType.DIPLOMACY_PROPOSE_PEACE: ActionCategory.DIPLOMACY,
+    ActionType.DIPLOMACY_PROPOSE_ALLIANCE: ActionCategory.DIPLOMACY,
+    ActionType.DIPLOMACY_ACCEPT_TREATY: ActionCategory.DIPLOMACY,
+    ActionType.DIPLOMACY_REJECT_TREATY: ActionCategory.DIPLOMACY,
+    ActionType.DIPLOMACY_SHARE_VISION: ActionCategory.DIPLOMACY,
+    ActionType.DIPLOMACY_WITHDRAW_VISION: ActionCategory.DIPLOMACY,
+    ActionType.DIPLOMACY_MESSAGE: ActionCategory.DIPLOMACY,
+    # City Management
+    ActionType.CITY_PRODUCTION: ActionCategory.CITY_MANAGEMENT,
+    ActionType.CITY_BUY: ActionCategory.CITY_MANAGEMENT,
+    ActionType.CITY_SELL_IMPROVEMENT: ActionCategory.CITY_MANAGEMENT,
+    # Research
+    ActionType.TECH_RESEARCH: ActionCategory.RESEARCH,
+    ActionType.END_TURN: ActionCategory.RESEARCH,
+}
+
 
 class LLMActionValidator:
     """
@@ -64,26 +249,79 @@ class LLMActionValidator:
     Implements capability-based permissions and game rule validation
     """
 
-    # Default capabilities for LLM agents
+    # Default capabilities for LLM agents - all standard actions
     DEFAULT_CAPABILITIES = [
+        # Movement
         ActionType.UNIT_MOVE,
+        ActionType.UNIT_EMBARK,
+        ActionType.UNIT_DISEMBARK,
+        ActionType.UNIT_BOARD,
+        ActionType.UNIT_DEBOARD,
+        # Combat
+        ActionType.UNIT_ATTACK,
+        ActionType.UNIT_BOMBARD,
+        ActionType.UNIT_CAPTURE,
+        ActionType.UNIT_CONQUER_CITY,
+        # City Foundation
+        ActionType.UNIT_FOUND_CITY,
         ActionType.UNIT_BUILD_CITY,
-        ActionType.UNIT_EXPLORE,
-        ActionType.CITY_PRODUCTION,
-        ActionType.TECH_RESEARCH,
-        ActionType.END_TURN,
-        # AGE-192: Additional unit actions for richer gameplay
-        ActionType.UNIT_FORTIFY,
-        ActionType.UNIT_SENTRY,
+        ActionType.UNIT_JOIN_CITY,
+        ActionType.UNIT_HOME_CITY,
+        # Trade
+        ActionType.UNIT_TRADE_ROUTE,
+        ActionType.TRADE_ROUTE,
+        ActionType.UNIT_HELP_WONDER,
+        # Terrain
         ActionType.UNIT_BUILD_ROAD,
         ActionType.UNIT_BUILD_IRRIGATION,
-        ActionType.UNIT_BUILD_MINE
+        ActionType.UNIT_BUILD_MINE,
+        ActionType.UNIT_BUILD_BASE,
+        ActionType.UNIT_PILLAGE,
+        ActionType.UNIT_CLEAN,
+        # Unit Status
+        ActionType.UNIT_FORTIFY,
+        ActionType.UNIT_SENTRY,
+        ActionType.UNIT_EXPLORE,
+        ActionType.UNIT_DISBAND,
+        ActionType.UNIT_UPGRADE,
+        ActionType.UNIT_HEAL,
+        # Espionage
+        ActionType.UNIT_ESTABLISH_EMBASSY,
+        ActionType.SPY_INVESTIGATE_CITY,
+        ActionType.SPY_STEAL_TECH,
+        ActionType.SPY_TARGETED_STEAL_TECH,
+        ActionType.SPY_SABOTAGE_CITY,
+        ActionType.SPY_TARGETED_SABOTAGE_CITY,
+        ActionType.SPY_BRIBE_UNIT,
+        ActionType.SPY_INCITE_CITY,
+        # Diplomacy
+        ActionType.DIPLOMACY_DECLARE_WAR,
+        ActionType.DIPLOMACY_CANCEL_TREATY,
+        ActionType.DIPLOMACY_PROPOSE_CEASEFIRE,
+        ActionType.DIPLOMACY_PROPOSE_PEACE,
+        ActionType.DIPLOMACY_PROPOSE_ALLIANCE,
+        ActionType.DIPLOMACY_ACCEPT_TREATY,
+        ActionType.DIPLOMACY_REJECT_TREATY,
+        ActionType.DIPLOMACY_SHARE_VISION,
+        ActionType.DIPLOMACY_WITHDRAW_VISION,
+        ActionType.DIPLOMACY_MESSAGE,
+        # City Management
+        ActionType.CITY_PRODUCTION,
+        ActionType.CITY_BUY,
+        ActionType.CITY_SELL_IMPROVEMENT,
+        # Research
+        ActionType.TECH_RESEARCH,
+        ActionType.END_TURN,
     ]
 
-    # Restricted actions that require special permissions
+    # Restricted actions that require special permissions (destructive/irreversible)
     RESTRICTED_ACTIONS = [
-        ActionType.CITY_BUY,
-        ActionType.TRADE_ROUTE
+        ActionType.UNIT_NUKE,
+        ActionType.UNIT_NUKE_CITY,
+        ActionType.UNIT_NUKE_UNITS,
+        ActionType.SPY_NUKE,
+        ActionType.SPY_POISON,
+        ActionType.SPY_SPREAD_PLAGUE,
     ]
 
     def __init__(self, capabilities: Optional[List[ActionType]] = None):
@@ -156,8 +394,27 @@ class LLMActionValidator:
         elif action_type == ActionType.UNIT_BUILD_MINE:
             result = self._validate_unit_build_mine(action, player_id, game_state)
         else:
-            # Default validation for other action types
-            result = self._validate_basic_action(action, player_id, game_state)
+            # Category-based validation for extended action types
+            category = ACTION_CATEGORIES.get(action_type)
+            if category == ActionCategory.COMBAT:
+                result = self._validate_combat_action(action, action_type, player_id, game_state)
+            elif category == ActionCategory.DIPLOMACY:
+                result = self._validate_diplomacy_action(action, action_type, player_id, game_state)
+            elif category == ActionCategory.ESPIONAGE:
+                result = self._validate_espionage_action(action, action_type, player_id, game_state)
+            elif category == ActionCategory.MOVEMENT:
+                result = self._validate_movement_action(action, action_type, player_id, game_state)
+            elif category == ActionCategory.TERRAIN:
+                result = self._validate_terrain_action(action, action_type, player_id, game_state)
+            elif category == ActionCategory.UNIT_STATUS:
+                result = self._validate_unit_status_action(action, action_type, player_id, game_state)
+            elif category == ActionCategory.TRADE:
+                result = self._validate_trade_action(action, action_type, player_id, game_state)
+            elif category == ActionCategory.CITY_MANAGEMENT:
+                result = self._validate_city_management_action(action, action_type, player_id, game_state)
+            else:
+                # Default validation for any unrecognized categories
+                result = self._validate_basic_action(action, player_id, game_state)
 
         # Update statistics
         if result.is_valid:
@@ -491,3 +748,354 @@ class LLMActionValidator:
             return False
 
         return True
+
+    # === Category-based Validators for Extended Action Types ===
+
+    def _validate_combat_action(self, action: Dict[str, Any], action_type: ActionType, player_id: int, game_state: Optional[Dict[str, Any]]) -> ValidationResult:
+        """Validate combat actions (attack, bombard, capture, nuke, etc.)
+
+        Combat actions require:
+        - unit_id: The attacking unit
+        - target_x, target_y: Target location (for most combat actions)
+        - target_unit_id or target_city_id: Optional specific target
+        """
+        if 'unit_id' not in action:
+            return self._validation_error('E230', f'{action_type.value} requires unit_id')
+
+        unit_id = action['unit_id']
+
+        # Validate unit ownership
+        if game_state and 'units' in game_state:
+            units = game_state['units'].values() if isinstance(game_state['units'], dict) else game_state['units']
+            unit_found = False
+            for unit in units:
+                if isinstance(unit, dict) and unit.get('id') == unit_id:
+                    unit_found = True
+                    if unit.get('owner') != player_id:
+                        return self._validation_error('E231', f'Player does not own unit {unit_id}')
+                    break
+            if not unit_found:
+                return self._validation_error('E232', f'Unit not found: {unit_id}')
+
+        # Target validation depends on action type
+        if action_type in [ActionType.UNIT_ATTACK, ActionType.UNIT_SUICIDE_ATTACK,
+                          ActionType.UNIT_BOMBARD, ActionType.UNIT_CAPTURE]:
+            # These require target coordinates or target unit
+            if 'target_x' in action and 'target_y' in action:
+                try:
+                    target_x = int(action['target_x'])
+                    target_y = int(action['target_y'])
+                    if not self._validate_coordinates(target_x, target_y, game_state):
+                        return self._validation_error('E233', 'Target coordinates out of bounds')
+                except (ValueError, TypeError):
+                    return self._validation_error('E234', 'Target coordinates must be integers')
+            elif 'target_unit_id' not in action and 'target_city_id' not in action:
+                return self._validation_error('E235', f'{action_type.value} requires target coordinates or target_unit_id/target_city_id')
+
+        elif action_type == ActionType.UNIT_NUKE:
+            # Nuke requires target location
+            if 'target_x' not in action or 'target_y' not in action:
+                return self._validation_error('E236', 'unit_nuke requires target_x and target_y')
+            try:
+                target_x = int(action['target_x'])
+                target_y = int(action['target_y'])
+                if not self._validate_coordinates(target_x, target_y, game_state):
+                    return self._validation_error('E237', 'Nuke target coordinates out of bounds')
+            except (ValueError, TypeError):
+                return self._validation_error('E238', 'Nuke target coordinates must be integers')
+
+        elif action_type == ActionType.UNIT_NUKE_CITY:
+            if 'target_city_id' not in action:
+                return self._validation_error('E239', 'unit_nuke_city requires target_city_id')
+
+        elif action_type == ActionType.UNIT_NUKE_UNITS:
+            if 'target_x' not in action or 'target_y' not in action:
+                return self._validation_error('E240', 'unit_nuke_units requires target_x and target_y')
+
+        return ValidationResult(True)
+
+    def _validate_diplomacy_action(self, action: Dict[str, Any], action_type: ActionType, player_id: int, game_state: Optional[Dict[str, Any]]) -> ValidationResult:
+        """Validate diplomacy actions (declare war, propose peace, etc.)
+
+        Diplomacy actions require:
+        - target_player_id: The player to interact with
+        - Additional fields depending on action type (message, treaty_type)
+        """
+        if 'target_player_id' not in action:
+            return self._validation_error('E260', f'{action_type.value} requires target_player_id')
+
+        target_player_id = action['target_player_id']
+
+        # Cannot perform diplomacy with self
+        if target_player_id == player_id:
+            return self._validation_error('E261', 'Cannot perform diplomacy action on yourself')
+
+        # Validate target player exists if game state available
+        if game_state and 'players' in game_state:
+            players = game_state['players']
+            player_ids = [p.get('id') for p in players.values() if isinstance(p, dict)] if isinstance(players, dict) else [p.get('id') for p in players if isinstance(p, dict)]
+            if target_player_id not in player_ids:
+                return self._validation_error('E262', f'Target player not found: {target_player_id}')
+
+        # Additional validation for specific diplomacy actions
+        if action_type == ActionType.DIPLOMACY_MESSAGE:
+            if 'message' not in action:
+                return self._validation_error('E263', 'diplomacy_message requires message field')
+            message = action['message']
+            if not isinstance(message, str) or len(message) > 500:
+                return self._validation_error('E264', 'Message must be a string of at most 500 characters')
+
+        return ValidationResult(True)
+
+    def _validate_espionage_action(self, action: Dict[str, Any], action_type: ActionType, player_id: int, game_state: Optional[Dict[str, Any]]) -> ValidationResult:
+        """Validate espionage actions (spy operations)
+
+        Espionage actions require:
+        - unit_id: The spy/diplomat unit
+        - target_city_id or target_unit_id: The target
+        - sub_target (optional): For targeted operations (specific tech, improvement)
+        """
+        if 'unit_id' not in action:
+            return self._validation_error('E270', f'{action_type.value} requires unit_id')
+
+        unit_id = action['unit_id']
+
+        # Validate unit ownership
+        if game_state and 'units' in game_state:
+            units = game_state['units'].values() if isinstance(game_state['units'], dict) else game_state['units']
+            unit_found = False
+            for unit in units:
+                if isinstance(unit, dict) and unit.get('id') == unit_id:
+                    unit_found = True
+                    if unit.get('owner') != player_id:
+                        return self._validation_error('E271', f'Player does not own unit {unit_id}')
+                    break
+            if not unit_found:
+                return self._validation_error('E272', f'Unit not found: {unit_id}')
+
+        # City-targeting spy actions
+        city_actions = [
+            ActionType.SPY_INVESTIGATE_CITY, ActionType.SPY_POISON,
+            ActionType.SPY_SABOTAGE_CITY, ActionType.SPY_TARGETED_SABOTAGE_CITY,
+            ActionType.SPY_STEAL_TECH, ActionType.SPY_TARGETED_STEAL_TECH,
+            ActionType.SPY_INCITE_CITY, ActionType.SPY_STEAL_GOLD,
+            ActionType.SPY_STEAL_MAPS, ActionType.SPY_NUKE, ActionType.SPY_SPREAD_PLAGUE
+        ]
+
+        # Unit-targeting spy actions
+        unit_actions = [
+            ActionType.SPY_BRIBE_UNIT, ActionType.SPY_SABOTAGE_UNIT, ActionType.SPY_ATTACK
+        ]
+
+        if action_type in city_actions:
+            if 'target_city_id' not in action:
+                return self._validation_error('E273', f'{action_type.value} requires target_city_id')
+
+            # Targeted actions require sub_target
+            if action_type in [ActionType.SPY_TARGETED_SABOTAGE_CITY, ActionType.SPY_TARGETED_STEAL_TECH]:
+                if 'sub_target' not in action:
+                    return self._validation_error('E274', f'{action_type.value} requires sub_target (improvement or tech name)')
+
+        elif action_type in unit_actions:
+            if 'target_unit_id' not in action:
+                return self._validation_error('E275', f'{action_type.value} requires target_unit_id')
+
+        elif action_type == ActionType.UNIT_ESTABLISH_EMBASSY:
+            if 'target_player_id' not in action and 'target_city_id' not in action:
+                return self._validation_error('E276', 'unit_establish_embassy requires target_player_id or target_city_id')
+
+        return ValidationResult(True)
+
+    def _validate_movement_action(self, action: Dict[str, Any], action_type: ActionType, player_id: int, game_state: Optional[Dict[str, Any]]) -> ValidationResult:
+        """Validate movement/transport actions (embark, disembark, airlift, etc.)
+
+        Movement actions require:
+        - unit_id: The unit to move
+        - Additional fields depending on action type
+        """
+        if 'unit_id' not in action:
+            return self._validation_error('E280', f'{action_type.value} requires unit_id')
+
+        unit_id = action['unit_id']
+
+        # Validate unit ownership
+        if game_state and 'units' in game_state:
+            units = game_state['units'].values() if isinstance(game_state['units'], dict) else game_state['units']
+            unit_found = False
+            for unit in units:
+                if isinstance(unit, dict) and unit.get('id') == unit_id:
+                    unit_found = True
+                    if unit.get('owner') != player_id:
+                        return self._validation_error('E281', f'Player does not own unit {unit_id}')
+                    break
+            if not unit_found:
+                return self._validation_error('E282', f'Unit not found: {unit_id}')
+
+        # Embark/board actions require transport target
+        if action_type in [ActionType.UNIT_EMBARK, ActionType.UNIT_BOARD, ActionType.UNIT_LOAD]:
+            if 'transport_id' not in action and 'target_unit_id' not in action:
+                return self._validation_error('E283', f'{action_type.value} requires transport_id or target_unit_id')
+
+        # Airlift requires source and destination cities
+        elif action_type == ActionType.UNIT_AIRLIFT:
+            if 'target_city_id' not in action:
+                return self._validation_error('E284', 'unit_airlift requires target_city_id')
+
+        # Paradrop requires target coordinates
+        elif action_type == ActionType.UNIT_PARADROP:
+            if 'target_x' not in action or 'target_y' not in action:
+                return self._validation_error('E285', 'unit_paradrop requires target_x and target_y')
+            try:
+                target_x = int(action['target_x'])
+                target_y = int(action['target_y'])
+                if not self._validate_coordinates(target_x, target_y, game_state):
+                    return self._validation_error('E286', 'Paradrop target coordinates out of bounds')
+            except (ValueError, TypeError):
+                return self._validation_error('E287', 'Paradrop target coordinates must be integers')
+
+        # Teleport requires destination
+        elif action_type == ActionType.UNIT_TELEPORT:
+            if 'target_x' not in action or 'target_y' not in action:
+                return self._validation_error('E288', 'unit_teleport requires target_x and target_y')
+
+        return ValidationResult(True)
+
+    def _validate_terrain_action(self, action: Dict[str, Any], action_type: ActionType, player_id: int, game_state: Optional[Dict[str, Any]]) -> ValidationResult:
+        """Validate terrain improvement actions (build road, irrigation, pillage, etc.)
+
+        Terrain actions require:
+        - unit_id: The worker/engineer unit
+        - Optional: improvement_type for generic build actions
+        """
+        if 'unit_id' not in action:
+            return self._validation_error('E290', f'{action_type.value} requires unit_id')
+
+        unit_id = action['unit_id']
+
+        # Validate unit ownership
+        if game_state and 'units' in game_state:
+            units = game_state['units'].values() if isinstance(game_state['units'], dict) else game_state['units']
+            unit_found = False
+            for unit in units:
+                if isinstance(unit, dict) and unit.get('id') == unit_id:
+                    unit_found = True
+                    if unit.get('owner') != player_id:
+                        return self._validation_error('E291', f'Player does not own unit {unit_id}')
+                    break
+            if not unit_found:
+                return self._validation_error('E292', f'Unit not found: {unit_id}')
+
+        # Build base actions may specify base type
+        if action_type == ActionType.UNIT_BUILD_BASE:
+            if 'base_type' not in action:
+                # Optional but recommended
+                pass  # Will use default base type
+
+        # Pillage may specify target infrastructure
+        elif action_type == ActionType.UNIT_PILLAGE:
+            if 'target' not in action:
+                # Optional - will pillage default target
+                pass
+
+        return ValidationResult(True)
+
+    def _validate_unit_status_action(self, action: Dict[str, Any], action_type: ActionType, player_id: int, game_state: Optional[Dict[str, Any]]) -> ValidationResult:
+        """Validate unit status actions (fortify, sentry, disband, upgrade, etc.)
+
+        Status actions require:
+        - unit_id: The unit to modify
+        """
+        if 'unit_id' not in action:
+            return self._validation_error('E295', f'{action_type.value} requires unit_id')
+
+        unit_id = action['unit_id']
+
+        # Validate unit ownership
+        if game_state and 'units' in game_state:
+            units = game_state['units'].values() if isinstance(game_state['units'], dict) else game_state['units']
+            unit_found = False
+            for unit in units:
+                if isinstance(unit, dict) and unit.get('id') == unit_id:
+                    unit_found = True
+                    if unit.get('owner') != player_id:
+                        return self._validation_error('E296', f'Player does not own unit {unit_id}')
+                    break
+            if not unit_found:
+                return self._validation_error('E297', f'Unit not found: {unit_id}')
+
+        # Upgrade requires city context (for gold cost)
+        if action_type == ActionType.UNIT_UPGRADE:
+            # Unit must be in a city - checked by game server
+            pass
+
+        # Convert requires unit to have conversion ability
+        if action_type == ActionType.UNIT_CONVERT:
+            # Checked by game server
+            pass
+
+        return ValidationResult(True)
+
+    def _validate_trade_action(self, action: Dict[str, Any], action_type: ActionType, player_id: int, game_state: Optional[Dict[str, Any]]) -> ValidationResult:
+        """Validate trade actions (trade route, marketplace, help wonder)
+
+        Trade actions require:
+        - unit_id: The trade unit (caravan, freight)
+        - target_city_id: Destination city
+        """
+        if 'unit_id' not in action:
+            return self._validation_error('E310', f'{action_type.value} requires unit_id')
+
+        unit_id = action['unit_id']
+
+        # Validate unit ownership
+        if game_state and 'units' in game_state:
+            units = game_state['units'].values() if isinstance(game_state['units'], dict) else game_state['units']
+            unit_found = False
+            for unit in units:
+                if isinstance(unit, dict) and unit.get('id') == unit_id:
+                    unit_found = True
+                    if unit.get('owner') != player_id:
+                        return self._validation_error('E311', f'Player does not own unit {unit_id}')
+                    break
+            if not unit_found:
+                return self._validation_error('E312', f'Unit not found: {unit_id}')
+
+        # Trade route and help wonder require target city
+        if action_type in [ActionType.UNIT_TRADE_ROUTE, ActionType.TRADE_ROUTE, 
+                          ActionType.UNIT_HELP_WONDER]:
+            if 'target_city_id' not in action:
+                return self._validation_error('E313', f'{action_type.value} requires target_city_id')
+
+        return ValidationResult(True)
+
+    def _validate_city_management_action(self, action: Dict[str, Any], action_type: ActionType, player_id: int, game_state: Optional[Dict[str, Any]]) -> ValidationResult:
+        """Validate city management actions (buy, sell)
+
+        City management actions require:
+        - city_id: The city to manage
+        """
+        if 'city_id' not in action:
+            return self._validation_error('E320', f'{action_type.value} requires city_id')
+
+        city_id = action['city_id']
+
+        # Validate city ownership
+        if game_state and 'cities' in game_state:
+            cities = game_state['cities'].values() if isinstance(game_state['cities'], dict) else game_state['cities']
+            city_found = False
+            for city in cities:
+                if isinstance(city, dict) and city.get('id') == city_id:
+                    city_found = True
+                    if city.get('owner') != player_id:
+                        return self._validation_error('E321', f'Player does not own city {city_id}')
+                    break
+            if not city_found:
+                return self._validation_error('E322', f'City not found: {city_id}')
+
+        # Sell improvement requires improvement_id
+        if action_type == ActionType.CITY_SELL_IMPROVEMENT:
+            if 'improvement_id' not in action and 'improvement_name' not in action:
+                return self._validation_error('E323', 'city_sell_improvement requires improvement_id or improvement_name')
+
+        return ValidationResult(True)
+
