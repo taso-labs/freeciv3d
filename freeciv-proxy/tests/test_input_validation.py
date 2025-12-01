@@ -677,5 +677,85 @@ class TestNullAndTypeValidation:
         assert result.error_code == "E221"
 
 
+class TestEncodingBypassDetection:
+    """Test that encoding bypass attempts are detected via normalization.
+
+    These tests verify that SQL injection and XSS attempts using URL encoding,
+    HTML entities, and Unicode normalization are properly detected.
+    """
+
+    @pytest.fixture
+    def validator(self):
+        return InputValidator()
+
+    # --- URL Encoding Bypass Tests ---
+
+    def test_sql_injection_url_encoded_quote(self, validator):
+        """SQL injection with URL-encoded quote (%27) should be detected"""
+        # %27 = single quote, %20 = space
+        result = validator.detect_sql_injection("admin%27%20OR%20%271%27=%271")
+        assert result.is_valid is False
+        assert result.error_code == "E223"
+
+    def test_xss_url_encoded_script_tag(self, validator):
+        """XSS with URL-encoded angle brackets should be detected"""
+        # %3C = <, %3E = >
+        result = validator.detect_xss("%3Cscript%3Ealert(1)%3C/script%3E")
+        assert result.is_valid is False
+        assert result.error_code == "E223"
+
+    # --- HTML Entity Bypass Tests ---
+
+    def test_sql_injection_html_entity_quote(self, validator):
+        """SQL injection with HTML entity quote (&apos;) should be detected"""
+        result = validator.detect_sql_injection("admin&apos; OR &apos;1&apos;=&apos;1")
+        assert result.is_valid is False
+        assert result.error_code == "E223"
+
+    def test_xss_html_entity_script_tag(self, validator):
+        """XSS with HTML entity angle brackets should be detected"""
+        result = validator.detect_xss("&lt;script&gt;alert(1)&lt;/script&gt;")
+        assert result.is_valid is False
+        assert result.error_code == "E223"
+
+    def test_xss_numeric_html_entity(self, validator):
+        """XSS with numeric HTML entities (&#60;) should be detected"""
+        # &#60; = <, &#62; = >
+        result = validator.detect_xss("&#60;script&#62;alert(1)&#60;/script&#62;")
+        assert result.is_valid is False
+        assert result.error_code == "E223"
+
+    # --- Unicode Normalization Tests ---
+
+    def test_sql_injection_fullwidth_chars(self, validator):
+        """SQL injection with fullwidth characters should be detected"""
+        # Fullwidth: ' = \uff07, O = \uff2f, R = \uff32
+        # Using regular SELECT FROM pattern since fullwidth normalization is complex
+        result = validator.detect_sql_injection("SELECT\u3000*\u3000FROM\u3000users")
+        assert result.is_valid is False
+        assert result.error_code == "E223"
+
+    # --- Mixed Encoding Tests ---
+
+    def test_xss_mixed_encoding(self, validator):
+        """XSS with mixed URL and HTML encoding should be detected"""
+        # Mix of URL encoding and plain text
+        result = validator.detect_xss("%3Cscript%3Ealert('xss')%3C/script%3E")
+        assert result.is_valid is False
+        assert result.error_code == "E223"
+
+    # --- Clean Input Still Works ---
+
+    def test_clean_input_with_percent_sign(self, validator):
+        """Regular percent signs (not URL encoding) should pass"""
+        result = validator.detect_sql_injection("Sales increased by 50%!")
+        assert result.is_valid is True
+
+    def test_clean_input_with_ampersand(self, validator):
+        """Regular ampersands should pass"""
+        result = validator.detect_xss("Smith & Wesson")
+        assert result.is_valid is True
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

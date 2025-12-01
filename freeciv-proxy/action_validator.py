@@ -46,6 +46,10 @@ DEFAULT_MAP_WIDTH = 200
 DEFAULT_MAP_HEIGHT = 200
 
 # Action validation limits
+# NOTE: MAX_ACTION_PARAMS is intentionally only checked in _validate_basic_action as a
+# catch-all for unknown action types. Specific validators (unit_move, diplomacy, etc.)
+# have their own required/optional field validation which is more precise. This constant
+# serves as a safety net for unrecognized actions, not a global enforcement.
 MAX_ACTION_PARAMS = 20  # Maximum number of parameters in an action
 MAX_MESSAGE_LENGTH = 256  # Maximum length for text messages
 MAX_NAME_LENGTH = 50  # Maximum length for names (city, tech, etc.)
@@ -631,7 +635,7 @@ class LLMActionValidator:
         """
         return self._validate_unit_ownership(
             action, player_id, game_state,
-            error_missing='E070', error_not_found='E072', error_not_owned='E071',
+            error_missing='E070', error_not_found='E071', error_not_owned='E072',
             action_name='Unit build road'
         )
 
@@ -643,7 +647,7 @@ class LLMActionValidator:
         """
         return self._validate_unit_ownership(
             action, player_id, game_state,
-            error_missing='E080', error_not_found='E082', error_not_owned='E081',
+            error_missing='E080', error_not_found='E081', error_not_owned='E082',
             action_name='Unit build irrigation'
         )
 
@@ -655,7 +659,7 @@ class LLMActionValidator:
         """
         return self._validate_unit_ownership(
             action, player_id, game_state,
-            error_missing='E090', error_not_found='E092', error_not_owned='E091',
+            error_missing='E090', error_not_found='E091', error_not_owned='E092',
             action_name='Unit build mine'
         )
 

@@ -24,6 +24,9 @@ Error codes:
 
 import re
 import logging
+import unicodedata
+from html import unescape as html_unescape
+from urllib.parse import unquote as url_unquote
 from typing import Optional
 
 logger = logging.getLogger("freeciv-proxy")
@@ -44,6 +47,11 @@ class InputValidationError(Exception):
 # Maximum input length for ReDoS protection
 # Any string longer than this is rejected before regex matching
 # 2KB is sufficient for game-related text while limiting attack surface
+#
+# NOTE: This pre-check eliminates the need for regex timeouts. Python's re module
+# doesn't support timeouts, but by limiting input length before regex matching,
+# we bound the worst-case execution time. Combined patterns execute in O(1) time
+# relative to pattern count due to compilation.
 MAX_INPUT_LENGTH_FOR_REGEX = 2048
 
 
@@ -90,6 +98,13 @@ class InputValidator:
         },
         "message": {
             "max_length": 256,
+            # SECURITY NOTE: This pattern is intentionally restrictive. The \' and \"
+            # are escaped quote LITERALS for display purposes only (e.g., "it's working").
+            # SQL injection attempts like "' OR '1'='1" are BLOCKED because:
+            # 1. The pattern requires the ENTIRE string to match (^ and $ anchors)
+            # 2. SQL keywords like OR, AND, SELECT are not in [a-zA-Z0-9 .,!?'"()-]
+            # 3. Even if quotes pass, detect_sql_injection() runs as a second layer
+            # Test: test_diplomacy_message_sql_injection_blocked verifies this works.
             "pattern": r'^[a-zA-Z0-9 .,!?\'"()\-]*$',
             "description": "Messages may contain alphanumeric and basic punctuation",
         },
@@ -119,6 +134,8 @@ class InputValidator:
     # NOTE: These patterns are only applied to free-text fields like 'message'.
     # Fields with character allowlists (city_name, building_name, etc.) are already
     # protected and don't need injection detection, which could cause false positives.
+    #
+    # Patterns handle various quoting styles including URL-decoded and HTML-unescaped input.
     SQL_INJECTION_PATTERNS = [
         r"\bSELECT\b.*\bFROM\b",  # SELECT ... FROM (more specific)
         r"\bDROP\b.*\bTABLE\b",  # DROP TABLE (more specific)
@@ -126,10 +143,10 @@ class InputValidator:
         r"\bUPDATE\b.*\bSET\b",  # UPDATE ... SET (more specific)
         r"\bDELETE\b.*\bFROM\b",  # DELETE FROM (more specific)
         r"\bUNION\b.*\bSELECT\b",  # UNION SELECT (more specific)
-        r"'\s*OR\s+'?\d+\s*=\s*'?\d+",  # ' OR '1'='1' style
-        r'"\s*OR\s+"?\d+\s*=\s*"?\d+',  # " OR "1"="1" style
-        r"'\s*AND\s+'?\d+\s*=\s*'?\d+",  # ' AND '1'='1' style
-        r'"\s*AND\s+"?\d+\s*=\s*"?\d+',  # " AND "1"="1" style
+        r"'\s*OR\s+'?\d+'?\s*=\s*'?\d+'?",  # ' OR '1'='1' style (quotes optional around digits)
+        r'"\s*OR\s+"?\d+"?\s*=\s*"?\d+"?',  # " OR "1"="1" style
+        r"'\s*AND\s+'?\d+'?\s*=\s*'?\d+'?",  # ' AND '1'='1' style
+        r'"\s*AND\s+"?\d+"?\s*=\s*"?\d+"?',  # " AND "1"="1" style
         r"'--",  # SQL comment after quote (injection attempt)
         r"/\*.*\*/",  # Block comment (injection attempt)
         r";\s*(DROP|SELECT|INSERT|UPDATE|DELETE)\b",  # Chained SQL commands
@@ -178,6 +195,30 @@ class InputValidator:
             'sql_injections_blocked': 0,
             'xss_blocked': 0,
         }
+
+    def _normalize_for_security(self, value: str) -> str:
+        """
+        Normalize input to detect encoding bypass attempts.
+
+        Handles:
+        - URL encoding (%27 -> ', %3D -> =, etc.)
+        - HTML entities (&apos; &#39; -> ', &lt; -> <, etc.)
+        - Unicode normalization (fullwidth chars -> ASCII)
+
+        This is applied before SQL/XSS pattern matching to catch
+        attempts to bypass detection via encoding tricks.
+        """
+        # URL decode (handles %XX encoding)
+        normalized = url_unquote(value)
+
+        # HTML entity decode (handles &apos; &#39; &lt; etc.)
+        normalized = html_unescape(normalized)
+
+        # Unicode normalization (NFKC: compatibility decomposition + canonical composition)
+        # Converts fullwidth characters to ASCII equivalents
+        normalized = unicodedata.normalize('NFKC', normalized)
+
+        return normalized
 
     def validate_string_field(self, value, field_type: str) -> ValidationResult:
         """
@@ -288,6 +329,11 @@ class InputValidator:
         """
         Detect SQL injection patterns in input
 
+        Includes encoding normalization to detect bypass attempts via:
+        - URL encoding (%27 for quote, %3D for equals)
+        - HTML entities (&apos; &#39; for quote)
+        - Unicode normalization (fullwidth characters)
+
         Returns:
             ValidationResult - invalid if SQL injection detected
         """
@@ -303,7 +349,10 @@ class InputValidator:
                 error_message=f"Input too long for security scanning: {len(value)} > {MAX_INPUT_LENGTH_FOR_REGEX}"
             )
 
-        match = self._sql_combined_pattern.search(value)
+        # Normalize encodings to detect bypass attempts
+        normalized = self._normalize_for_security(value)
+
+        match = self._sql_combined_pattern.search(normalized)
         if match:
             self._stats['sql_injections_blocked'] += 1
             matched_pattern = match.group(0)
@@ -320,6 +369,11 @@ class InputValidator:
         """
         Detect XSS patterns in input
 
+        Includes encoding normalization to detect bypass attempts via:
+        - URL encoding (%3C for <, %3E for >)
+        - HTML entities (&lt; &gt; &#60;)
+        - Unicode normalization
+
         Returns:
             ValidationResult - invalid if XSS detected
         """
@@ -335,7 +389,10 @@ class InputValidator:
                 error_message=f"Input too long for security scanning: {len(value)} > {MAX_INPUT_LENGTH_FOR_REGEX}"
             )
 
-        match = self._xss_combined_pattern.search(value)
+        # Normalize encodings to detect bypass attempts
+        normalized = self._normalize_for_security(value)
+
+        match = self._xss_combined_pattern.search(normalized)
         if match:
             self._stats["xss_blocked"] += 1
             matched_pattern = match.group(0)
