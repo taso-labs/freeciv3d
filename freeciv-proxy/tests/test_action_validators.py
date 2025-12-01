@@ -269,80 +269,42 @@ class TestActionValidators(unittest.TestCase):
 
         self.assertTrue(result.is_valid)
 
-    def test_unit_build_road_missing_x_coordinate(self):
-        """Build road without x coordinate should fail with E070"""
+    def test_unit_build_road_without_coordinates(self):
+        """Build road without coordinates should PASS per Protocol v2.0.1
+        
+        Per protocol: Terrain improvement actions operate on the unit's current tile.
+        No target coordinates needed. The unit's position determines where the road is built.
+        See: llm_websocket_protocol.md - Terrain Improvement Actions section
+        """
+        action = {
+            'type': 'unit_build_road',
+            'unit_id': 123,
+            'player_id': 0
+            # No x, y coordinates - this is correct per protocol
+        }
+
+        result = self.validator.validate_action(action, player_id=0, game_state=self.sample_game_state)
+
+        self.assertTrue(result.is_valid)
+
+    def test_unit_build_road_with_extra_coordinates_ignored(self):
+        """Extra coordinates in build_road should be ignored (not cause failure)
+        
+        Per Protocol v2.0.1, terrain actions use unit's current tile.
+        If client sends coordinates anyway, they should be ignored, not cause errors.
+        """
         action = {
             'type': 'unit_build_road',
             'unit_id': 123,
             'player_id': 0,
+            'x': -5,  # These should be ignored, not validated
             'y': 15
         }
 
         result = self.validator.validate_action(action, player_id=0, game_state=self.sample_game_state)
 
-        self.assertFalse(result.is_valid)
-        self.assertEqual(result.error_code, 'E070')
-        self.assertIn('coordinate', result.error_message.lower())
-
-    def test_unit_build_road_missing_y_coordinate(self):
-        """Build road without y coordinate should fail with E070"""
-        action = {
-            'type': 'unit_build_road',
-            'unit_id': 123,
-            'player_id': 0,
-            'x': 10
-        }
-
-        result = self.validator.validate_action(action, player_id=0, game_state=self.sample_game_state)
-
-        self.assertFalse(result.is_valid)
-        self.assertEqual(result.error_code, 'E070')
-
-    def test_unit_build_road_x_negative(self):
-        """Negative x coordinate should fail"""
-        action = {
-            'type': 'unit_build_road',
-            'unit_id': 123,
-            'player_id': 0,
-            'x': -5,
-            'y': 15
-        }
-
-        result = self.validator.validate_action(action, player_id=0, game_state=self.sample_game_state)
-
-        self.assertFalse(result.is_valid)
-        self.assertEqual(result.error_code, 'E072')
-        self.assertIn('bounds', result.error_message.lower())
-
-    def test_unit_build_road_x_too_large(self):
-        """x >= 200 should fail with E072"""
-        action = {
-            'type': 'unit_build_road',
-            'unit_id': 123,
-            'player_id': 0,
-            'x': 200,
-            'y': 15
-        }
-
-        result = self.validator.validate_action(action, player_id=0, game_state=self.sample_game_state)
-
-        self.assertFalse(result.is_valid)
-        self.assertEqual(result.error_code, 'E072')
-
-    def test_unit_build_road_y_out_of_bounds(self):
-        """Invalid y coordinate should fail"""
-        action = {
-            'type': 'unit_build_road',
-            'unit_id': 123,
-            'player_id': 0,
-            'x': 10,
-            'y': 300  # Too large
-        }
-
-        result = self.validator.validate_action(action, player_id=0, game_state=self.sample_game_state)
-
-        self.assertFalse(result.is_valid)
-        self.assertEqual(result.error_code, 'E072')
+        # Should still pass - coordinates are optional and ignored
+        self.assertTrue(result.is_valid)
 
     def test_unit_build_road_wrong_player(self):
         """Build road with unit owned by other player should fail"""
@@ -421,8 +383,12 @@ class TestActionValidators(unittest.TestCase):
 
         self.assertTrue(result.is_valid)
 
-    def test_unit_build_irrigation_missing_coordinates(self):
-        """Build irrigation without coordinates should fail"""
+    def test_unit_build_irrigation_without_coordinates(self):
+        """Build irrigation without coordinates should PASS per Protocol v2.0.1
+        
+        Per protocol: Terrain improvement actions operate on the unit's current tile.
+        No target coordinates needed.
+        """
         action = {
             'type': 'unit_build_irrigation',
             'unit_id': 123,
@@ -431,38 +397,21 @@ class TestActionValidators(unittest.TestCase):
 
         result = self.validator.validate_action(action, player_id=0, game_state=self.sample_game_state)
 
-        self.assertFalse(result.is_valid)
-        self.assertEqual(result.error_code, 'E080')
+        self.assertTrue(result.is_valid)
 
-    def test_unit_build_irrigation_x_out_of_bounds(self):
-        """Out of bounds x for irrigation should fail"""
+    def test_unit_build_irrigation_extra_coords_ignored(self):
+        """Extra coordinates in build_irrigation should be ignored"""
         action = {
             'type': 'unit_build_irrigation',
             'unit_id': 123,
             'player_id': 0,
-            'x': -1,
+            'x': -1,  # Would fail if validated, but should be ignored
             'y': 10
         }
 
         result = self.validator.validate_action(action, player_id=0, game_state=self.sample_game_state)
 
-        self.assertFalse(result.is_valid)
-        self.assertEqual(result.error_code, 'E082')
-
-    def test_unit_build_irrigation_y_out_of_bounds(self):
-        """Out of bounds y for irrigation should fail"""
-        action = {
-            'type': 'unit_build_irrigation',
-            'unit_id': 123,
-            'player_id': 0,
-            'x': 10,
-            'y': 250
-        }
-
-        result = self.validator.validate_action(action, player_id=0, game_state=self.sample_game_state)
-
-        self.assertFalse(result.is_valid)
-        self.assertEqual(result.error_code, 'E082')
+        self.assertTrue(result.is_valid)
 
     def test_unit_build_irrigation_wrong_player(self):
         """Build irrigation with wrong player should fail"""
@@ -566,8 +515,12 @@ class TestActionValidators(unittest.TestCase):
 
         self.assertTrue(result.is_valid)
 
-    def test_unit_build_mine_missing_coordinates(self):
-        """Build mine without coordinates should fail"""
+    def test_unit_build_mine_without_coordinates(self):
+        """Build mine without coordinates should PASS per Protocol v2.0.1
+        
+        Per protocol: Terrain improvement actions operate on the unit's current tile.
+        No target coordinates needed.
+        """
         action = {
             'type': 'unit_build_mine',
             'unit_id': 123,
@@ -576,53 +529,49 @@ class TestActionValidators(unittest.TestCase):
 
         result = self.validator.validate_action(action, player_id=0, game_state=self.sample_game_state)
 
-        self.assertFalse(result.is_valid)
-        self.assertEqual(result.error_code, 'E090')
+        self.assertTrue(result.is_valid)
 
-    def test_unit_build_mine_x_out_of_bounds_negative(self):
-        """Negative x for mine should fail"""
+    def test_unit_build_mine_extra_coords_ignored(self):
+        """Extra coordinates in build_mine should be ignored"""
         action = {
             'type': 'unit_build_mine',
             'unit_id': 123,
             'player_id': 0,
-            'x': -10,
+            'x': -10,  # Would fail if validated
             'y': 15
         }
 
         result = self.validator.validate_action(action, player_id=0, game_state=self.sample_game_state)
 
-        self.assertFalse(result.is_valid)
-        self.assertEqual(result.error_code, 'E092')
+        self.assertTrue(result.is_valid)
 
-    def test_unit_build_mine_x_out_of_bounds_large(self):
-        """x >= 200 for mine should fail"""
+    def test_unit_build_mine_large_coords_ignored(self):
+        """Large coordinates in build_mine should be ignored (not cause E092)"""
         action = {
             'type': 'unit_build_mine',
             'unit_id': 123,
             'player_id': 0,
-            'x': 201,
+            'x': 500,  # Would fail if validated
             'y': 15
         }
 
         result = self.validator.validate_action(action, player_id=0, game_state=self.sample_game_state)
 
-        self.assertFalse(result.is_valid)
-        self.assertEqual(result.error_code, 'E092')
+        self.assertTrue(result.is_valid)
 
-    def test_unit_build_mine_y_out_of_bounds(self):
-        """Out of bounds y for mine should fail"""
+    def test_unit_build_mine_y_out_of_bounds_ignored(self):
+        """Out of bounds y for mine should be ignored per Protocol v2.0.1"""
         action = {
             'type': 'unit_build_mine',
             'unit_id': 123,
             'player_id': 0,
             'x': 10,
-            'y': -5
+            'y': -5  # Would fail if validated, but coordinates are ignored
         }
 
         result = self.validator.validate_action(action, player_id=0, game_state=self.sample_game_state)
 
-        self.assertFalse(result.is_valid)
-        self.assertEqual(result.error_code, 'E092')
+        self.assertTrue(result.is_valid)
 
     def test_unit_build_mine_wrong_player(self):
         """Build mine with wrong player should fail"""

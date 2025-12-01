@@ -358,7 +358,10 @@ class LLMActionValidator:
             'errors_by_type': {}
         }
         # InputValidator for security checks (XSS, SQL injection)
-        # Lazy import to avoid circular dependency
+        # NOTE: Lazy import is intentional to avoid circular dependency.
+        # input_validator.py imports ValidationResult from this module, so we
+        # cannot import InputValidator at module level. This pattern is safe
+        # because __init__ is only called once per validator instance.
         from input_validator import get_input_validator
         self._input_validator = get_input_validator()
 

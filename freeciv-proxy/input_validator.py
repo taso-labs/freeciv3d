@@ -175,7 +175,11 @@ class InputValidator:
     COORDINATE_MAX = 9999
 
     # Entity ID validation
+    # FreeCiv game entity IDs are typically < 100,000, but we use a conservative
+    # limit. The C server uses int32, but we enforce a tighter bound for game logic.
     ENTITY_ID_MAX = 999999
+    # C server compatibility: reject values that would overflow int32
+    INT32_MAX = 2147483647
 
     def __init__(self):
         # Compile regex patterns for performance
@@ -433,6 +437,15 @@ class InputValidator:
                 is_valid=False,
                 error_code=self.E221_INVALID_TYPE,
                 error_message=f"Entity ID {field_name} must be an integer, got {type(value).__name__}"
+            )
+
+        # First check for C server int32 overflow (Python integers are unbounded)
+        if value > self.INT32_MAX:
+            self._stats['failures'] += 1
+            return ValidationResult(
+                is_valid=False,
+                error_code=self.E222_OUT_OF_RANGE,
+                error_message=f"Entity ID {field_name} exceeds maximum safe value: {value} > {self.INT32_MAX}"
             )
 
         if value < 0 or value > self.ENTITY_ID_MAX:
