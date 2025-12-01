@@ -39,10 +39,16 @@ from enum import Enum
 
 logger = logging.getLogger("freeciv-proxy")
 
+# === Constants ===
 # Map size limits (standard FreeCiv maximum dimensions)
 # See: https://freeciv.fandom.com/wiki/Map
 DEFAULT_MAP_WIDTH = 200
 DEFAULT_MAP_HEIGHT = 200
+
+# Action validation limits
+MAX_ACTION_PARAMS = 20  # Maximum number of parameters in an action
+MAX_MESSAGE_LENGTH = 256  # Maximum length for text messages
+MAX_NAME_LENGTH = 50  # Maximum length for names (city, tech, etc.)
 
 class ValidationResult:
     """Result of action validation"""
@@ -347,6 +353,10 @@ class LLMActionValidator:
             'invalid_actions': 0,
             'errors_by_type': {}
         }
+        # InputValidator for security checks (XSS, SQL injection)
+        # Lazy import to avoid circular dependency
+        from input_validator import get_input_validator
+        self._input_validator = get_input_validator()
 
     def validate_action(self, action: Dict[str, Any], player_id: int, game_state: Optional[Dict[str, Any]] = None) -> ValidationResult:
         """
@@ -650,10 +660,14 @@ class LLMActionValidator:
         )
 
     def _validate_basic_action(self, action: Dict[str, Any], player_id: int, game_state: Optional[Dict[str, Any]]) -> ValidationResult:
-        """Basic validation for other action types"""
+        """Basic validation for other action types.
+
+        Performs generic validation applicable to any action type not handled
+        by a specific validator.
+        """
         # Ensure action has reasonable structure
-        if len(action) > 20:  # Prevent overly complex actions
-            return self._validation_error('E003', 'Action has too many parameters')
+        if len(action) > MAX_ACTION_PARAMS:
+            return self._validation_error('E003', f'Action has too many parameters (max {MAX_ACTION_PARAMS})')
 
         return ValidationResult(True)
 
@@ -814,13 +828,16 @@ class LLMActionValidator:
                           ActionType.UNIT_BOMBARD, ActionType.UNIT_CAPTURE]:
             # These require target coordinates or target unit
             if 'target_x' in action and 'target_y' in action:
-                try:
-                    target_x = int(action['target_x'])
-                    target_y = int(action['target_y'])
-                    if not self._validate_coordinates(target_x, target_y, game_state):
-                        return self._validation_error('E233', 'Target coordinates out of bounds')
-                except (ValueError, TypeError):
-                    return self._validation_error('E234', 'Target coordinates must be integers')
+                # Use InputValidator for proper type checking (excludes bools)
+                x_result = self._input_validator.validate_coordinate(action['target_x'], 'target_x')
+                if not x_result.is_valid:
+                    return self._validation_error(x_result.error_code or 'E234', x_result.error_message or 'Invalid target_x')
+                y_result = self._input_validator.validate_coordinate(action['target_y'], 'target_y')
+                if not y_result.is_valid:
+                    return self._validation_error(y_result.error_code or 'E234', y_result.error_message or 'Invalid target_y')
+
+                if not self._validate_coordinates(action['target_x'], action['target_y'], game_state):
+                    return self._validation_error('E233', 'Target coordinates out of bounds')
             elif 'target_unit_id' not in action and 'target_city_id' not in action:
                 return self._validation_error('E235', f'{action_type.value} requires target coordinates or target_unit_id/target_city_id')
 
@@ -828,13 +845,17 @@ class LLMActionValidator:
             # Nuke requires target location
             if 'target_x' not in action or 'target_y' not in action:
                 return self._validation_error('E236', 'unit_nuke requires target_x and target_y')
-            try:
-                target_x = int(action['target_x'])
-                target_y = int(action['target_y'])
-                if not self._validate_coordinates(target_x, target_y, game_state):
-                    return self._validation_error('E237', 'Nuke target coordinates out of bounds')
-            except (ValueError, TypeError):
-                return self._validation_error('E238', 'Nuke target coordinates must be integers')
+
+            # Use InputValidator for proper type checking
+            x_result = self._input_validator.validate_coordinate(action['target_x'], 'target_x')
+            if not x_result.is_valid:
+                return self._validation_error(x_result.error_code or 'E238', x_result.error_message or 'Invalid target_x')
+            y_result = self._input_validator.validate_coordinate(action['target_y'], 'target_y')
+            if not y_result.is_valid:
+                return self._validation_error(y_result.error_code or 'E238', y_result.error_message or 'Invalid target_y')
+
+            if not self._validate_coordinates(action['target_x'], action['target_y'], game_state):
+                return self._validation_error('E237', 'Nuke target coordinates out of bounds')
 
         elif action_type == ActionType.UNIT_NUKE_CITY:
             if 'target_city_id' not in action:
@@ -874,8 +895,21 @@ class LLMActionValidator:
             if 'message' not in action:
                 return self._validation_error('E263', 'diplomacy_message requires message field')
             message = action['message']
-            if not isinstance(message, str) or len(message) > 256:
-                return self._validation_error('E264', 'Message must be a string of at most 256 characters')
+
+            # Use InputValidator for comprehensive message validation
+            msg_result = self._input_validator.validate_string_field(message, 'message')
+            if not msg_result.is_valid:
+                return self._validation_error(msg_result.error_code or 'E264', msg_result.error_message or 'Invalid message')
+
+            # Check for SQL injection
+            sql_result = self._input_validator.detect_sql_injection(message)
+            if not sql_result.is_valid:
+                return self._validation_error('E265', 'Message contains potentially dangerous content')
+
+            # Check for XSS
+            xss_result = self._input_validator.detect_xss(message)
+            if not xss_result.is_valid:
+                return self._validation_error('E266', 'Message contains potentially dangerous content')
 
         return ValidationResult(True)
 
@@ -914,10 +948,17 @@ class LLMActionValidator:
             if 'target_city_id' not in action:
                 return self._validation_error('E273', f'{action_type.value} requires target_city_id')
 
-            # Targeted actions require sub_target
+            # Targeted actions require sub_target (tech or improvement name)
             if action_type in [ActionType.SPY_TARGETED_SABOTAGE_CITY, ActionType.SPY_TARGETED_STEAL_TECH]:
                 if 'sub_target' not in action:
                     return self._validation_error('E274', f'{action_type.value} requires sub_target (improvement or tech name)')
+
+                # Validate sub_target as a string field (tech_name or improvement_name)
+                sub_target = action['sub_target']
+                field_type = 'tech_name' if action_type == ActionType.SPY_TARGETED_STEAL_TECH else 'improvement_name'
+                sub_result = self._input_validator.validate_string_field(sub_target, field_type)
+                if not sub_result.is_valid:
+                    return self._validation_error(sub_result.error_code or 'E274', sub_result.error_message or f'Invalid {field_type}')
 
         elif action_type in unit_actions:
             if 'target_unit_id' not in action:
@@ -959,18 +1000,30 @@ class LLMActionValidator:
         elif action_type == ActionType.UNIT_PARADROP:
             if 'target_x' not in action or 'target_y' not in action:
                 return self._validation_error('E285', 'unit_paradrop requires target_x and target_y')
-            try:
-                target_x = int(action['target_x'])
-                target_y = int(action['target_y'])
-                if not self._validate_coordinates(target_x, target_y, game_state):
-                    return self._validation_error('E286', 'Paradrop target coordinates out of bounds')
-            except (ValueError, TypeError):
-                return self._validation_error('E287', 'Paradrop target coordinates must be integers')
+
+            # Use InputValidator for proper type checking
+            x_result = self._input_validator.validate_coordinate(action['target_x'], 'target_x')
+            if not x_result.is_valid:
+                return self._validation_error(x_result.error_code or 'E287', x_result.error_message or 'Invalid target_x')
+            y_result = self._input_validator.validate_coordinate(action['target_y'], 'target_y')
+            if not y_result.is_valid:
+                return self._validation_error(y_result.error_code or 'E287', y_result.error_message or 'Invalid target_y')
+
+            if not self._validate_coordinates(action['target_x'], action['target_y'], game_state):
+                return self._validation_error('E286', 'Paradrop target coordinates out of bounds')
 
         # Teleport requires destination
         elif action_type == ActionType.UNIT_TELEPORT:
             if 'target_x' not in action or 'target_y' not in action:
                 return self._validation_error('E288', 'unit_teleport requires target_x and target_y')
+
+            # Use InputValidator for proper type checking
+            x_result = self._input_validator.validate_coordinate(action['target_x'], 'target_x')
+            if not x_result.is_valid:
+                return self._validation_error(x_result.error_code or 'E288', x_result.error_message or 'Invalid target_x')
+            y_result = self._input_validator.validate_coordinate(action['target_y'], 'target_y')
+            if not y_result.is_valid:
+                return self._validation_error(y_result.error_code or 'E288', y_result.error_message or 'Invalid target_y')
 
         return ValidationResult(True)
 

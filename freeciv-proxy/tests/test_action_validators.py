@@ -699,5 +699,416 @@ class TestActionValidators(unittest.TestCase):
                 self.assertTrue(result.is_valid, f"Failed at ({x}, {y})")
 
 
+class TestCategoryValidators(unittest.TestCase):
+    """Test suite for category-based action validators (combat, diplomacy, espionage, etc.)"""
+
+    def setUp(self):
+        """Setup test fixtures"""
+        self.maxDiff = None
+        self.validator = LLMActionValidator()
+
+        # Sample game state for testing
+        self.sample_game_state = {
+            'units': {
+                '123': {
+                    'id': 123,
+                    'owner': 0,
+                    'type': 'Warrior',
+                    'moves_left': 3,
+                    'x': 10,
+                    'y': 15
+                },
+                '456': {
+                    'id': 456,
+                    'owner': 1,
+                    'type': 'Warrior',
+                    'moves_left': 1,
+                    'x': 20,
+                    'y': 25
+                },
+                '789': {
+                    'id': 789,
+                    'owner': 0,
+                    'type': 'Spy',
+                    'moves_left': 2,
+                    'x': 5,
+                    'y': 8
+                }
+            },
+            'players': {
+                '0': {'id': 0, 'name': 'player1'},
+                '1': {'id': 1, 'name': 'player2'},
+                '2': {'id': 2, 'name': 'player3'}
+            },
+            'cities': {
+                '100': {'id': 100, 'owner': 0, 'name': 'Capital'},
+                '200': {'id': 200, 'owner': 1, 'name': 'EnemyCity'}
+            }
+        }
+
+    # ========================================================================
+    # Combat Action Tests
+    # ========================================================================
+
+    def test_combat_attack_valid(self):
+        """Valid attack action should pass validation"""
+        action = {
+            'type': 'unit_attack',
+            'unit_id': 123,
+            'target_x': 11,
+            'target_y': 16,
+            'player_id': 0
+        }
+        result = self.validator.validate_action(action, player_id=0, game_state=self.sample_game_state)
+        self.assertTrue(result.is_valid, f"Expected valid, got error: {result.error_message}")
+
+    def test_combat_attack_missing_target(self):
+        """Attack without target should fail"""
+        action = {
+            'type': 'unit_attack',
+            'unit_id': 123,
+            'player_id': 0
+        }
+        result = self.validator.validate_action(action, player_id=0, game_state=self.sample_game_state)
+        self.assertFalse(result.is_valid)
+        self.assertEqual(result.error_code, 'E235')
+
+    def test_combat_attack_boolean_coordinates_rejected(self):
+        """Attack with boolean coordinates should fail"""
+        action = {
+            'type': 'unit_attack',
+            'unit_id': 123,
+            'target_x': True,  # Boolean instead of int
+            'target_y': 16,
+            'player_id': 0
+        }
+        result = self.validator.validate_action(action, player_id=0, game_state=self.sample_game_state)
+        self.assertFalse(result.is_valid)
+        # Should be E221 (invalid type) from InputValidator
+
+    def test_combat_attack_coordinates_out_of_bounds(self):
+        """Attack with out-of-bounds coordinates should fail"""
+        action = {
+            'type': 'unit_attack',
+            'unit_id': 123,
+            'target_x': 300,  # Out of bounds
+            'target_y': 16,
+            'player_id': 0
+        }
+        result = self.validator.validate_action(action, player_id=0, game_state=self.sample_game_state)
+        self.assertFalse(result.is_valid)
+        self.assertEqual(result.error_code, 'E233')
+
+    def test_nuke_valid(self):
+        """Valid nuke action should pass validation"""
+        # Add nuke to capabilities
+        from action_validator import ActionType
+        self.validator.capabilities.append(ActionType.UNIT_NUKE)
+
+        action = {
+            'type': 'unit_nuke',
+            'unit_id': 123,
+            'target_x': 50,
+            'target_y': 50,
+            'player_id': 0
+        }
+        result = self.validator.validate_action(action, player_id=0, game_state=self.sample_game_state)
+        self.assertTrue(result.is_valid, f"Expected valid, got error: {result.error_message}")
+
+    def test_nuke_missing_target(self):
+        """Nuke without target coordinates should fail"""
+        from action_validator import ActionType
+        self.validator.capabilities.append(ActionType.UNIT_NUKE)
+
+        action = {
+            'type': 'unit_nuke',
+            'unit_id': 123,
+            'player_id': 0
+        }
+        result = self.validator.validate_action(action, player_id=0, game_state=self.sample_game_state)
+        self.assertFalse(result.is_valid)
+        self.assertEqual(result.error_code, 'E236')
+
+    # ========================================================================
+    # Diplomacy Action Tests
+    # ========================================================================
+
+    def test_diplomacy_message_valid(self):
+        """Valid diplomacy message should pass"""
+        action = {
+            'type': 'diplomacy_message',
+            'target_player_id': 1,
+            'message': 'Hello, would you like to trade?',
+            'player_id': 0
+        }
+        result = self.validator.validate_action(action, player_id=0, game_state=self.sample_game_state)
+        self.assertTrue(result.is_valid, f"Expected valid, got error: {result.error_message}")
+
+    def test_diplomacy_message_sql_injection_blocked(self):
+        """Diplomacy message with SQL injection should fail"""
+        action = {
+            'type': 'diplomacy_message',
+            'target_player_id': 1,
+            'message': "Hello' OR '1'='1",
+            'player_id': 0
+        }
+        result = self.validator.validate_action(action, player_id=0, game_state=self.sample_game_state)
+        self.assertFalse(result.is_valid)
+        # E223 from character allowlist (single quotes not allowed) or E265 from SQL injection detection
+        self.assertIn(result.error_code, ['E223', 'E265'])
+
+    def test_diplomacy_message_xss_blocked(self):
+        """Diplomacy message with XSS should fail"""
+        action = {
+            'type': 'diplomacy_message',
+            'target_player_id': 1,
+            'message': '<script>alert("xss")</script>',
+            'player_id': 0
+        }
+        result = self.validator.validate_action(action, player_id=0, game_state=self.sample_game_state)
+        self.assertFalse(result.is_valid)
+        # E223 from character allowlist (< and > not allowed) or E266 from XSS detection
+        self.assertIn(result.error_code, ['E223', 'E266'])
+
+    def test_diplomacy_self_target_blocked(self):
+        """Diplomacy action targeting self should fail"""
+        action = {
+            'type': 'diplomacy_declare_war',
+            'target_player_id': 0,  # Same as player_id
+            'player_id': 0
+        }
+        result = self.validator.validate_action(action, player_id=0, game_state=self.sample_game_state)
+        self.assertFalse(result.is_valid)
+        self.assertEqual(result.error_code, 'E261')
+
+    def test_diplomacy_missing_target(self):
+        """Diplomacy action without target_player_id should fail"""
+        action = {
+            'type': 'diplomacy_propose_peace',
+            'player_id': 0
+        }
+        result = self.validator.validate_action(action, player_id=0, game_state=self.sample_game_state)
+        self.assertFalse(result.is_valid)
+        self.assertEqual(result.error_code, 'E260')
+
+    def test_diplomacy_invalid_target_player(self):
+        """Diplomacy action with non-existent target player should fail"""
+        action = {
+            'type': 'diplomacy_propose_alliance',
+            'target_player_id': 999,  # Non-existent player
+            'player_id': 0
+        }
+        result = self.validator.validate_action(action, player_id=0, game_state=self.sample_game_state)
+        self.assertFalse(result.is_valid)
+        self.assertEqual(result.error_code, 'E262')
+
+    # ========================================================================
+    # Espionage Action Tests
+    # ========================================================================
+
+    def test_espionage_steal_tech_valid(self):
+        """Valid spy steal tech action should pass"""
+        action = {
+            'type': 'spy_steal_tech',
+            'unit_id': 789,  # Spy unit
+            'target_city_id': 200,
+            'player_id': 0
+        }
+        result = self.validator.validate_action(action, player_id=0, game_state=self.sample_game_state)
+        self.assertTrue(result.is_valid, f"Expected valid, got error: {result.error_message}")
+
+    def test_espionage_targeted_steal_tech_valid(self):
+        """Valid spy targeted steal tech action should pass"""
+        action = {
+            'type': 'spy_targeted_steal_tech',
+            'unit_id': 789,
+            'target_city_id': 200,
+            'sub_target': 'alphabet',  # Tech name
+            'player_id': 0
+        }
+        result = self.validator.validate_action(action, player_id=0, game_state=self.sample_game_state)
+        self.assertTrue(result.is_valid, f"Expected valid, got error: {result.error_message}")
+
+    def test_espionage_targeted_steal_tech_invalid_sub_target(self):
+        """Spy targeted steal tech with invalid sub_target should fail"""
+        action = {
+            'type': 'spy_targeted_steal_tech',
+            'unit_id': 789,
+            'target_city_id': 200,
+            'sub_target': '<script>evil()</script>',  # XSS attempt
+            'player_id': 0
+        }
+        result = self.validator.validate_action(action, player_id=0, game_state=self.sample_game_state)
+        self.assertFalse(result.is_valid)
+        # Should fail due to invalid characters in tech_name
+
+    def test_espionage_missing_target_city(self):
+        """Spy action without target_city_id should fail"""
+        action = {
+            'type': 'spy_sabotage_city',
+            'unit_id': 789,
+            'player_id': 0
+        }
+        result = self.validator.validate_action(action, player_id=0, game_state=self.sample_game_state)
+        self.assertFalse(result.is_valid)
+        self.assertEqual(result.error_code, 'E273')
+
+    def test_espionage_bribe_unit_valid(self):
+        """Valid spy bribe unit action should pass"""
+        action = {
+            'type': 'spy_bribe_unit',
+            'unit_id': 789,
+            'target_unit_id': 456,
+            'player_id': 0
+        }
+        result = self.validator.validate_action(action, player_id=0, game_state=self.sample_game_state)
+        self.assertTrue(result.is_valid, f"Expected valid, got error: {result.error_message}")
+
+    def test_espionage_bribe_unit_missing_target(self):
+        """Spy bribe unit without target_unit_id should fail"""
+        action = {
+            'type': 'spy_bribe_unit',
+            'unit_id': 789,
+            'player_id': 0
+        }
+        result = self.validator.validate_action(action, player_id=0, game_state=self.sample_game_state)
+        self.assertFalse(result.is_valid)
+        self.assertEqual(result.error_code, 'E275')
+
+    # ========================================================================
+    # Movement Action Tests
+    # ========================================================================
+
+    def test_paradrop_valid(self):
+        """Valid paradrop action should pass"""
+        action = {
+            'type': 'unit_paradrop',
+            'unit_id': 123,
+            'target_x': 50,
+            'target_y': 50,
+            'player_id': 0
+        }
+        result = self.validator.validate_action(action, player_id=0, game_state=self.sample_game_state)
+        self.assertTrue(result.is_valid, f"Expected valid, got error: {result.error_message}")
+
+    def test_paradrop_boolean_coordinate_rejected(self):
+        """Paradrop with boolean coordinate should fail"""
+        action = {
+            'type': 'unit_paradrop',
+            'unit_id': 123,
+            'target_x': False,  # Boolean instead of int
+            'target_y': 50,
+            'player_id': 0
+        }
+        result = self.validator.validate_action(action, player_id=0, game_state=self.sample_game_state)
+        self.assertFalse(result.is_valid)
+        # Should fail with E221 or E287
+
+    def test_teleport_valid(self):
+        """Valid teleport action should pass"""
+        action = {
+            'type': 'unit_teleport',
+            'unit_id': 123,
+            'target_x': 100,
+            'target_y': 100,
+            'player_id': 0
+        }
+        result = self.validator.validate_action(action, player_id=0, game_state=self.sample_game_state)
+        self.assertTrue(result.is_valid, f"Expected valid, got error: {result.error_message}")
+
+    def test_embark_valid(self):
+        """Valid embark action should pass"""
+        action = {
+            'type': 'unit_embark',
+            'unit_id': 123,
+            'transport_id': 456,
+            'player_id': 0
+        }
+        result = self.validator.validate_action(action, player_id=0, game_state=self.sample_game_state)
+        self.assertTrue(result.is_valid, f"Expected valid, got error: {result.error_message}")
+
+    def test_embark_missing_transport(self):
+        """Embark without transport_id should fail"""
+        action = {
+            'type': 'unit_embark',
+            'unit_id': 123,
+            'player_id': 0
+        }
+        result = self.validator.validate_action(action, player_id=0, game_state=self.sample_game_state)
+        self.assertFalse(result.is_valid)
+        self.assertEqual(result.error_code, 'E283')
+
+    # ========================================================================
+    # Trade Action Tests
+    # ========================================================================
+
+    def test_trade_route_valid(self):
+        """Valid trade route action should pass"""
+        action = {
+            'type': 'unit_trade_route',
+            'unit_id': 123,
+            'target_city_id': 200,
+            'player_id': 0
+        }
+        result = self.validator.validate_action(action, player_id=0, game_state=self.sample_game_state)
+        self.assertTrue(result.is_valid, f"Expected valid, got error: {result.error_message}")
+
+    def test_trade_route_missing_city(self):
+        """Trade route without target_city_id should fail"""
+        action = {
+            'type': 'unit_trade_route',
+            'unit_id': 123,
+            'player_id': 0
+        }
+        result = self.validator.validate_action(action, player_id=0, game_state=self.sample_game_state)
+        self.assertFalse(result.is_valid)
+        self.assertEqual(result.error_code, 'E313')
+
+
+class TestInputValidatorIntegration(unittest.TestCase):
+    """Test InputValidator integration in action validation"""
+
+    def setUp(self):
+        """Setup test fixtures"""
+        self.validator = LLMActionValidator()
+
+    def test_redos_protection_long_input(self):
+        """Very long input should be rejected before regex matching"""
+        # Create a message that exceeds MAX_INPUT_LENGTH_FOR_REGEX (now 2048)
+        long_message = 'A' * 3000
+
+        action = {
+            'type': 'diplomacy_message',
+            'target_player_id': 1,
+            'message': long_message,
+            'player_id': 0
+        }
+
+        game_state = {
+            'players': {'0': {'id': 0}, '1': {'id': 1}}
+        }
+
+        result = self.validator.validate_action(action, player_id=0, game_state=game_state)
+        # Should fail due to message too long (E224)
+        self.assertFalse(result.is_valid)
+
+    def test_sql_comment_injection_blocked(self):
+        """SQL comment injection should be blocked"""
+        action = {
+            'type': 'diplomacy_message',
+            'target_player_id': 1,
+            'message': "Hello'-- DROP TABLE users",
+            'player_id': 0
+        }
+
+        game_state = {
+            'players': {'0': {'id': 0}, '1': {'id': 1}}
+        }
+
+        result = self.validator.validate_action(action, player_id=0, game_state=game_state)
+        self.assertFalse(result.is_valid)
+        self.assertEqual(result.error_code, 'E265')
+
+
 if __name__ == '__main__':
     unittest.main()

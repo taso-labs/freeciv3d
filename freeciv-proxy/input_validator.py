@@ -43,7 +43,8 @@ class InputValidationError(Exception):
 
 # Maximum input length for ReDoS protection
 # Any string longer than this is rejected before regex matching
-MAX_INPUT_LENGTH_FOR_REGEX = 10000
+# 2KB is sufficient for game-related text while limiting attack surface
+MAX_INPUT_LENGTH_FOR_REGEX = 2048
 
 
 class InputValidator:
