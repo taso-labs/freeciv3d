@@ -294,6 +294,12 @@ class TestSQLInjectionDetection:
         assert result.is_valid is False
         assert result.error_code == "E223"
 
+    def test_or_string_equals_string(self, validator):
+        """String comparison SQL injection (' OR 'a'='a') should be detected"""
+        result = validator.detect_sql_injection("admin' OR 'a'='a'--")
+        assert result.is_valid is False
+        assert result.error_code == "E223"
+
     def test_and_1_equals_1(self, validator):
         """AND 1=1 pattern should be detected"""
         result = validator.detect_sql_injection("admin' AND 1=1--")

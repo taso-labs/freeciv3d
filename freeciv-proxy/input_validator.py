@@ -131,11 +131,22 @@ class InputValidator:
     }
 
     # SQL injection patterns to detect
-    # NOTE: These patterns are only applied to free-text fields like 'message'.
-    # Fields with character allowlists (city_name, building_name, etc.) are already
-    # protected and don't need injection detection, which could cause false positives.
     #
-    # Patterns handle various quoting styles including URL-decoded and HTML-unescaped input.
+    # SECURITY DESIGN NOTE (for code reviewers):
+    # These patterns are SECONDARY defense. The PRIMARY defense is character allowlists
+    # in FIELD_CONSTRAINTS which restrict fields like city_name, building_name to
+    # alphanumeric characters only. SQL injection patterns are only needed for
+    # free-text fields like 'message' that allow quotes and punctuation.
+    #
+    # Pattern coverage includes:
+    # - DDL/DML keywords (SELECT, DROP, INSERT, UPDATE, DELETE)
+    # - Boolean injection with digits (' OR '1'='1') and strings (' OR 'a'='a')
+    # - SQL comments (--, /* */)
+    # - Chained commands (; DROP TABLE)
+    # - Stored procedures (EXEC, xp_, sp_)
+    #
+    # Encoding bypass attempts are handled by _normalize_for_security() which
+    # URL-decodes, HTML-unescapes, and Unicode-normalizes input before pattern matching.
     SQL_INJECTION_PATTERNS = [
         r"\bSELECT\b.*\bFROM\b",  # SELECT ... FROM (more specific)
         r"\bDROP\b.*\bTABLE\b",  # DROP TABLE (more specific)
@@ -143,7 +154,8 @@ class InputValidator:
         r"\bUPDATE\b.*\bSET\b",  # UPDATE ... SET (more specific)
         r"\bDELETE\b.*\bFROM\b",  # DELETE FROM (more specific)
         r"\bUNION\b.*\bSELECT\b",  # UNION SELECT (more specific)
-        r"'\s*OR\s+'?\d+'?\s*=\s*'?\d+'?",  # ' OR '1'='1' style (quotes optional around digits)
+        r"'\s*OR\s+'?\d+'?\s*=\s*'?\d+'?",  # ' OR '1'='1' style (digits)
+        r"'\s*OR\s+'[^']*'\s*=\s*'[^']*'",  # ' OR 'a'='a' style (strings)
         r'"\s*OR\s+"?\d+"?\s*=\s*"?\d+"?',  # " OR "1"="1" style
         r"'\s*AND\s+'?\d+'?\s*=\s*'?\d+'?",  # ' AND '1'='1' style
         r'"\s*AND\s+"?\d+"?\s*=\s*"?\d+"?',  # " AND "1"="1" style

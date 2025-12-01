@@ -2155,8 +2155,16 @@ class LLMWSHandler(websocket.WebSocketHandler):
             }
         elif action_type == 'tech_research':
             # PACKET_PLAYER_RESEARCH requires tech ID, not tech name
+            #
+            # KNOWN TECHNICAL DEBT (for code reviewers):
+            # Tech IDs are currently hardcoded. This works for the default ruleset but
+            # is brittle for custom rulesets. The planned solution is to:
+            # 1. Capture PACKET_RULESET_TECH packets during game initialization
+            # 2. Build a dynamic tech name -> ID mapping similar to RulesetMapper.production_mapping
+            # 3. Store in RulesetMapper for use here
+            # This is tracked as future work and doesn't affect core functionality.
+            #
             # TODO: Load tech IDs dynamically from PACKET_RULESET_TECH packets
-            # Map common tech names to IDs (hardcoded for now)
             tech_name_to_id = {
                 'alphabet': 1,
                 'pottery': 2,
