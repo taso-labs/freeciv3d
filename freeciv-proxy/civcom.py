@@ -23,50 +23,25 @@ import os
 from tornado import ioloop
 
 # Import packet ID constants for type-safe packet handling
-# Gracefully handle missing packet_constants module for backward compatibility
-try:
-    from packet_constants import (
-        PACKET_CONN_INFO,
-        PACKET_PLAYER_INFO,
-        PACKET_MAP_INFO,
-        PACKET_GAME_INFO,
-        PACKET_UNIT_INFO,
-        PACKET_UNIT_REMOVE,
-        PACKET_UNIT_SHORT_INFO,
-        PACKET_CITY_INFO,
-        PACKET_TILE_INFO,
-        PACKET_CHAT_MSG,
-        PACKET_RULESET_NATION,
-        PACKET_RULESET_UNIT,
-        PACKET_RULESET_BUILDING,
-        PACKET_RULESET_TECH,
-        PACKET_CONN_PING,
-        PACKET_CONN_PONG,
-        get_packet_name
-    )
-    PACKET_CONSTANTS_AVAILABLE = True
-    logging.getLogger("freeciv-proxy").info("packet_constants module loaded successfully - LLM state parsing enabled")
-except ImportError as e:
-    logging.getLogger("freeciv-proxy").warning(f"packet_constants not available: {e}. Falling back to simple packet forwarding (working commit behavior).")
-    PACKET_CONSTANTS_AVAILABLE = False
-    # Define dummy constants to prevent NameError when packet_constants unavailable
-    PACKET_CONN_INFO = -1
-    PACKET_PLAYER_INFO = -1
-    PACKET_MAP_INFO = -1
-    PACKET_GAME_INFO = -1
-    PACKET_UNIT_INFO = -1
-    PACKET_UNIT_REMOVE = -1
-    PACKET_UNIT_SHORT_INFO = -1
-    PACKET_CITY_INFO = -1
-    PACKET_TILE_INFO = -1
-    PACKET_CHAT_MSG = -1
-    PACKET_RULESET_NATION = -1
-    PACKET_RULESET_UNIT = -1
-    PACKET_RULESET_BUILDING = -1
-    PACKET_RULESET_TECH = -1
-    PACKET_CONN_PING = -1
-    PACKET_CONN_PONG = -1
-    def get_packet_name(pid): return f"packet_{pid}"
+from packet_constants import (
+    PACKET_CONN_INFO,
+    PACKET_PLAYER_INFO,
+    PACKET_MAP_INFO,
+    PACKET_GAME_INFO,
+    PACKET_UNIT_INFO,
+    PACKET_UNIT_REMOVE,
+    PACKET_UNIT_SHORT_INFO,
+    PACKET_CITY_INFO,
+    PACKET_TILE_INFO,
+    PACKET_CHAT_MSG,
+    PACKET_RULESET_NATION,
+    PACKET_RULESET_UNIT,
+    PACKET_RULESET_BUILDING,
+    PACKET_RULESET_TECH,
+    PACKET_CONN_PING,
+    PACKET_CONN_PONG,
+    get_packet_name
+)
 
 HOST = '127.0.0.1'
 logger = logging.getLogger("freeciv-proxy")
@@ -289,29 +264,28 @@ class CivCom(Thread):
                     if (len(self.net_buf) == self.packet_size and self.net_buf[-1] == 0):
                         # valid packet received from freeciv server
                         # Parse and store game state ONLY if packet_constants module is available
-                        if PACKET_CONSTANTS_AVAILABLE:
-                            try:
-                                packet_str = self.net_buf[:-1].decode('utf-8')
-                                self.parse_and_store_packet(packet_str)
+                        try:
+                            packet_str = self.net_buf[:-1].decode('utf-8')
+                            self.parse_and_store_packet(packet_str)
 
-                                # Log important packet types
-                                try:
-                                    packet_json = json.loads(packet_str)
-                                    pid = packet_json.get('pid')
-                                    if pid == PACKET_UNIT_INFO:
-                                        logger.info(f"✓ Received PACKET_UNIT_INFO (pid={pid}) for {self.username}")
-                                    elif pid == PACKET_CITY_INFO:
-                                        logger.info(f"✓ Received PACKET_CITY_INFO (pid={pid}) for {self.username}")
-                                    elif pid == PACKET_GAME_INFO:
-                                        logger.debug(f"Received PACKET_GAME_INFO for {self.username}")
-                                    elif pid == PACKET_CHAT_MSG:
-                                        # Log chat messages to capture server command responses
-                                        msg_text = packet_json.get('message', '')
-                                        logger.info(f"Chat message for {self.username}: {msg_text}")
-                                except:
-                                    pass  # Not JSON or parsing failed, ignore
-                            except Exception as e:
-                                logger.warning(f"⚠ Error parsing packet for state storage: {e}", exc_info=True)
+                            # Log important packet types
+                            try:
+                                packet_json = json.loads(packet_str)
+                                pid = packet_json.get('pid')
+                                if pid == PACKET_UNIT_INFO:
+                                    logger.info(f"✓ Received PACKET_UNIT_INFO (pid={pid}) for {self.username}")
+                                elif pid == PACKET_CITY_INFO:
+                                    logger.info(f"✓ Received PACKET_CITY_INFO (pid={pid}) for {self.username}")
+                                elif pid == PACKET_GAME_INFO:
+                                    logger.debug(f"Received PACKET_GAME_INFO for {self.username}")
+                                elif pid == PACKET_CHAT_MSG:
+                                    # Log chat messages to capture server command responses
+                                    msg_text = packet_json.get('message', '')
+                                    logger.info(f"Chat message for {self.username}: {msg_text}")
+                            except:
+                                pass  # Not JSON or parsing failed, ignore
+                        except Exception as e:
+                            logger.warning(f"⚠ Error parsing packet for state storage: {e}", exc_info=True)
 
                         # ALWAYS forward packet to client (even if parsing disabled/failed)
                         self.send_buffer_append(self.net_buf[:-1])
@@ -565,10 +539,6 @@ class CivCom(Thread):
 
     def parse_and_store_packet(self, packet_json):
         """Parse incoming packets and store relevant game state"""
-        # Early return if packet_constants not available (should not happen if called correctly, but safety check)
-        if not PACKET_CONSTANTS_AVAILABLE:
-            return
-
         try:
             packet = json.loads(packet_json)
             packet_type = packet.get('pid')
