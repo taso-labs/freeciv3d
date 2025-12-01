@@ -15,7 +15,7 @@ import os
 import gzip
 import math
 import threading
-from typing import Dict, Any, Optional, OrderedDict
+from typing import Dict, Any, Optional
 from dataclasses import dataclass
 from collections import OrderedDict
 

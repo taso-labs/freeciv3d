@@ -72,81 +72,83 @@ class InputValidator:
 
     # Field validation constraints
     FIELD_CONSTRAINTS = {
-        'city_name': {
-            'max_length': 50,
-            'pattern': r'^[a-zA-Z0-9 _-]+$',
-            'description': 'City names must be alphanumeric with spaces, underscores, hyphens'
+        "city_name": {
+            "max_length": 50,
+            "pattern": r"^[a-zA-Z0-9 _\-]+$",
+            "description": "City names must be alphanumeric with spaces, underscores, hyphens",
         },
-        'building_name': {
-            'max_length': 30,
-            'pattern': r'^[a-zA-Z0-9_ ]+$',
-            'description': 'Building names must be alphanumeric with spaces, underscores'
+        "building_name": {
+            "max_length": 30,
+            "pattern": r"^[a-zA-Z0-9_ ]+$",
+            "description": "Building names must be alphanumeric with spaces, underscores",
         },
-        'tech_name': {
-            'max_length': 50,
-            'pattern': r'^[a-zA-Z0-9_ ]+$',
-            'description': 'Tech names must be alphanumeric with spaces, underscores'
+        "tech_name": {
+            "max_length": 50,
+            "pattern": r"^[a-zA-Z0-9_ ]+$",
+            "description": "Tech names must be alphanumeric with spaces, underscores",
         },
-        'message': {
-            'max_length': 256,
-            'pattern': r'^[a-zA-Z0-9 .,!?\'"()\-]*$',
-            'description': 'Messages may contain alphanumeric and basic punctuation'
+        "message": {
+            "max_length": 256,
+            "pattern": r'^[a-zA-Z0-9 .,!?\'"()\-]*$',
+            "description": "Messages may contain alphanumeric and basic punctuation",
         },
-        'agent_id': {
-            'max_length': 50,
-            'pattern': r'^[a-zA-Z0-9_-]+$',
-            'description': 'Agent IDs must be alphanumeric with underscores, hyphens'
+        "agent_id": {
+            "max_length": 50,
+            "pattern": r"^[a-zA-Z0-9_\-]+$",
+            "description": "Agent IDs must be alphanumeric with underscores, hyphens",
         },
-        'unit_name': {
-            'max_length': 50,
-            'pattern': r'^[a-zA-Z0-9_ ]+$',
-            'description': 'Unit names must be alphanumeric with spaces, underscores'
+        "unit_name": {
+            "max_length": 50,
+            "pattern": r"^[a-zA-Z0-9_ ]+$",
+            "description": "Unit names must be alphanumeric with spaces, underscores",
         },
-        'improvement_name': {
-            'max_length': 30,
-            'pattern': r'^[a-zA-Z0-9_ ]+$',
-            'description': 'Improvement names must be alphanumeric with spaces, underscores'
+        "improvement_name": {
+            "max_length": 30,
+            "pattern": r"^[a-zA-Z0-9_ ]+$",
+            "description": "Improvement names must be alphanumeric with spaces, underscores",
         },
-        'nation_name': {
-            'max_length': 50,
-            'pattern': r'^[a-zA-Z0-9_ ]+$',
-            'description': 'Nation names must be alphanumeric with spaces, underscores'
+        "nation_name": {
+            "max_length": 50,
+            "pattern": r"^[a-zA-Z0-9_ ]+$",
+            "description": "Nation names must be alphanumeric with spaces, underscores",
         },
     }
 
     # SQL injection patterns to detect
+    # NOTE: These patterns are only applied to free-text fields like 'message'.
+    # Fields with character allowlists (city_name, building_name, etc.) are already
+    # protected and don't need injection detection, which could cause false positives.
     SQL_INJECTION_PATTERNS = [
-        r'\bSELECT\b',
-        r'\bDROP\b',
-        r'\bINSERT\b',
-        r'\bUPDATE\b',
-        r'\bDELETE\b',
-        r'\bUNION\b',
-        r'\bOR\s+1\s*=\s*1\b',
-        r'\bAND\s+1\s*=\s*1\b',
-        r'--',
-        r'/\*',
-        r'\*/',
-        r"'\s*OR\s*'",
-        r';\s*(DROP|SELECT|INSERT|UPDATE|DELETE)',
-        r'\bEXEC\b',
-        r'\bEXECUTE\b',
-        r'\bxp_',
-        r'\bsp_',
+        r"\bSELECT\b.*\bFROM\b",  # SELECT ... FROM (more specific)
+        r"\bDROP\b.*\bTABLE\b",  # DROP TABLE (more specific)
+        r"\bINSERT\b.*\bINTO\b",  # INSERT INTO (more specific)
+        r"\bUPDATE\b.*\bSET\b",  # UPDATE ... SET (more specific)
+        r"\bDELETE\b.*\bFROM\b",  # DELETE FROM (more specific)
+        r"\bUNION\b.*\bSELECT\b",  # UNION SELECT (more specific)
+        r"'\s*OR\s+'?\d+\s*=\s*'?\d+",  # ' OR '1'='1' style
+        r'"\s*OR\s+"?\d+\s*=\s*"?\d+',  # " OR "1"="1" style
+        r"'\s*AND\s+'?\d+\s*=\s*'?\d+",  # ' AND '1'='1' style
+        r'"\s*AND\s+"?\d+\s*=\s*"?\d+',  # " AND "1"="1" style
+        r"'--",  # SQL comment after quote (injection attempt)
+        r"/\*.*\*/",  # Block comment (injection attempt)
+        r";\s*(DROP|SELECT|INSERT|UPDATE|DELETE)\b",  # Chained SQL commands
+        r"\bEXEC(UTE)?\s+\w+",  # EXEC/EXECUTE procedure
+        r"\bxp_\w+",  # Extended stored procedures
+        r"\bsp_\w+",  # System stored procedures
     ]
 
     # XSS patterns to detect and strip
     XSS_PATTERNS = [
-        r'<script\b[^>]*>',
-        r'</script>',
-        r'javascript:',
-        r'on\w+\s*=',  # onclick=, onerror=, etc.
-        r'<iframe\b',
-        r'<object\b',
-        r'<embed\b',
-        r'<svg\b[^>]*onload',
-        r'<img\b[^>]*onerror',
-        r'expression\s*\(',
+        r"<script\b[^>]*>",
+        r"</script>",
+        r"javascript:",
+        r"on\w+\s*=",  # onclick=, onerror=, etc.
+        r"<iframe\b",
+        r"<object\b",
+        r"<embed\b",
+        r"<svg\b[^>]*onload",
+        r"<img\b[^>]*onerror",
+        r"expression\s*\(",
         r'url\s*\(\s*["\']?\s*data:',
     ]
 
@@ -159,8 +161,14 @@ class InputValidator:
 
     def __init__(self):
         # Compile regex patterns for performance
-        self._sql_patterns = [re.compile(p, re.IGNORECASE) for p in self.SQL_INJECTION_PATTERNS]
-        self._xss_patterns = [re.compile(p, re.IGNORECASE) for p in self.XSS_PATTERNS]
+        # Combine SQL patterns into single regex for O(1) matching instead of O(n)
+        self._sql_combined_pattern = re.compile(
+            "|".join(f"({p})" for p in self.SQL_INJECTION_PATTERNS), re.IGNORECASE
+        )
+        # Combine XSS patterns into single regex for O(1) matching
+        self._xss_combined_pattern = re.compile(
+            "|".join(f"({p})" for p in self.XSS_PATTERNS), re.IGNORECASE
+        )
 
         # Statistics
         self._stats = {
@@ -207,21 +215,21 @@ class InputValidator:
         # Length check
         max_length = constraints.get('max_length', 1000)
         if len(value) > max_length:
-            self._stats['failures'] += 1
+            self._stats["failures"] += 1
             return ValidationResult(
                 is_valid=False,
                 error_code=self.E224_STRING_TOO_LONG,
-                error_message=f"Field {field_type} exceeds max length: {len(value)} > {max_length}"
+                error_message=f"Field {field_type} exceeds max length: {len(value)} > {max_length}",
             )
 
         # Pattern check
-        pattern = constraints.get('pattern')
+        pattern = constraints.get("pattern")
         if pattern and not re.match(pattern, value):
-            self._stats['failures'] += 1
+            self._stats["failures"] += 1
             return ValidationResult(
                 is_valid=False,
                 error_code=self.E223_INVALID_CHARS,
-                error_message=f"Field {field_type} contains invalid characters. {constraints.get('description', '')}"
+                error_message=f"Field {field_type} contains invalid characters. {constraints.get('description', '')}",
             )
 
         return ValidationResult(is_valid=True)
@@ -294,15 +302,16 @@ class InputValidator:
                 error_message=f"Input too long for security scanning: {len(value)} > {MAX_INPUT_LENGTH_FOR_REGEX}"
             )
 
-        for pattern in self._sql_patterns:
-            if pattern.search(value):
-                self._stats['sql_injections_blocked'] += 1
-                logger.warning(f"SQL injection attempt blocked: {pattern.pattern}")
-                return ValidationResult(
-                    is_valid=False,
-                    error_code=self.E223_INVALID_CHARS,
-                    error_message=f"Potential SQL injection detected: {pattern.pattern}"
-                )
+        match = self._sql_combined_pattern.search(value)
+        if match:
+            self._stats['sql_injections_blocked'] += 1
+            matched_pattern = match.group(0)
+            logger.warning(f"SQL injection attempt blocked: {matched_pattern}")
+            return ValidationResult(
+                is_valid=False,
+                error_code=self.E223_INVALID_CHARS,
+                error_message=f"Potential SQL injection detected"
+            )
 
         return ValidationResult(is_valid=True)
 
@@ -325,15 +334,16 @@ class InputValidator:
                 error_message=f"Input too long for security scanning: {len(value)} > {MAX_INPUT_LENGTH_FOR_REGEX}"
             )
 
-        for pattern in self._xss_patterns:
-            if pattern.search(value):
-                self._stats["xss_blocked"] += 1
-                logger.warning(f"XSS attempt blocked: {pattern.pattern}")
-                return ValidationResult(
-                    is_valid=False,
-                    error_code=self.E223_INVALID_CHARS,
-                    error_message=f"Potential XSS detected: {pattern.pattern}",
-                )
+        match = self._xss_combined_pattern.search(value)
+        if match:
+            self._stats["xss_blocked"] += 1
+            matched_pattern = match.group(0)
+            logger.warning(f"XSS attempt blocked: {matched_pattern}")
+            return ValidationResult(
+                is_valid=False,
+                error_code=self.E223_INVALID_CHARS,
+                error_message=f"Potential XSS detected",
+            )
 
         return ValidationResult(is_valid=True)
 

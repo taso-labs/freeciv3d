@@ -5,22 +5,32 @@
 Action validation system for LLM agents in FreeCiv proxy
 Validates actions before forwarding to the C server
 
-## Error Code Scheme
+## Error Code Scheme (Protocol v2.0.1)
 
-Error codes are organized by action type for easy identification:
+Error codes are organized by category for easy identification:
 
+### Input Validation (E220-E224, E251)
+- **E220**: Missing required field
+- **E221**: Invalid field type
+- **E222**: Value out of range
+- **E223**: Invalid characters (includes injection detection)
+- **E224**: String too long
+- **E251**: Invalid coordinate
+
+### Action Validation (E001-E005, E0xx for specific actions)
 - **E001-E005**: General validation errors (structure, type, auth)
-- **E010-E014**: unit_move validation errors
-- **E020-E023**: unit_build_city validation errors
-- **E030-E033**: city_production validation errors
-- **E040-E041**: tech_research validation errors
 - **E050-E052**: unit_fortify validation errors
 - **E060-E062**: unit_sentry validation errors
 - **E070-E072**: unit_build_road validation errors
 - **E080-E082**: unit_build_irrigation validation errors
 - **E090-E092**: unit_build_mine validation errors
 
-This grouping makes it easy to identify which action failed from the error code.
+### Category-Based Validation (E2xx-E3xx)
+- **E230-E240**: Combat action errors
+- **E260-E276**: Diplomacy/espionage errors
+- **E280-E288**: Movement/transport errors
+- **E290-E297**: Terrain/unit status errors
+- **E310-E323**: Trade/city management errors
 """
 
 import logging
@@ -864,8 +874,8 @@ class LLMActionValidator:
             if 'message' not in action:
                 return self._validation_error('E263', 'diplomacy_message requires message field')
             message = action['message']
-            if not isinstance(message, str) or len(message) > 500:
-                return self._validation_error('E264', 'Message must be a string of at most 500 characters')
+            if not isinstance(message, str) or len(message) > 256:
+                return self._validation_error('E264', 'Message must be a string of at most 256 characters')
 
         return ValidationResult(True)
 
