@@ -2155,45 +2155,32 @@ class LLMWSHandler(websocket.WebSocketHandler):
             }
         elif action_type == 'tech_research':
             # PACKET_PLAYER_RESEARCH requires tech ID, not tech name
-            #
-            # KNOWN TECHNICAL DEBT (for code reviewers):
-            # Tech IDs are currently hardcoded. This works for the default ruleset but
-            # is brittle for custom rulesets. The planned solution is to:
-            # 1. Capture PACKET_RULESET_TECH packets during game initialization
-            # 2. Build a dynamic tech name -> ID mapping similar to RulesetMapper.production_mapping
-            # 3. Store in RulesetMapper for use here
-            # This is tracked as future work and doesn't affect core functionality.
-            #
-            # TODO: Load tech IDs dynamically from PACKET_RULESET_TECH packets
-            tech_name_to_id = {
-                'alphabet': 1,
-                'pottery': 2,
-                'bronze working': 3,
-                'animal husbandry': 4,
-                'agriculture': 5,
-                'writing': 6,
-                'code of laws': 7,
-                'mysticism': 8,
-                'ceremonial burial': 9,
-                'masonry': 10,
-                'the wheel': 11,
-                'warrior code': 12,
-                'iron working': 13,
-                'horseback riding': 14,
-                'map making': 15
-            }
-            tech_name_lower = action['tech_name'].lower()
-            tech_id = tech_name_to_id.get(tech_name_lower)
+            # Use RulesetMapper to dynamically map tech names to IDs from PACKET_RULESET_TECH
+            # This supports all rulesets, not just the default one
+
+            tech_name = action.get('tech_name', '')
+            if not tech_name:
+                raise ValueError("tech_research requires 'tech_name' field")
+
+            # Create mapper on first use (cache per handler instance to avoid recreating)
+            # Mapper reads from civcom.techs which is populated from PACKET_RULESET_TECH packets
+            if not hasattr(self, '_ruleset_mapper'):
+                self._ruleset_mapper = RulesetMapper(self.civcom)
+
+            # Map tech name to ID using dynamic mapping from ruleset packets
+            tech_id = self._ruleset_mapper.get_tech_id(tech_name)
 
             if tech_id is None:
-                # Unknown tech name - this indicates validator/converter mismatch
-                available_techs = sorted(tech_name_to_id.keys())
+                # Unknown tech name - provide helpful error with available options
+                available_techs = self._ruleset_mapper.get_available_techs()
                 error_msg = (
-                    f"Unknown technology '{action['tech_name']}' cannot be mapped to FreeCiv tech ID. "
-                    f"Available techs: {', '.join(available_techs[:10])}..."
+                    f"Unknown technology '{tech_name}' cannot be mapped to FreeCiv tech ID. "
+                    f"Available techs: {', '.join(available_techs[:15])}..."
                 )
                 logger.error(f"Tech mapping error: {error_msg}")
                 raise ValueError(error_msg)
+
+            logger.info(f"Research: '{tech_name}' -> tech_id {tech_id}")
 
             return {
                 'pid': 55,  # PACKET_PLAYER_RESEARCH

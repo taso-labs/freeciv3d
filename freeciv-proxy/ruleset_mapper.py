@@ -1,21 +1,25 @@
 #!/usr/bin/env python3
 """
-Ruleset Mapper - Maps production names to FreeCiv IDs
+Ruleset Mapper - Maps production and tech names to FreeCiv IDs
 
-This module provides functionality to map human-readable production names
-(e.g., "Warriors", "Barracks") to FreeCiv's internal (kind, value) tuples
-required by PACKET_CITY_CHANGE.
+This module provides functionality to map human-readable names
+(e.g., "Warriors", "Barracks", "Alphabet") to FreeCiv's internal IDs
+required by various packets:
+- PACKET_CITY_CHANGE (pid=35) for production
+- PACKET_PLAYER_RESEARCH (pid=55) for technology
 
 Reads RULESET packets stored in civcom.py during game initialization:
 - Unit types (PACKET_RULESET_UNIT, pid=140) → civcom.unit_types
 - Buildings (PACKET_RULESET_BUILDING, pid=150) → civcom.improvements
+- Technologies (PACKET_RULESET_TECH, pid=144) → civcom.techs
 
 Mirrors FreeCiv web client architecture where RULESET packets are stored
 directly in connection objects, ensuring compatibility with all rulesets.
 """
 
 import logging
-from typing import Optional, Dict, Tuple, TYPE_CHECKING
+import re
+from typing import Optional, Dict, Tuple, List, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from civcom import CivCom
@@ -30,15 +34,18 @@ VUT_UTYPE = 6        # Units (Warriors, Settlers, Phalanx, etc.)
 
 class RulesetMapper:
     """
-    Maps production names to (kind, value) tuples for PACKET_CITY_CHANGE.
+    Maps production and tech names to FreeCiv IDs.
 
     This class reads RULESET packets from civcom and builds case-insensitive
-    name→ID mappings for both units and buildings.
+    name→ID mappings for units, buildings, and technologies.
 
     Example:
         mapper = RulesetMapper(civcom)
         kind, value = mapper.map_production_to_kind_value("Warriors")
         # Returns: (6, 3)  where 6=VUT_UTYPE, 3=Warriors unit_type_id
+        
+        tech_id = mapper.get_tech_id("Bronze Working")
+        # Returns: 3  (tech ID for Bronze Working)
     """
 
     def __init__(self, civcom: 'CivCom'):
@@ -46,20 +53,21 @@ class RulesetMapper:
         Initialize mapper for a specific civcom connection.
 
         Args:
-            civcom: CivCom instance containing RULESET packets in unit_types and improvements
+            civcom: CivCom instance containing RULESET packets in unit_types, improvements, techs
         """
         self.civcom = civcom
         self.unit_types: Dict[str, int] = {}      # {name_lower: unit_type_id}
         self.buildings: Dict[str, int] = {}       # {name_lower: building_id}
+        self.techs: Dict[str, int] = {}           # {normalized_name: tech_id}
         self._loaded = False
         self._load_mappings()
 
     def _load_mappings(self):
         """
-        Load unit and building mappings from civcom RULESET storage.
+        Load unit, building, and tech mappings from civcom RULESET storage.
 
-        Reads PACKET_RULESET_UNIT (140) and PACKET_RULESET_BUILDING (150)
-        packets stored in civcom.unit_types and civcom.improvements.
+        Reads PACKET_RULESET_UNIT (140), PACKET_RULESET_BUILDING (150), and
+        PACKET_RULESET_TECH (144) packets stored in civcom.
 
         This method is called automatically during __init__.
         """
@@ -93,9 +101,129 @@ class RulesetMapper:
             except (KeyError, TypeError, AttributeError) as e:
                 logger.debug(f"Skipping invalid building packet (id={building_id}): {e}")
 
+        # Build techs mapping from civcom.techs
+        # civcom.techs is {tech_id: {id, name, ...}}
+        if hasattr(self.civcom, 'techs'):
+            for tech_id, packet in self.civcom.techs.items():
+                try:
+                    name = packet.get('name', '')
+                    if name and tech_id is not None:
+                        # Normalize name for flexible lookup
+                        normalized = self._normalize_tech_name(name)
+                        self.techs[normalized] = tech_id
+                        logger.debug(f"Mapped tech: '{name}' -> tech_id {tech_id} (normalized: '{normalized}')")
+                except (KeyError, TypeError, AttributeError) as e:
+                    logger.debug(f"Skipping invalid tech packet (id={tech_id}): {e}")
+
         self._loaded = True
         logger.info(f"RulesetMapper initialized for {self.civcom.username}: "
-                   f"{len(self.unit_types)} unit types, {len(self.buildings)} buildings")
+                   f"{len(self.unit_types)} unit types, {len(self.buildings)} buildings, "
+                   f"{len(self.techs)} technologies")
+
+    @staticmethod
+    def _normalize_tech_name(name: str) -> str:
+        """
+        Normalize technology name for reliable lookup.
+
+        Handles various input formats LLMs might use:
+        - Case insensitivity: "Alphabet" == "alphabet" == "ALPHABET"
+        - Whitespace: " alphabet " -> "alphabet"
+        - Underscore/space equivalence: "bronze_working" == "bronze working"
+        - Multiple spaces: "bronze  working" -> "bronze working"
+        - Translation prefix: "?tech:Alphabet" -> "alphabet"
+
+        Args:
+            name: Raw technology name from user input or packet
+
+        Returns:
+            Normalized string suitable for dictionary lookup
+
+        Examples:
+            >>> RulesetMapper._normalize_tech_name("Bronze Working")
+            'bronze_working'
+            >>> RulesetMapper._normalize_tech_name("  ALPHABET  ")
+            'alphabet'
+            >>> RulesetMapper._normalize_tech_name("bronze_working")
+            'bronze_working'
+            >>> RulesetMapper._normalize_tech_name("?tech:The Wheel")
+            'the_wheel'
+        """
+        if not name:
+            return ''
+
+        # Strip ?tech: translation prefix (FreeCiv uses this for i18n)
+        if name.startswith('?tech:'):
+            name = name[6:]
+
+        # Lowercase and strip whitespace
+        normalized = name.lower().strip()
+
+        # Normalize whitespace: collapse multiple spaces to single space
+        normalized = re.sub(r'\s+', ' ', normalized)
+
+        # Convert spaces to underscores for canonical form
+        # This allows "bronze working" to match "bronze_working"
+        normalized = normalized.replace(' ', '_')
+
+        return normalized
+
+    def get_tech_id(self, tech_name: str) -> Optional[int]:
+        """
+        Map technology name to FreeCiv tech ID for PACKET_PLAYER_RESEARCH.
+
+        This method handles various input formats and returns the tech ID
+        needed for the research packet.
+
+        Args:
+            tech_name: Name of technology (case-insensitive, flexible whitespace)
+                      Examples: "Alphabet", "bronze working", "IRON_WORKING"
+
+        Returns:
+            int: Tech ID if found
+            None: If technology not found or mapper not loaded
+
+        Examples:
+            >>> mapper.get_tech_id("Alphabet")
+            1
+            >>> mapper.get_tech_id("bronze working")
+            3
+            >>> mapper.get_tech_id("UnknownTech")
+            None
+        """
+        if not self._loaded:
+            logger.warning("RulesetMapper not loaded. Cannot map tech names. "
+                          "Ensure RULESET packets have been received.")
+            return None
+
+        if not tech_name:
+            return None
+
+        normalized = self._normalize_tech_name(tech_name)
+        tech_id = self.techs.get(normalized)
+
+        if tech_id is not None:
+            logger.debug(f"Tech '{tech_name}' -> tech_id {tech_id} (normalized: '{normalized}')")
+        else:
+            logger.debug(f"Tech '{tech_name}' not found (normalized: '{normalized}'). "
+                        f"Available: {list(self.techs.keys())[:10]}...")
+
+        return tech_id
+
+    def get_available_techs(self) -> List[str]:
+        """
+        Get all available technology names for this game.
+
+        Useful for debugging, error messages, and validating research requests.
+
+        Returns:
+            list: Sorted list of normalized technology names
+
+        Example:
+            >>> available = mapper.get_available_techs()
+            >>> print(available[:5])
+            ['alphabet', 'animal_husbandry', 'bronze_working', 'ceremonial_burial', 'code_of_laws']
+        """
+        return sorted(self.techs.keys())
 
     def map_production_to_kind_value(self, production_name: str) -> Tuple[Optional[int], Optional[int]]:
         """

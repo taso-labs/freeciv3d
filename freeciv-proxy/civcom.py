@@ -39,6 +39,7 @@ try:
         PACKET_RULESET_NATION,
         PACKET_RULESET_UNIT,
         PACKET_RULESET_BUILDING,
+        PACKET_RULESET_TECH,
         PACKET_CONN_PING,
         PACKET_CONN_PONG,
         get_packet_name
@@ -62,6 +63,7 @@ except ImportError as e:
     PACKET_RULESET_NATION = -1
     PACKET_RULESET_UNIT = -1
     PACKET_RULESET_BUILDING = -1
+    PACKET_RULESET_TECH = -1
     PACKET_CONN_PING = -1
     PACKET_CONN_PONG = -1
     def get_packet_name(pid): return f"packet_{pid}"
@@ -789,6 +791,20 @@ class CivCom(Thread):
                 if building_id is not None and building_name:
                     self.improvements[building_id] = packet
                     logger.debug(f"Registered building: {building_name} (id={building_id})")
+
+            # RULESET tech packet - defines technologies (Alphabet, Bronze Working, etc.)
+            # Mirrors FreeCiv web client's techs[] storage pattern
+            # Used by RulesetMapper for tech name→ID mapping in PACKET_PLAYER_RESEARCH
+            elif packet_type == PACKET_RULESET_TECH:
+                tech_id = packet.get('id')
+                # Strip ?tech: translation prefix (e.g., "?tech:Alphabet" -> "Alphabet")
+                # This matches FreeCiv web client's handle_ruleset_tech() behavior
+                tech_name = packet.get('name', '').replace('?tech:', '')
+                if tech_id is not None and tech_name:
+                    self.techs[tech_id] = packet
+                    # Store normalized name in packet for easier lookup
+                    self.techs[tech_id]['name'] = tech_name
+                    logger.debug(f"Registered tech: {tech_name} (id={tech_id})")
 
             # CRITICAL: Connection ping packet - MUST respond with pong to keep connection alive
             # FreeCiv civserver sends PACKET_CONN_PING every ~2 minutes to verify connection health
