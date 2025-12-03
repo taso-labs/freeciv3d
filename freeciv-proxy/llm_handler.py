@@ -1269,7 +1269,8 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 response['correlation_id'] = correlation_id
             
             self.write_message(json.dumps(response))
-            logger.info(f"✓ UNIT_ACTIONS_QUERY SUCCESS for agent {self.agent_id}: {len(unit_ids)} units queried, {len(errors)} errors")
+            num_actions = sum(len(u['actions']) for u in units_results.values() if u['success'])
+            logger.info(f"✓ UNIT_ACTIONS_QUERY SUCCESS for agent {self.agent_id}: {len(unit_ids)} units queried, {len(errors)} errors, {num_actions} actions returned")
             
         except Exception as e:
             logger.error(f"❌ UNIT_ACTIONS_QUERY EXCEPTION for agent {self.agent_id}: {e}")
