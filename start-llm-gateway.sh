@@ -25,7 +25,7 @@ if [ ! -f "/tmp/llm-gateway-deps-installed" ]; then
 fi
 
 echo "Starting LLM Gateway on port ${LLM_GATEWAY_PORT}..."
-/home/docker/.local/bin/uvicorn main:app --host ${LLM_GATEWAY_HOST} --port ${LLM_GATEWAY_PORT} --log-level ${LOG_LEVEL,,} &
+/home/docker/.local/bin/uvicorn main:app --host ${LLM_GATEWAY_HOST} --port ${LLM_GATEWAY_PORT} --log-level ${LOG_LEVEL,,} --ws-max-size 104857600 &
 
 # Store the PID for later cleanup
 echo $! > /tmp/llm-gateway.pid

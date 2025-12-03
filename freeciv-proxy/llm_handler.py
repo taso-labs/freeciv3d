@@ -342,19 +342,18 @@ class LLMWSHandler(websocket.WebSocketHandler):
             # Allocate a multiplayer civserver port (6001-6009) for this game_id
             # First player: allocates new port (e.g., 6001)
             # Second player: reuses the same port (6001)
-            # Multiplayer servers use pubscript_multiplayer.serv with aifill=2 (AI*1, AI*2)
+            # Players are automatically assigned slots by civserver when they connect
             civserver_port = await game_session_manager.allocate_civserver_port(game_id)
             port_type = (
-                "MULTIPLAYER (6001-6009, aifill=2)" if 6001 <= civserver_port <= 6009
-                else "⚠️ SINGLEPLAYER (6000, aifill=12)" if civserver_port == 6000
+                "MULTIPLAYER (6001-6009)" if 6001 <= civserver_port <= 6009
+                else "⚠️ SINGLEPLAYER (6000)" if civserver_port == 6000
                 else "⚠️ UNKNOWN PORT"
             )
             logger.info(
                 f"🎮 Agent {self.agent_id} assigned to civserver:\n"
                 f"   Game ID: {game_id}\n"
                 f"   Civserver Port: {civserver_port}\n"
-                f"   Port Type: {port_type}\n"
-                f"   Expected AI slots: {'AI*1, AI*2' if 6001 <= civserver_port <= 6009 else 'AI*1 through AI*12' if civserver_port == 6000 else 'UNKNOWN'}"
+                f"   Port Type: {port_type}"
             )
 
             # Enable packet buffering IMMEDIATELY before connecting to civserver
@@ -406,12 +405,10 @@ class LLMWSHandler(websocket.WebSocketHandler):
                     f"   Game started: {game_session.game_started}"
                 )
 
-                # Use /take command to control AI player (proper FreeCiv protocol)
-                # This replaces self-assignment with server-validated player_id
-                # Step 1: Wait for PACKET_CONN_INFO from server (assigns observer status player_num=512)
+                # Wait for PACKET_CONN_INFO from server to get assigned player_id
                 logger.info(f"⏳ Waiting for PACKET_CONN_INFO for {self.agent_id}...")
                 waited = 0.0
-                max_wait = 5.0  # Increased from 3.0s to 5.0s - Player 2 was timing out at 3.35s
+                max_wait = 5.0
                 while (not hasattr(self.civcom, 'player_id') or self.civcom.player_id is None) and waited < max_wait:
                     await asyncio.sleep(0.2)
                     waited += 0.2
@@ -426,80 +423,23 @@ class LLMWSHandler(websocket.WebSocketHandler):
                     )
                     raise RuntimeError(f"Failed to receive PACKET_CONN_INFO - civserver not responding")
 
-                logger.info(f"✅ Received PACKET_CONN_INFO: {self.agent_id} → player_num={self.civcom.player_id}")
+                # Server automatically assigns player_id when we connect
+                self.player_id = self.civcom.player_id
+                logger.info(f"✅ Received player assignment: {self.agent_id} → player_id={self.player_id}")
 
-                # Step 2: Send /take command to control an AI player
-                # AI slots are AI*1, AI*2, ... created by aifill setting
-                # Use thread-safe allocation from GameSession to avoid race conditions
-                # where multiple players could get the same AI slot
-                ai_slot = game_session.allocate_ai_slot()
-
-                take_command = f"/take \"AI*{ai_slot}\""  # Quote the name to avoid ambiguity
-                logger.info(
-                    f"📤 Sending {take_command} for {self.agent_id}\n"
-                    f"   AI Slot: {ai_slot}\n"
-                    f"   Command: {take_command}\n"
-                    f"   Civserver Port: {game_session.civserver_port}"
-                )
-                self.civcom.queue_to_civserver(json.dumps({"pid": 26, "message": take_command}))
-                self.civcom.send_packets_to_civserver()
-
-                # Step 3: Wait for /take to complete and server to update player_id
-                # Server sends PACKET_CONN_INFO again with the new player_id after /take succeeds
-                # Increased initial wait from 1.5s to 2.5s for slower Docker environments
-                # and added retry logic to handle timing variations in AI player creation
-                logger.info(f"⏳ {self.agent_id}: Waiting for /take AI*{ai_slot} to complete...")
-                await asyncio.sleep(2.5)  # Initial wait for server to process /take
-
-                # Step 4: Verify /take succeeded with retry logic
-                # AI players may not be created immediately when civserver starts,
-                # especially for Player 2 in multiplayer games (aifill creates AI*1, AI*2 lazily)
-                max_retries = 3
-                take_succeeded = False
-
-                for attempt in range(max_retries):
-                    self.player_id = self.civcom.player_id
-
-                    if self.player_id is not None and self.player_id < 512:
-                        # /take succeeded - we now control an AI player
-                        take_succeeded = True
-                        logger.info(
-                            f"✅ /take AI*{ai_slot} succeeded on attempt {attempt + 1}/{max_retries}\n"
-                            f"   Agent: {self.agent_id}\n"
-                            f"   Player ID: {self.player_id}"
-                        )
-                        break
-
-                    if attempt < max_retries - 1:
-                        # Still observer (player_id >= 512 or None) - retry after delay
-                        current_id = self.player_id if self.player_id is not None else "None"
-                        logger.warning(
-                            f"⚠️ /take AI*{ai_slot} not complete yet (attempt {attempt + 1}/{max_retries})\n"
-                            f"   Current player_id: {current_id} (expected < 512)\n"
-                            f"   Retrying in 1.5s..."
-                        )
-                        await asyncio.sleep(1.5)
-                    else:
-                        # Final attempt failed
-                        logger.error(
-                            f"❌ /take AI*{ai_slot} failed after {max_retries} attempts for {self.agent_id}:\n"
-                            f"   Final player_id: {self.player_id}\n"
-                            f"   This usually means:\n"
-                            f"   - AI player AI*{ai_slot} doesn't exist (check aifill setting)\n"
-                            f"   - AI player is already taken by another agent\n"
-                            f"   - Civserver is not responding correctly"
-                        )
-
-                # Raise error if /take ultimately failed
-                if not take_succeeded:
-                    raise RuntimeError(
-                        f"/take AI*{ai_slot} failed - player_id={self.player_id} (expected < 512)"
+                # Verify we got a valid player slot (not observer)
+                if self.player_id >= 512:
+                    logger.error(
+                        f"❌ {self.agent_id}: Assigned observer slot (player_id={self.player_id})\n"
+                        f"   This means no player slots are available\n"
+                        f"   Game may already be full or not accepting new players"
                     )
+                    raise RuntimeError(f"No player slots available - got observer slot {self.player_id}")
 
                 self.session_info.player_id = self.player_id
-                logger.info(f"✅ {self.agent_id} successfully took AI*{ai_slot} → player_id={self.player_id}")
+                logger.info(f"✅ {self.agent_id} assigned player_id={self.player_id}")
 
-                # Step 5: Register player with game session using server-assigned player_id
+                # Register player with game session using server-assigned player_id
                 game_session.add_player(self.agent_id, self.player_id, self)
                 logger.info(f"Registered agent {self.agent_id} with game session {game_id} (server-assigned player_id={self.player_id})")
 

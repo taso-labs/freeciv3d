@@ -13,7 +13,7 @@ import os
 import random
 import time
 import uuid
-from typing import Dict, Any
+from typing import TYPE_CHECKING, Dict, Any
 import websockets
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -27,14 +27,24 @@ try:
 except ImportError:
     HAS_SLOWAPI = False
 
-from .config import settings, get_cors_origins, get_freeciv_proxy_url, validate_settings
-from .connection_manager import connection_manager
-from .request_manager import request_manager
-from .connection_state_manager import connection_state_manager, ConnectionStatus
-from .security.token_manager import secure_token_manager
-from .utils.safe_access import get_agent_game_id
-from .utils.constants import *
-from .validation import sanitize_for_logging
+if TYPE_CHECKING:
+    from .config import settings, get_cors_origins, get_freeciv_proxy_url, validate_settings
+    from .connection_manager import connection_manager
+    from .request_manager import request_manager
+    from .connection_state_manager import connection_state_manager, ConnectionStatus
+    from .security.token_manager import secure_token_manager
+    from .utils.safe_access import get_agent_game_id
+    from .utils.constants import *
+    from .validation import sanitize_for_logging
+else:
+    from config import settings, get_cors_origins, get_freeciv_proxy_url, validate_settings
+    from connection_manager import connection_manager
+    from request_manager import request_manager
+    from connection_state_manager import connection_state_manager, ConnectionStatus
+    from security.token_manager import secure_token_manager
+    from utils.safe_access import get_agent_game_id
+    from utils.constants import *
+    from validation import sanitize_for_logging
 
 # Configure logging
 import os
