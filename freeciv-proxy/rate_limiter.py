@@ -74,7 +74,7 @@ class RedisRateLimiter(RateLimiter):
     More accurate but requires Redis connection
     """
 
-    def __init__(self, redis_client=None, redis_config: Dict[str, Any] = None):
+    def __init__(self, redis_client=None, redis_config: dict[str, Any] | None = None):
         self.redis = redis_client
         self.redis_config = redis_config or {}
 
@@ -181,7 +181,7 @@ class DistributedRateLimiter:
     Main rate limiter that attempts Redis first, falls back to in-memory
     """
 
-    def __init__(self, redis_config: Dict[str, Any] = None):
+    def __init__(self, redis_config: dict[str, Any] | None = None):
         self.redis_limiter = RedisRateLimiter(redis_config=redis_config)
         self.memory_limiter = InMemoryRateLimiter()
 
@@ -193,7 +193,7 @@ class DistributedRateLimiter:
         }
 
     def check_limit(self, agent_id: str, operation: str = 'default',
-                   custom_limit: int = None, custom_window: int = None) -> bool:
+                   custom_limit: int | None = None, custom_window: int | None = None) -> bool:
         """
         Check if agent is within rate limits
 
