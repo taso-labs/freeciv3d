@@ -121,13 +121,7 @@ class TestActionValidator(unittest.TestCase):
 
     def setUp(self):
         """Set up action validation test fixtures"""
-        self.validator = LLMActionValidator([
-            ActionType.UNIT_MOVE,
-            ActionType.UNIT_FORTIFY,
-            ActionType.UNIT_BUILD_CITY,
-            ActionType.CITY_PRODUCTION,
-            ActionType.TECH_RESEARCH
-        ])
+        self.validator = LLMActionValidator()
         
         self.mock_game_state = {
             'turn': 15,
@@ -159,15 +153,16 @@ class TestActionValidator(unittest.TestCase):
         self.assertTrue(result.is_valid, f"Valid move should pass: {result.error_message}")
 
     def test_invalid_action_type_rejected(self):
-        """Test that actions not in capabilities are rejected"""
+        """Test that restricted actions not in default capabilities are rejected"""
         action = {
-            'type': 'diplomacy_declare_war',  # Not in our capabilities
+            'type': 'unit_nuke',  # Restricted action not in DEFAULT_CAPABILITIES
             'actor_id': 1,
-            'target_player': 2
+            'target_x': 10,
+            'target_y': 20
         }
         
         result = self.validator.validate_action(action, 1, self.mock_game_state)
-        self.assertFalse(result.is_valid, "Unauthorized action type should be rejected")
+        self.assertFalse(result.is_valid, "Restricted action type should be rejected")
         self.assertIsNotNone(result.error_code)
 
     def test_missing_required_fields_rejected(self):
@@ -369,7 +364,7 @@ class TestActionValidatorErrorCodes(unittest.TestCase):
     """Test that error codes match protocol specification"""
 
     def setUp(self):
-        self.validator = LLMActionValidator([ActionType.UNIT_MOVE])
+        self.validator = LLMActionValidator()
 
     def test_error_codes_are_formatted_correctly(self):
         """Test error codes follow E### format"""

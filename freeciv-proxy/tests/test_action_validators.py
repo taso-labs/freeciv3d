@@ -748,36 +748,6 @@ class TestCategoryValidators(unittest.TestCase):
         self.assertFalse(result.is_valid)
         self.assertEqual(result.error_code, 'E233')
 
-    def test_nuke_valid(self):
-        """Valid nuke action should pass validation"""
-        # Add nuke to capabilities
-        from action_validator import ActionType
-        self.validator.capabilities.append(ActionType.UNIT_NUKE)
-
-        action = {
-            'type': 'unit_nuke',
-            'unit_id': 123,
-            'target_x': 50,
-            'target_y': 50,
-            'player_id': 0
-        }
-        result = self.validator.validate_action(action, player_id=0, game_state=self.sample_game_state)
-        self.assertTrue(result.is_valid, f"Expected valid, got error: {result.error_message}")
-
-    def test_nuke_missing_target(self):
-        """Nuke without target coordinates should fail"""
-        from action_validator import ActionType
-        self.validator.capabilities.append(ActionType.UNIT_NUKE)
-
-        action = {
-            'type': 'unit_nuke',
-            'unit_id': 123,
-            'player_id': 0
-        }
-        result = self.validator.validate_action(action, player_id=0, game_state=self.sample_game_state)
-        self.assertFalse(result.is_valid)
-        self.assertEqual(result.error_code, 'E236')
-
     # ========================================================================
     # Diplomacy Action Tests
     # ========================================================================

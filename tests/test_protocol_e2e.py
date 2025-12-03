@@ -147,7 +147,6 @@ class TestConnectionFlow:
                 'type': 'llm_connect',
                 'agent_id': TEST_AGENT_ID + '_auth',
                 'api_token': TEST_API_TOKEN,
-                'capabilities': ['unit_move', 'city_production', 'tech_research'],
                 'port': TEST_PORT
             })
             
@@ -371,7 +370,6 @@ class TestActionExecution:
                 'type': 'llm_connect',
                 'agent_id': TEST_AGENT_ID + '_action',
                 'api_token': TEST_API_TOKEN,
-                'capabilities': ['unit_move'],
                 'port': TEST_PORT
             })
             

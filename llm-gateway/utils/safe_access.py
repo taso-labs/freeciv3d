@@ -362,7 +362,6 @@ def validate_agent_registration(agent_data: Dict[str, Any]) -> Dict[str, List[st
         "api_token": {"type": str, "required": True},
         "model": {"type": str, "required": True},
         "game_id": {"type": str, "required": True},
-        "capabilities": {"type": list, "required": False},
         "timeout": {"type": (int, float), "required": False}
     }
 

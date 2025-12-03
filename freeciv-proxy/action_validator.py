@@ -269,88 +269,7 @@ class LLMActionValidator:
     Implements capability-based permissions and game rule validation
     """
 
-    # Default capabilities for LLM agents - all standard actions
-    DEFAULT_CAPABILITIES = [
-        # Movement
-        ActionType.UNIT_MOVE,
-        ActionType.UNIT_EMBARK,
-        ActionType.UNIT_DISEMBARK,
-        ActionType.UNIT_BOARD,
-        ActionType.UNIT_DEBOARD,
-        ActionType.UNIT_LOAD,
-        ActionType.UNIT_UNLOAD,
-        ActionType.UNIT_AIRLIFT,
-        ActionType.UNIT_PARADROP,
-        ActionType.UNIT_TELEPORT,
-        # Combat
-        ActionType.UNIT_ATTACK,
-        ActionType.UNIT_BOMBARD,
-        ActionType.UNIT_CAPTURE,
-        ActionType.UNIT_CONQUER_CITY,
-        # City Foundation
-        ActionType.UNIT_FOUND_CITY,
-        ActionType.UNIT_BUILD_CITY,
-        ActionType.UNIT_JOIN_CITY,
-        ActionType.UNIT_HOME_CITY,
-        # Trade
-        ActionType.UNIT_TRADE_ROUTE,
-        ActionType.TRADE_ROUTE,
-        ActionType.UNIT_HELP_WONDER,
-        # Terrain
-        ActionType.UNIT_BUILD_ROAD,
-        ActionType.UNIT_BUILD_IRRIGATION,
-        ActionType.UNIT_BUILD_MINE,
-        ActionType.UNIT_BUILD_BASE,
-        ActionType.UNIT_PILLAGE,
-        ActionType.UNIT_CLEAN,
-        # Unit Status
-        ActionType.UNIT_FORTIFY,
-        ActionType.UNIT_SENTRY,
-        ActionType.UNIT_EXPLORE,
-        ActionType.UNIT_DISBAND,
-        ActionType.UNIT_UPGRADE,
-        ActionType.UNIT_HEAL,
-        # Espionage
-        ActionType.UNIT_ESTABLISH_EMBASSY,
-        ActionType.SPY_INVESTIGATE_CITY,
-        ActionType.SPY_STEAL_TECH,
-        ActionType.SPY_TARGETED_STEAL_TECH,
-        ActionType.SPY_SABOTAGE_CITY,
-        ActionType.SPY_TARGETED_SABOTAGE_CITY,
-        ActionType.SPY_BRIBE_UNIT,
-        ActionType.SPY_INCITE_CITY,
-        # Diplomacy
-        ActionType.DIPLOMACY_DECLARE_WAR,
-        ActionType.DIPLOMACY_CANCEL_TREATY,
-        ActionType.DIPLOMACY_PROPOSE_CEASEFIRE,
-        ActionType.DIPLOMACY_PROPOSE_PEACE,
-        ActionType.DIPLOMACY_PROPOSE_ALLIANCE,
-        ActionType.DIPLOMACY_ACCEPT_TREATY,
-        ActionType.DIPLOMACY_REJECT_TREATY,
-        ActionType.DIPLOMACY_SHARE_VISION,
-        ActionType.DIPLOMACY_WITHDRAW_VISION,
-        ActionType.DIPLOMACY_MESSAGE,
-        # City Management
-        ActionType.CITY_PRODUCTION,
-        ActionType.CITY_BUY,
-        ActionType.CITY_SELL_IMPROVEMENT,
-        # Research
-        ActionType.TECH_RESEARCH,
-        ActionType.END_TURN,
-    ]
-
-    # Restricted actions that require special permissions (destructive/irreversible)
-    RESTRICTED_ACTIONS = [
-        ActionType.UNIT_NUKE,
-        ActionType.UNIT_NUKE_CITY,
-        ActionType.UNIT_NUKE_UNITS,
-        ActionType.SPY_NUKE,
-        ActionType.SPY_POISON,
-        ActionType.SPY_SPREAD_PLAGUE,
-    ]
-
-    def __init__(self, capabilities: Optional[List[ActionType]] = None):
-        self.capabilities = capabilities or self.DEFAULT_CAPABILITIES.copy()
+    def __init__(self):
         self.validation_stats = {
             'total_actions': 0,
             'valid_actions': 0,
@@ -393,10 +312,6 @@ class LLMActionValidator:
             action_type = ActionType(action_type_str)
         except ValueError:
             return self._validation_error('E003', f'Unknown action type: {action_type_str}')
-
-        # Capability check
-        if action_type not in self.capabilities:
-            return self._validation_error('E004', f'Action type {action_type_str} not permitted for this agent')
 
         # Validate required player_id
         action_player_id = action.get('player_id', player_id)
@@ -772,16 +687,6 @@ class LLMActionValidator:
     def get_validation_stats(self) -> Dict[str, Any]:
         """Get validation statistics"""
         return self.validation_stats.copy()
-
-    def add_capability(self, action_type: ActionType):
-        """Add capability for this validator"""
-        if action_type not in self.capabilities:
-            self.capabilities.append(action_type)
-
-    def remove_capability(self, action_type: ActionType):
-        """Remove capability for this validator"""
-        if action_type in self.capabilities:
-            self.capabilities.remove(action_type)
 
     def _validate_coordinates(self, x: int, y: int, game_state: Optional[Dict[str, Any]] = None) -> bool:
         """Enhanced coordinate validation against actual game boundaries

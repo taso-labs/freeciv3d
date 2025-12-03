@@ -108,9 +108,8 @@ class LLMWSHandler(websocket.WebSocketHandler):
         self.player_id = None
         self.civcom = None
         self.game_id = None
-        self.capabilities = []
         self.last_state_query = 0
-        self.action_validator = None
+        self.action_validator = LLMActionValidator()
         self.connection_time = time.time()
         # Session management
         self.session_id = None
@@ -292,7 +291,6 @@ class LLMWSHandler(websocket.WebSocketHandler):
             # Extract agent info
             self.agent_id = msg_data.get('agent_id', f'agent-{self.id[:8]}')
             api_token = msg_data.get('api_token', '')
-            requested_capabilities = msg_data.get('capabilities', [])
 
             # Token validation using config
             if not llm_config.validate_token(api_token):
@@ -302,18 +300,10 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 self.write_message(error_response.to_json())
                 return
 
-            # Set up capabilities
-            capability_set = {cap for cap in requested_capabilities
-                            if cap in [t.value for t in ActionType]}
-
-            if not capability_set:
-                capability_set = {cap.value for cap in LLMActionValidator.DEFAULT_CAPABILITIES}
-
             # Create session
             self.session_info = session_manager.create_session(
                 self.agent_id,
-                api_token,
-                capability_set
+                api_token
             )
 
             if not self.session_info:
@@ -324,10 +314,6 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 return
 
             self.session_id = self.session_info.session_id
-
-            # Set up capabilities for action validator
-            self.capabilities = [ActionType(cap) for cap in capability_set]
-            self.action_validator = LLMActionValidator(self.capabilities)
 
             # Register agent first (needed for player_id calculation)
             llm_agents[self.agent_id] = self
@@ -389,8 +375,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
             logger.info(
                 f"⏳ Starting player registration and nation selection for {self.agent_id}\n"
                 f"   Session ID: {self.session_id}\n"
-                f"   Game ID: {game_id}\n"
-                f"   Capabilities: {list(capability_set)}"
+                f"   Game ID: {game_id}"
             )
 
             try:
@@ -504,7 +489,6 @@ class LLMWSHandler(websocket.WebSocketHandler):
                     'player_id': self.player_id,
                     'game_id': self.game_id,
                     'civserver_port': game_session.civserver_port,  # SPECTATOR FIX: Port for spectator URL generation
-                    'capabilities': list(capability_set),
                     'session_expires_in': int(self.session_info.expires_at - time.time()),
                     'message': 'Player authenticated successfully. Waiting for all players to join.',
                     'status': 'authenticated',

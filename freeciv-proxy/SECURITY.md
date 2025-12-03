@@ -48,7 +48,7 @@ sanitized_action = InputSanitizer.sanitize_action_data(raw_action)
 
 ```python
 # Example: Creating a secure session
-session = session_manager.create_session(agent_id, api_token, capabilities)
+session = session_manager.create_session(agent_id, api_token)
 ```
 
 ### 3. Rate Limiting

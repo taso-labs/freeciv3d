@@ -25,20 +25,6 @@
             "burst_capacity": 100
         }
     },
-    "capabilities": {
-        "default": [
-            "unit_move",
-            "unit_build_city",
-            "unit_explore",
-            "city_production",
-            "tech_research"
-        ],
-        "restricted": [
-            "city_buy",
-            "trade_route",
-            "declare_war"
-        ]
-    },
     "authentication": {
         "require_api_token": true,
         "token_min_length": 10,

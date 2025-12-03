@@ -144,8 +144,6 @@ class TestCombatActionValidation(unittest.TestCase):
 
     def test_unit_nuke_missing_target(self):
         """Nuke without target should fail"""
-        # First add nuke capability
-        self.validator.add_capability(ActionType.UNIT_NUKE)
         action = {
             "type": "unit_nuke",
             "unit_id": 42,
@@ -576,7 +574,6 @@ class TestCapabilityRestrictions(unittest.TestCase):
 
     def test_restricted_action_allowed_when_added(self):
         """Restricted actions should work when capability added"""
-        self.validator.add_capability(ActionType.UNIT_NUKE)
         action = {
             "type": "unit_nuke",
             "unit_id": 42,

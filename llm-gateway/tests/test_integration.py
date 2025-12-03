@@ -41,7 +41,6 @@ class TestEndToEndValidationFlow:
                 "api_token": "valid-token-12345678",
                 "model": "gpt-4",
                 "game_id": "game-123",
-                "capabilities": ["move", "attack", "build"],
             },
         }
 

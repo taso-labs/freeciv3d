@@ -137,8 +137,7 @@ All messages follow this structure:
   "data": {
     "api_token": "secret_api_key",
     "model": "gpt-4",
-    "game_id": "game-123",
-    "capabilities": ["move", "build", "research"]
+    "game_id": "game-123"
   }
 }
 ```

@@ -291,13 +291,11 @@ class TestSessionManagement(unittest.TestCase):
         """Test secure session creation and validation"""
         agent_id = "test-agent"
         api_token = "test-token-123"
-        capabilities = {'unit_move', 'city_production'}
 
         # Create session
-        session = self.session_manager.create_session(agent_id, api_token, capabilities)
+        session = self.session_manager.create_session(agent_id, api_token)
         self.assertIsNotNone(session)
         self.assertEqual(session.agent_id, agent_id)
-        self.assertEqual(session.capabilities, capabilities)
 
         # Validate session
         validated_session = self.session_manager.validate_session(session.session_id, api_token)

@@ -339,8 +339,7 @@ class LLMGateway:
                 "type": "llm_connect",
                 "agent_id": f"llm_player_{game_id[:8]}",
                 "api_token": api_token,
-                "port": default_port,
-                "capabilities": ["unit_move", "city_production", "tech_research", "unit_build_city", "unit_explore"]
+                "port": default_port
             }
 
             await websocket.send(json.dumps(auth_msg))

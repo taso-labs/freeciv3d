@@ -86,7 +86,6 @@ class TestLLMIntegration(unittest.TestCase):
             'type': 'llm_connect',
             'agent_id': 'test-agent-1',
             'api_token': 'test-token-123',
-            'capabilities': ['unit_move', 'city_production'],
             'port': 6001
         }
 
