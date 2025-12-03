@@ -75,7 +75,7 @@ public class ServerAllocator extends HttpServlet {
 			conn = ds.getConnection();
 
 			// Find an available server of the requested type in Pregame state
-			String query = "SELECT host, port FROM servers WHERE type = ? AND state = 'Pregame' AND available = 1 ORDER BY port LIMIT 1";
+			String query = "SELECT host, port FROM servers WHERE type = ? AND state = 'Pregame' AND available != 0 ORDER BY port LIMIT 1";
 			statement = conn.prepareStatement(query);
 			statement.setString(1, gameType);
 			rs = statement.executeQuery();
