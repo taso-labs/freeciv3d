@@ -109,7 +109,7 @@ class RulesetMapper:
                     name = packet.get('name', '')
                     if name and tech_id is not None:
                         # Normalize name for flexible lookup
-                        normalized = self._normalize_tech_name(name)
+                        normalized = self.normalize_tech_name(name)
                         self.techs[normalized] = tech_id
                         logger.debug(f"Mapped tech: '{name}' -> tech_id {tech_id} (normalized: '{normalized}')")
                 except (KeyError, TypeError, AttributeError) as e:
@@ -121,7 +121,7 @@ class RulesetMapper:
                    f"{len(self.techs)} technologies")
 
     @staticmethod
-    def _normalize_tech_name(name: str) -> str:
+    def normalize_tech_name(name: str | None) -> str:
         """
         Normalize technology name for reliable lookup.
 
@@ -198,7 +198,7 @@ class RulesetMapper:
         if not tech_name:
             return None
 
-        normalized = self._normalize_tech_name(tech_name)
+        normalized = self.normalize_tech_name(tech_name)
         tech_id = self.techs.get(normalized)
 
         if tech_id is not None:
