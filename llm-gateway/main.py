@@ -13,12 +13,10 @@ import os
 import random
 import time
 import uuid
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any
 import websockets
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Depends, Query, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ValidationError
 
 # Rate limiting imports
 try:
@@ -29,28 +27,14 @@ try:
 except ImportError:
     HAS_SLOWAPI = False
 
-try:
-    from .config import settings, get_cors_origins, get_freeciv_proxy_url, validate_settings
-    from .connection_manager import connection_manager, ConnectionInfo
-    from .api_endpoints import GameConfig, FreeCivAction
-    from .websocket_handlers import AgentWebSocketHandler
-    from .request_manager import request_manager
-    from .connection_state_manager import connection_state_manager, ConnectionStatus
-    from .security.token_manager import secure_token_manager
-    from .metaserver_client import metaserver_client
-    from .utils.safe_access import get_agent_game_id, get_agent_config, safe_get_nested
-    from .utils.constants import *
-    from .validation import sanitize_for_logging
-except ImportError:
-    from config import settings, get_cors_origins, get_freeciv_proxy_url, validate_settings
-    from connection_manager import connection_manager, ConnectionInfo
-    from request_manager import request_manager
-    from connection_state_manager import connection_state_manager, ConnectionStatus
-    from security.token_manager import secure_token_manager
-    from metaserver_client import metaserver_client
-    from utils.safe_access import get_agent_game_id, get_agent_config, safe_get_nested
-    from utils.constants import *
-    from validation import sanitize_for_logging
+from .config import settings, get_cors_origins, get_freeciv_proxy_url, validate_settings
+from .connection_manager import connection_manager
+from .request_manager import request_manager
+from .connection_state_manager import connection_state_manager, ConnectionStatus
+from .security.token_manager import secure_token_manager
+from .utils.safe_access import get_agent_game_id
+from .utils.constants import *
+from .validation import sanitize_for_logging
 
 # Configure logging
 import os
