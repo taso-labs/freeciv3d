@@ -290,6 +290,9 @@ class LLMWSHandler(websocket.WebSocketHandler):
         We buffer these packets and flush after auth_success.
         """
         logger.debug(f"_handle_llm_connect called for {self.id}")
+        
+        # Extract correlation_id for request/response matching
+        correlation_id = msg_data.get('correlation_id')
 
         try:
             # Extract agent info
@@ -525,6 +528,8 @@ class LLMWSHandler(websocket.WebSocketHandler):
                         'instructions': 'Send player_ready message to mark ready. Game starts when all players are ready.'
                     })
 
+                if correlation_id:
+                    auth_response['correlation_id'] = correlation_id
                 self.write_message(json.dumps(auth_response))
                 logger.info(f"📤 Sent auth_success with player_id={self.player_id} to agent {self.agent_id}")
 
@@ -550,11 +555,14 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 self.packet_buffer.clear()
                 logger.warning(f"🔓 Packet buffering DISABLED due to error for {self.agent_id} - cleared {buffer_count} buffered packets")
 
-                self.write_message(json.dumps({
+                error_response = {
                     'type': 'error',
                     'code': 'E142',
                     'message': 'Failed during player registration or nation selection'
-                }))
+                }
+                if correlation_id:
+                    error_response['correlation_id'] = correlation_id
+                self.write_message(json.dumps(error_response))
                 return
 
             SecurityLogger.log_authentication_attempt(self.agent_id, True)
@@ -591,14 +599,20 @@ class LLMWSHandler(websocket.WebSocketHandler):
     def _handle_state_query(self, msg_data: Dict[str, Any]):
         """Handle optimized state query for LLM"""
         logger.info(f"🔍 STATE_QUERY received from agent {self.agent_id}")
+        
+        # Extract correlation_id for request/response matching
+        correlation_id = msg_data.get('correlation_id')
 
         if not self.is_llm_agent:
             logger.warning(f"❌ Agent {self.agent_id} not authenticated for state_query")
-            self.write_message(json.dumps({
+            error_response = {
                 'type': 'error',
                 'code': 'E120',
                 'message': 'Not authenticated as LLM agent'
-            }))
+            }
+            if correlation_id:
+                error_response['correlation_id'] = correlation_id
+            self.write_message(json.dumps(error_response))
             return
 
         # Update session activity
@@ -614,7 +628,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 f"   Session ID: {self.session_id}\n"
                 f"   This means the civserver hasn't assigned a player slot yet or connection failed"
             )
-            self.write_message(json.dumps({
+            error_response = {
                 'type': 'error',
                 'code': 'E122',
                 'message': 'Player not assigned yet - game not ready. Wait for authentication to complete.',
@@ -624,7 +638,10 @@ class LLMWSHandler(websocket.WebSocketHandler):
                     'civcom_connected': self.civcom is not None,
                     'suggestion': 'Retry after receiving auth_success with valid player_id'
                 }
-            }))
+            }
+            if correlation_id:
+                error_response['correlation_id'] = correlation_id
+            self.write_message(json.dumps(error_response))
             return
 
         # Check if civcom is connected
@@ -634,7 +651,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 f"   Player ID: {self.player_id}\n"
                 f"   Civcom stopped: {self.civcom.stopped if self.civcom else 'N/A'}"
             )
-            self.write_message(json.dumps({
+            error_response = {
                 'type': 'error',
                 'code': 'E123',
                 'message': 'Connection to game server lost',
@@ -643,7 +660,10 @@ class LLMWSHandler(websocket.WebSocketHandler):
                     'player_id': self.player_id,
                     'suggestion': 'Reconnect to game server'
                 }
-            }))
+            }
+            if correlation_id:
+                error_response['correlation_id'] = correlation_id
+            self.write_message(json.dumps(error_response))
             return
 
         try:
@@ -665,14 +685,17 @@ class LLMWSHandler(websocket.WebSocketHandler):
             cached_state = state_cache.get(cache_key)
             if cached_state:
                 logger.debug(f"✓ Cache hit for agent {self.agent_id}")
-                self.write_message(json.dumps({
+                response = {
                     'type': 'state_response',
                     'format': query_format,
                     'data': cached_state,
                     'cached': True,
                     'session_id': self.session_id,
                     'timestamp': time.time()
-                }))
+                }
+                if correlation_id:
+                    response['correlation_id'] = correlation_id
+                self.write_message(json.dumps(response))
                 return
 
             # Generate fresh state
@@ -694,13 +717,16 @@ class LLMWSHandler(websocket.WebSocketHandler):
             state_cache.set(cache_key, state_data, self.player_id)
 
             # Send response
-            self.write_message(json.dumps({
+            response = {
                 'type': 'state_response',
                 'format': query_format,
                 'data': state_data,
                 'cached': False,
                 'timestamp': time.time()
-            }))
+            }
+            if correlation_id:
+                response['correlation_id'] = correlation_id
+            self.write_message(json.dumps(response))
 
             self.last_state_query = time.time()
 
@@ -711,7 +737,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 f"   Game ID: {self.game_id}\n"
                 f"   Error: {e}"
             )
-            self.write_message(json.dumps({
+            error_response = {
                 'type': 'error',
                 'code': 'E121',
                 'message': f'State query failed: {str(e)}',
@@ -720,7 +746,10 @@ class LLMWSHandler(websocket.WebSocketHandler):
                     'player_id': self.player_id,
                     'error': str(e)
                 }
-            }))
+            }
+            if correlation_id:
+                error_response['correlation_id'] = correlation_id
+            self.write_message(json.dumps(error_response))
 
     def _normalize_game_arena_action(self, action_data: Dict[str, Any]) -> Dict[str, Any]:
         """Normalize game_arena action format to proxy format.
@@ -947,14 +976,20 @@ class LLMWSHandler(websocket.WebSocketHandler):
         logger.info(f"🎯 _handle_action ENTRY: agent={self.agent_id}")
         logger.info(f"🎯 msg_data keys: {list(msg_data.keys())}")
         logger.info(f"🎯 msg_data: {msg_data}")
+        
+        # Extract correlation_id for request/response matching
+        correlation_id = msg_data.get('correlation_id')
 
         if not self.is_llm_agent:
             logger.warning(f"❌ Agent {self.agent_id} not authenticated for actions")
-            self.write_message(json.dumps({
+            error_response = {
                 'type': 'error',
                 'code': 'E130',
                 'message': 'Not authenticated as LLM agent'
-            }))
+            }
+            if correlation_id:
+                error_response['correlation_id'] = correlation_id
+            self.write_message(json.dumps(error_response))
             return
 
         # Update session activity for actions
@@ -977,7 +1012,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                     logger.info(f"✅ Parsed to: {action_data}")
                 except Exception as e:
                     logger.error(f"❌ Failed to parse canonical action '{action_data}': {e}")
-                    self.write_message(json.dumps({
+                    error_response = {
                         'type': 'action_rejected',
                         'error_code': 'E134',
                         'error_message': f'Invalid action format: {e}. Expected canonical format like "tech_research_player(1)_target(Alphabet)" or JSON object.',
@@ -986,7 +1021,10 @@ class LLMWSHandler(websocket.WebSocketHandler):
                             'canonical': 'tech_research_player(1)_target(Alphabet)',
                             'json': '{"type": "tech_research", "tech_name": "alphabet", "player_id": 1}'
                         }
-                    }))
+                    }
+                    if correlation_id:
+                        error_response['correlation_id'] = correlation_id
+                    self.write_message(json.dumps(error_response))
                     return
 
             # NEW: Handle game_arena dict format with "action_type" instead of "type"
@@ -1000,12 +1038,15 @@ class LLMWSHandler(websocket.WebSocketHandler):
                     logger.info(f"✅ Normalized action has 'tech_name': {'tech_name' in action_data if action_data.get('type') == 'tech_research' else 'N/A'}")
                 except Exception as e:
                     logger.error(f"❌ Failed to normalize game_arena action: {e}")
-                    self.write_message(json.dumps({
+                    error_response = {
                         'type': 'action_rejected',
                         'error_code': 'E135',
                         'error_message': f'Failed to normalize action format: {e}',
                         'action': action_data
-                    }))
+                    }
+                    if correlation_id:
+                        error_response['correlation_id'] = correlation_id
+                    self.write_message(json.dumps(error_response))
                     return
 
             # Sanitize action data to prevent injection attacks
@@ -1015,12 +1056,15 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 logger.info(f"✓ Sanitized action: {sanitized_action}")
             except SecurityError as e:
                 SecurityLogger.log_security_violation(self.agent_id, "INPUT_SANITIZATION", str(e))
-                self.write_message(json.dumps({
+                error_response = {
                     'type': 'action_rejected',
                     'error_code': 'S001',
                     'error_message': f'Input sanitization failed: {e}',
                     'action': action_data
-                }))
+                }
+                if correlation_id:
+                    error_response['correlation_id'] = correlation_id
+                self.write_message(json.dumps(error_response))
                 return
 
             # Add player_id to action if not present
@@ -1043,7 +1087,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 game_state = self._get_current_game_state()
                 current_turn = game_state.get('turn', 'unknown') if game_state else 'unknown'
 
-                self.write_message(json.dumps({
+                error_response = {
                     'type': 'action_rejected',
                     'error_code': validation_result.error_code,
                     'error_message': validation_result.error_message,
@@ -1052,7 +1096,10 @@ class LLMWSHandler(websocket.WebSocketHandler):
                     'player_id': self.player_id,
                     'turn': current_turn,
                     'timestamp': time.time()
-                }))
+                }
+                if correlation_id:
+                    error_response['correlation_id'] = correlation_id
+                self.write_message(json.dumps(error_response))
                 logger.warning(
                     f"❌ Action validation failed for {self.agent_id}:\n"
                     f"   Error Code: {validation_result.error_code}\n"
@@ -1075,33 +1122,46 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 SecurityLogger.log_connection_event(self.agent_id, "ACTION_EXECUTED",
                                                   f"type={sanitized_action.get('type')}")
 
-                self.write_message(json.dumps({
+                response = {
                     'type': 'action_accepted',
                     'action': sanitized_action,
                     'timestamp': time.time()
-                }))
+                }
+                if correlation_id:
+                    response['correlation_id'] = correlation_id
+                self.write_message(json.dumps(response))
             else:
-                self.write_message(json.dumps({
+                error_response = {
                     'type': 'error',
                     'code': 'E131',
                     'message': 'No connection to game server'
-                }))
+                }
+                if correlation_id:
+                    error_response['correlation_id'] = correlation_id
+                self.write_message(json.dumps(error_response))
 
         except Exception as e:
             logger.exception(f"Error handling action: {e}")
-            self.write_message(json.dumps({
+            error_response = {
                 'type': 'error',
                 'code': 'E132',
                 'message': 'Action processing failed'
-            }))
+            }
+            if correlation_id:
+                error_response['correlation_id'] = correlation_id
+            self.write_message(json.dumps(error_response))
 
     def _handle_ping(self, msg_data: Dict[str, Any]):
         """Handle ping message"""
-        self.write_message(json.dumps({
+        correlation_id = msg_data.get('correlation_id')
+        response = {
             'type': 'pong',
             'timestamp': time.time(),
             'agent_id': self.agent_id
-        }))
+        }
+        if correlation_id:
+            response['correlation_id'] = correlation_id
+        self.write_message(json.dumps(response))
 
     def _handle_chat(self, msg_data: Dict[str, Any]):
         """Handle chat message from LLM agent
@@ -1218,20 +1278,29 @@ class LLMWSHandler(websocket.WebSocketHandler):
 
     def _handle_player_ready(self, msg_data: Dict[str, Any]):
         """Handle player ready status from LLM agent"""
+        # Extract correlation_id for request/response matching
+        correlation_id = msg_data.get('correlation_id')
+        
         if not self.is_llm_agent:
-            self.write_message(json.dumps({
+            error_response = {
                 'type': 'error',
                 'code': 'E401',
                 'message': 'Not authenticated as LLM agent'
-            }))
+            }
+            if correlation_id:
+                error_response['correlation_id'] = correlation_id
+            self.write_message(json.dumps(error_response))
             return
 
         if self.player_id is None:
-            self.write_message(json.dumps({
+            error_response = {
                 'type': 'error',
                 'code': 'E402',
                 'message': 'No player ID assigned yet'
-            }))
+            }
+            if correlation_id:
+                error_response['correlation_id'] = correlation_id
+            self.write_message(json.dumps(error_response))
             return
 
         # Get ready status from message (default to True)
@@ -1253,25 +1322,34 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 logger.info(f"Agent {self.agent_id} marked ready={is_ready} (player_no={self.player_id})")
 
                 # Send confirmation back to agent
-                self.write_message(json.dumps({
+                response = {
                     'type': 'ready_confirmed',
                     'player_no': self.player_id,
                     'is_ready': is_ready,
                     'message': f'Player {self.player_id} marked {"ready" if is_ready else "not ready"}'
-                }))
+                }
+                if correlation_id:
+                    response['correlation_id'] = correlation_id
+                self.write_message(json.dumps(response))
             except Exception as e:
                 logger.error(f"Failed to send ready packet: {e}")
-                self.write_message(json.dumps({
+                error_response = {
                     'type': 'error',
                     'code': 'E403',
                     'message': f'Failed to send ready packet: {str(e)}'
-                }))
+                }
+                if correlation_id:
+                    error_response['correlation_id'] = correlation_id
+                self.write_message(json.dumps(error_response))
         else:
-            self.write_message(json.dumps({
+            error_response = {
                 'type': 'error',
                 'code': 'E404',
                 'message': 'Not connected to game server'
-            }))
+            }
+            if correlation_id:
+                error_response['correlation_id'] = correlation_id
+            self.write_message(json.dumps(error_response))
 
     def _handle_unit_actions_query(self, msg_data: Dict[str, Any]):
         """Handle batch query for available actions on one or more units
