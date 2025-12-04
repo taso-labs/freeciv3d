@@ -109,6 +109,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
         self.player_id = None
         self.civcom = None
         self.game_id = None
+        self.auto_ready = True
         self.last_state_query = 0
         self.action_validator = LLMActionValidator()
         self.connection_time = time.time()
@@ -461,31 +462,43 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 # Wait briefly for nation selection to process
                 await asyncio.sleep(0.5)
 
-                # Send PACKET_PLAYER_READY immediately after nation selection
-                logger.info(
-                    f"✅ Nation selected for {self.agent_id} - sending PACKET_PLAYER_READY\n"
-                    f"   Player ID: {self.player_id}"
-                )
+                # Check auto_ready flag
+                # When auto_ready=False, agent must explicitly send player_ready message
+                auto_ready = msg_data.get('auto_ready', True)
+                self.auto_ready = auto_ready  # Store for auth_success response
 
-                ready_packet = {
-                    "pid": 11,  # PACKET_PLAYER_READY from packets.def:434
-                    "player_no": self.player_id,
-                    "is_ready": True
-                }
+                if auto_ready:
+                    # Send PACKET_PLAYER_READY immediately after nation selection
+                    logger.info(
+                        f"✅ Nation selected for {self.agent_id} - sending PACKET_PLAYER_READY (auto_ready=True)\n"
+                        f"   Player ID: {self.player_id}"
+                    )
 
-                # Send PACKET_PLAYER_READY to civserver
-                self.civcom.queue_to_civserver(json.dumps(ready_packet))
-                self.civcom.send_packets_to_civserver()
+                    ready_packet = {
+                        "pid": 11,  # PACKET_PLAYER_READY from packets.def:434
+                        "player_no": self.player_id,
+                        "is_ready": True
+                    }
 
-                # Mark player as ready in game session (triggers game start when all ready)
-                game_session.mark_player_ready(self.agent_id)
+                    # Send PACKET_PLAYER_READY to civserver
+                    self.civcom.queue_to_civserver(json.dumps(ready_packet))
+                    self.civcom.send_packets_to_civserver()
 
-                logger.info(f"📤 PACKET_PLAYER_READY sent for {self.agent_id} (player_no={self.player_id})")
+                    # Mark player as ready in game session (triggers game start when all ready)
+                    game_session.mark_player_ready(self.agent_id)
+
+                    logger.info(f"📤 PACKET_PLAYER_READY sent for {self.agent_id} (player_no={self.player_id})")
+                else:
+                    logger.info(
+                        f"⏸️ Nation selected for {self.agent_id} - NOT sending PACKET_PLAYER_READY (auto_ready=False)\n"
+                        f"   Player ID: {self.player_id}\n"
+                        f"   Agent must send 'player_ready' message to mark ready and start game"
+                    )
 
                 # Send auth_success in FLAT format (Gateway will transform to nested for agent)
                 # Game will start when all players are ready (~5-7 seconds after last player joins)
                 # Architecture: Proxy sends flat → Gateway transforms → Agent receives nested
-                self.write_message(json.dumps({
+                auth_response = {
                     'type': 'auth_success',  # Flat format - Gateway expects this
                     'agent_id': self.agent_id,
                     'session_id': self.session_id,
@@ -493,13 +506,26 @@ class LLMWSHandler(websocket.WebSocketHandler):
                     'game_id': self.game_id,
                     'civserver_port': game_session.civserver_port,  # SPECTATOR FIX: Port for spectator URL generation
                     'session_expires_in': int(self.session_info.expires_at - time.time()),
-                    'message': 'Player authenticated successfully. Waiting for all players to join.',
                     'status': 'authenticated',
+                    'auto_ready': auto_ready,  # Indicates if player was auto-marked ready
                     'game_ready': False,  # Game not started yet
-                    'waiting_for': 'game_ready',  # Signal to wait for
-                    'expected_wait_seconds': '5-7',  # Typical initialization time
-                    'instructions': 'Wait for game_ready message before querying state or submitting actions'
-                }))
+                }
+
+                if auto_ready:
+                    auth_response.update({
+                        'message': 'Player authenticated successfully. Waiting for all players to join.',
+                        'waiting_for': 'game_ready',  # Signal to wait for
+                        'expected_wait_seconds': '5-7',  # Typical initialization time
+                        'instructions': 'Wait for game_ready message before querying state or submitting actions'
+                    })
+                else:
+                    auth_response.update({
+                        'message': 'Player authenticated successfully. Send player_ready message when ready to start.',
+                        'waiting_for': 'player_ready',  # Signal that agent must send ready
+                        'instructions': 'Send player_ready message to mark ready. Game starts when all players are ready.'
+                    })
+
+                self.write_message(json.dumps(auth_response))
                 logger.info(f"📤 Sent auth_success with player_id={self.player_id} to agent {self.agent_id}")
 
                 # Flush buffered packets immediately after auth_success

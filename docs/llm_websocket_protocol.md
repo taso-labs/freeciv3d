@@ -137,10 +137,21 @@ All messages follow this structure:
   "data": {
     "api_token": "secret_api_key",
     "model": "gpt-4",
-    "game_id": "game-123"
+    "game_id": "game-123",
+    "auto_ready": true
   }
 }
 ```
+
+**Fields:**
+- `api_token` (required): Authentication token for the agent
+- `model` (optional): LLM model identifier for logging/tracking
+- `game_id` (optional): Game identifier to join; auto-generated if not provided
+- `nation` (optional): Preferred nation name or "random" (default: "random")
+- `leader_name` (optional): Leader name for the player (default: agent_id)
+- `auto_ready` (optional): Whether to automatically mark player as ready after nation selection (default: `true`)
+  - When `true`: Player is automatically marked ready, game starts when all players are ready
+  - When `false`: Player must explicitly send a `player_ready` message to mark ready, allowing for pregame configuration (e.g., `/set` commands for map size, turn limits)
 
 #### AUTH_SUCCESS (Response)
 
@@ -155,10 +166,18 @@ All messages follow this structure:
     "session_id": "session-456",
     "player_id": 1,
     "game_id": "game-123",
-    "session_expires_in": 3600
+    "session_expires_in": 3600,
+    "auto_ready": true,
+    "waiting_for": "game_ready"
   }
 }
 ```
+
+**Fields:**
+- `auto_ready`: Reflects the `auto_ready` value from the request
+- `waiting_for`: Indicates what the agent should wait for next
+  - `"game_ready"`: When `auto_ready=true`, wait for game to start
+  - `"player_ready"`: When `auto_ready=false`, agent must send `player_ready` message
 
 ### 2. Game State Queries
 
