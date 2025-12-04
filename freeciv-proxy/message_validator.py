@@ -53,6 +53,7 @@ class MessageType(Enum):
     CONN_PONG = "conn_pong"  # FreeCiv keepalive pong response
     UNIT_ACTIONS_QUERY = "unit_actions_query"  # Query available actions for a unit
     CITY_ACTIONS_QUERY = "city_actions_query"  # Query available actions for a city
+    CHAT = "chat"  # Send chat message/command to game server
 
 class MessageValidator:
     """
@@ -173,6 +174,22 @@ class MessageValidator:
             'field_constraints': {
                 'correlation_id': {'max_length': 64, 'pattern': r'^[a-zA-Z0-9_-]+$'},
                 'data': {'required_keys': ['city_ids']}
+            }
+        },
+        MessageType.CHAT: {
+            'required_fields': ['type'],
+            'optional_fields': ['message', 'data', 'agent_id', 'timestamp', 'correlation_id'],
+            'field_types': {
+                'type': str,
+                'message': str,
+                'data': dict,
+                'agent_id': str,
+                'timestamp': (int, float),
+                'correlation_id': str
+            },
+            'field_constraints': {
+                'message': {'max_length': 500},
+                'correlation_id': {'max_length': 64, 'pattern': r'^[a-zA-Z0-9_-]+$'}
             }
         }
     }

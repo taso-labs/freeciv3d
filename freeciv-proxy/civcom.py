@@ -282,6 +282,25 @@ class CivCom(Thread):
                                     # Log chat messages to capture server command responses
                                     msg_text = packet_json.get('message', '')
                                     logger.info(f"Chat message for {self.username}: {msg_text}")
+                                    
+                                    # For LLM agents, emit structured chat_message event
+                                    if self.civwebserver and hasattr(self.civwebserver, 'is_llm_agent') and self.civwebserver.is_llm_agent:
+                                        import time as time_module
+                                        chat_event = json.dumps({
+                                            'type': 'chat_message',
+                                            'timestamp': time_module.time(),
+                                            'data': {
+                                                'message': msg_text,
+                                                'event': packet_json.get('event', 0),
+                                                'conn_id': packet_json.get('conn_id', -1)
+                                            }
+                                        })
+                                        # Send chat_message event via WebSocket
+                                        try:
+                                            conn = self.civwebserver
+                                            conn.io_loop.add_callback(lambda msg=chat_event: conn.write_message(msg))
+                                        except Exception as chat_err:
+                                            logger.debug(f"Could not send chat_message event: {chat_err}")
                             except:
                                 pass  # Not JSON or parsing failed, ignore
                         except Exception as e:

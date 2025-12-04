@@ -26,6 +26,7 @@ from error_handler import error_handler, ErrorSeverity, ErrorCategory
 from game_session_manager import game_session_manager
 from ruleset_mapper import RulesetMapper
 from typing import Dict, Any, Optional, List
+from packet_constants import PACKET_CHAT_MSG_REQ
 
 logger = logging.getLogger("freeciv-proxy")
 
@@ -247,6 +248,8 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 self._handle_unit_actions_query(msg_data)
             elif msg_type == 'city_actions_query':
                 self._handle_city_actions_query(msg_data)
+            elif msg_type == 'chat':
+                self._handle_chat(msg_data)
             elif self.is_llm_agent:
                 # Forward other messages to civcom if authenticated
                 self._forward_to_civcom(message)
@@ -1074,6 +1077,119 @@ class LLMWSHandler(websocket.WebSocketHandler):
             'agent_id': self.agent_id
         }))
 
+    def _handle_chat(self, msg_data: Dict[str, Any]):
+        """Handle chat message from LLM agent
+
+        Sends chat messages/commands to the FreeCiv server via PACKET_CHAT_MSG_REQ (pid=26).
+        Primary use cases:
+        - Server commands: /set mapsize MEDIUM, /save, /start
+        - Player chat: general messages to other players
+
+        The FreeCiv server handles its own command restrictions.
+        """
+        if not self.is_llm_agent:
+            self.write_message(
+                json.dumps(
+                    {
+                        "type": "error",
+                        "code": "E401",
+                        "message": "Not authenticated as LLM agent",
+                    }
+                )
+            )
+            return
+
+        # Extract message from data field or top-level
+        message = None
+        if "data" in msg_data and isinstance(msg_data["data"], dict):
+            message = msg_data["data"].get("message")
+        if message is None:
+            message = msg_data.get("message")
+
+        if not message:
+            self.write_message(
+                json.dumps(
+                    {
+                        "type": "error",
+                        "code": "E220",
+                        "message": "Missing required field: message",
+                    }
+                )
+            )
+            return
+
+        # Validate message length (max 500 characters)
+        if len(message) > 500:
+            self.write_message(
+                json.dumps(
+                    {
+                        "type": "error",
+                        "code": "E170",
+                        "message": f"Chat message too long: {len(message)} characters (max 500)",
+                    }
+                )
+            )
+            return
+
+        # Create PACKET_CHAT_MSG_REQ packet (pid=26)
+        chat_packet = {"pid": PACKET_CHAT_MSG_REQ, "message": message}
+
+        # Send to civcom
+        if self.civcom:
+            try:
+                self.civcom.queue_to_civserver(json.dumps(chat_packet))
+                self.civcom.send_packets_to_civserver()
+
+                # Log command vs chat
+                if message.startswith("/"):
+                    logger.info(f"Agent {self.agent_id} sent command: {message}")
+                else:
+                    logger.debug(
+                        f"Agent {self.agent_id} sent chat: {message[:50]}..."
+                        if len(message) > 50
+                        else f"Agent {self.agent_id} sent chat: {message}"
+                    )
+
+                # Send acknowledgment
+                correlation_id = msg_data.get("correlation_id")
+                response = {
+                    "type": "chat_sent",
+                    "agent_id": self.agent_id,
+                    "timestamp": time.time(),
+                    "data": {
+                        "success": True,
+                        "message": (
+                            message[:100] + "..." if len(message) > 100 else message
+                        ),
+                    },
+                }
+                if correlation_id:
+                    response["correlation_id"] = correlation_id
+
+                self.write_message(json.dumps(response))
+
+            except Exception as e:
+                logger.error(f"Failed to send chat for agent {self.agent_id}: {e}")
+                self.write_message(
+                    json.dumps(
+                        {
+                            "type": "error",
+                            "code": "E171",
+                            "message": f"Failed to send chat message: {str(e)}",
+                        }
+                    )
+                )
+        else:
+            self.write_message(
+                json.dumps(
+                    {
+                        "type": "error",
+                        "code": "E123",
+                        "message": "Not connected to game server",
+                    }
+                )
+            )
+
     def _handle_player_ready(self, msg_data: Dict[str, Any]):
         """Handle player ready status from LLM agent"""
         if not self.is_llm_agent:
@@ -1166,9 +1282,9 @@ class LLMWSHandler(websocket.WebSocketHandler):
         correlation_id = msg_data.get('correlation_id')
         data = msg_data.get('data', {})
         unit_ids = data.get('unit_ids', [])
-        
+
         logger.info(f"🎯 UNIT_ACTIONS_QUERY received from agent {self.agent_id} for units {unit_ids}")
-        
+
         if not self.is_llm_agent:
             self.write_message(json.dumps({
                 'type': 'error',
@@ -1177,7 +1293,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 'correlation_id': correlation_id
             }))
             return
-        
+
         if self.player_id is None:
             self.write_message(json.dumps({
                 'type': 'error',
@@ -1186,7 +1302,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 'correlation_id': correlation_id
             }))
             return
-        
+
         if not unit_ids or not isinstance(unit_ids, list):
             self.write_message(json.dumps({
                 'type': 'error',
@@ -1195,7 +1311,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 'correlation_id': correlation_id
             }))
             return
-        
+
         try:
             state_extractor = self._get_state_extractor()
             if not state_extractor:
@@ -1206,16 +1322,16 @@ class LLMWSHandler(websocket.WebSocketHandler):
                     'correlation_id': correlation_id
                 }))
                 return
-            
+
             # Process each unit in batch
             units_results = {}
             errors = []
             any_success = False
-            
+
             for unit_id in unit_ids:
                 result = state_extractor.get_unit_actions(unit_id, self.player_id)
                 unit_key = str(unit_id)
-                
+
                 if result.get('error'):
                     error_info = {
                         'code': result.get('error_code', 'E230'),
@@ -1237,7 +1353,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                         'success': True,
                         'actions': actions
                     }
-            
+
             # Build response per protocol spec
             response = {
                 'type': 'unit_actions_response',
@@ -1251,11 +1367,11 @@ class LLMWSHandler(websocket.WebSocketHandler):
             }
             if correlation_id:
                 response['correlation_id'] = correlation_id
-            
+
             self.write_message(json.dumps(response))
             num_actions = sum(len(u['actions']) for u in units_results.values() if u['success'])
             logger.info(f"✓ UNIT_ACTIONS_QUERY SUCCESS for agent {self.agent_id}: {len(unit_ids)} units queried, {len(errors)} errors, {num_actions} actions returned")
-            
+
         except Exception as e:
             logger.error(f"❌ UNIT_ACTIONS_QUERY EXCEPTION for agent {self.agent_id}: {e}")
             self.write_message(json.dumps({
@@ -1264,7 +1380,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 'message': f'Internal error: {str(e)}',
                 'correlation_id': correlation_id
             }))
-    
+
     def _format_unit_actions_for_response(self, unit_id: int, result: Dict[str, Any]) -> List[Dict[str, Any]]:
         """Format unit actions to be directly submittable per protocol spec"""
         formatted_actions = []
@@ -1284,7 +1400,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                     formatted['target'] = {'improvement': params['improvement']}
             formatted_actions.append(formatted)
         return formatted_actions
-    
+
     def _map_action_type(self, action: str) -> str:
         """Map internal action names to protocol action_type values"""
         mapping = {
@@ -1296,7 +1412,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
             'skip': 'unit_skip'
         }
         return mapping.get(action, f'unit_{action}')
-    
+
     def _handle_city_actions_query(self, msg_data: Dict[str, Any]):
         """Handle batch query for available actions on one or more cities
         
@@ -1331,9 +1447,9 @@ class LLMWSHandler(websocket.WebSocketHandler):
         correlation_id = msg_data.get('correlation_id')
         data = msg_data.get('data', {})
         city_ids = data.get('city_ids', [])
-        
+
         logger.info(f"🏙️ CITY_ACTIONS_QUERY received from agent {self.agent_id} for cities {city_ids}")
-        
+
         if not self.is_llm_agent:
             self.write_message(json.dumps({
                 'type': 'error',
@@ -1342,7 +1458,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 'correlation_id': correlation_id
             }))
             return
-        
+
         if self.player_id is None:
             self.write_message(json.dumps({
                 'type': 'error',
@@ -1351,7 +1467,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 'correlation_id': correlation_id
             }))
             return
-        
+
         if not city_ids or not isinstance(city_ids, list):
             self.write_message(json.dumps({
                 'type': 'error',
@@ -1360,7 +1476,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 'correlation_id': correlation_id
             }))
             return
-        
+
         try:
             state_extractor = self._get_state_extractor()
             if not state_extractor:
@@ -1371,16 +1487,16 @@ class LLMWSHandler(websocket.WebSocketHandler):
                     'correlation_id': correlation_id
                 }))
                 return
-            
+
             # Process each city in batch
             cities_results = {}
             errors = []
             any_success = False
-            
+
             for city_id in city_ids:
                 result = state_extractor.get_city_actions(city_id, self.player_id)
                 city_key = str(city_id)
-                
+
                 if result.get('error'):
                     error_info = {
                         'code': result.get('error_code', 'E240'),
@@ -1402,7 +1518,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                         'success': True,
                         'actions': actions
                     }
-            
+
             # Build response per protocol spec
             response = {
                 'type': 'city_actions_response',
@@ -1416,10 +1532,10 @@ class LLMWSHandler(websocket.WebSocketHandler):
             }
             if correlation_id:
                 response['correlation_id'] = correlation_id
-            
+
             self.write_message(json.dumps(response))
             logger.info(f"✓ CITY_ACTIONS_QUERY SUCCESS for agent {self.agent_id}: {len(city_ids)} cities queried, {len(errors)} errors")
-            
+
         except Exception as e:
             logger.error(f"❌ CITY_ACTIONS_QUERY EXCEPTION for agent {self.agent_id}: {e}")
             self.write_message(json.dumps({
@@ -1428,7 +1544,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 'message': f'Internal error: {str(e)}',
                 'correlation_id': correlation_id
             }))
-    
+
     def _format_city_actions_for_response(self, city_id: int, result: Dict[str, Any]) -> List[Dict[str, Any]]:
         """Format city actions to be directly submittable per protocol spec"""
         formatted_actions = []
@@ -1446,7 +1562,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 formatted['target'] = {'improvement': params['improvement']}
             formatted_actions.append(formatted)
         return formatted_actions
-    
+
     def _map_city_action_type(self, action: str) -> str:
         """Map internal city action names to protocol action_type values"""
         mapping = {
@@ -1456,7 +1572,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
             'add_specialist': 'city_add_specialist'
         }
         return mapping.get(action, f'city_{action}')
-    
+
     def _get_state_extractor(self) -> Optional[StateExtractor]:
         """Get or create StateExtractor for current civcom connection"""
         if not self.civcom:
@@ -2805,9 +2921,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                     if attempt < int(max_attempts):
                         time.sleep(float(retry_delay))
             else:
-                error_msg = (
-                    f"Unable to reach civserver at {host}:{port} after {max_attempts} attempts"
-                )
+                error_msg = f"Unable to reach civserver at {host}:{port} after {max_attempts} attempts"
                 raise ConnectionError(error_msg) from last_error
 
             # Create proper FreeCiv login packet (PACKET_SERVER_JOIN_REQ)

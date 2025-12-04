@@ -4,8 +4,8 @@
 
 This document specifies the WebSocket protocol for LLM agent communication between Game Arena and FreeCiv3D. The protocol enables reliable, bidirectional communication for LLM-driven gameplay.
 
-**Version**: 2.0.1
-**Date**: November 29, 2025
+**Version**: 2.1.0
+**Date**: December 3, 2025
 
 ## Architecture
 
@@ -1105,7 +1105,142 @@ All string inputs are scanned for SQL injection patterns:
 }
 ```
 
-### 7. Error Handling
+### 7. Chat Messages
+
+Chat messages enable LLM agents to send text messages and server commands to the FreeCiv server. The primary use cases are:
+
+- **Server commands**: Configure game settings (`/set`), save games (`/save`), start game (`/start`)
+- **Player communication**: Send messages to other players (broadcast)
+
+The FreeCiv server handles its own command restrictions and permissions.
+
+#### CHAT (Request)
+
+Send a chat message or server command to the game.
+
+```json
+{
+  "type": "chat",
+  "agent_id": "my-agent",
+  "timestamp": 1234567890.123,
+  "correlation_id": "chat-001",
+  "data": {
+    "message": "/set xsize 32"
+  }
+}
+```
+
+| Field          | Type   | Required | Description                                 |
+| -------------- | ------ | -------- | ------------------------------------------- |
+| `data.message` | string | Yes      | The chat message or command (max 500 chars) |
+
+**Common Server Commands:**
+
+| Command             | Description                                                                                             |
+| ------------------- | ------------------------------------------------------------------------------------------------------- |
+| `/set xsize 32`     | Set map width to 32 tiles                                                                               |
+| `/set ysize 32`     | Set map height to 32 tiles                                                                              |
+| `/set endturn 100`  | Limit game to 100 turns                                                                                 |
+| `/set victories ""` | Disable spacerace victory                                                                               |
+| `/save`             | Save the current game                                                                                   |
+| `/start`            | Start the game (after all players ready, this can be done in multiple ways without using chat commands) |
+
+**Note:** Map size settings (`xsize`, `ysize`) can only be changed during the pregame phase before the map is generated.
+
+#### CHAT_SENT (Response)
+
+Acknowledgment that the chat message was sent to the server.
+
+```json
+{
+  "type": "chat_sent",
+  "agent_id": "my-agent",
+  "timestamp": 1234567890.124,
+  "correlation_id": "chat-001",
+  "data": {
+    "success": true,
+    "message": "/set xsize 32"
+  }
+}
+```
+
+#### CHAT_MESSAGE (Server Event)
+
+Incoming chat messages from the server (command responses, player messages).
+
+```json
+{
+  "type": "chat_message",
+  "timestamp": 1234567890.125,
+  "data": {
+    "message": "Option xsize set to 32.",
+    "event": 0,
+    "conn_id": -1
+  }
+}
+```
+
+| Field          | Type    | Description                                        |
+| -------------- | ------- | -------------------------------------------------- |
+| `data.message` | string  | The chat message content                           |
+| `data.event`   | integer | Event type code (0 = normal, 100 = error)          |
+| `data.conn_id` | integer | Connection ID of sender (-1 = server, ≥0 = player) |
+
+**Note:** LLM agents receive both the raw `PACKET_CHAT_MSG` (pid=25) packets and the structured `chat_message` events. The `chat_message` event provides a cleaner interface for processing server responses.
+
+#### Chat Validation Rules
+
+- **Max length**: 500 characters
+- **Allowed characters**: All printable characters
+- **Rate limiting**: Subject to standard message rate limits (300/minute)
+
+#### Chat Error Codes
+
+| Code | Description                        |
+| ---- | ---------------------------------- |
+| E170 | Chat message too long (>500 chars) |
+| E171 | Failed to send chat message        |
+| E220 | Missing required field: message    |
+| E401 | Not authenticated as LLM agent     |
+| E123 | Not connected to game server       |
+
+#### Usage Example
+
+```python
+import asyncio
+import json
+import time
+
+async def configure_small_map(websocket):
+    """Configure a small map for quick testing."""
+    
+    commands = [
+        "/set xsize 32",
+        "/set ysize 32", 
+        "/set endturn 100",
+        '/set victories ""'
+    ]
+    
+    for cmd in commands:
+        await websocket.send(json.dumps({
+            "type": "chat",
+            "agent_id": "my-agent",
+            "timestamp": time.time(),
+            "data": {"message": cmd}
+        }))
+        
+        # Wait for acknowledgment
+        response = json.loads(await websocket.recv())
+        if response["type"] == "chat_sent":
+            print(f"Sent: {cmd}")
+        
+        # Wait for server response
+        server_response = json.loads(await websocket.recv())
+        if server_response["type"] == "chat_message":
+            print(f"Server: {server_response['data']['message']}")
+```
+
+### 8. Error Handling
 
 #### ERROR (Response)
 
@@ -2189,6 +2324,14 @@ GET http://localhost:8003/api/metrics
 - `ERROR`: Connection failures and system errors
 
 ## Version History
+
+- **2.1.0** (Dec 2025): Chat message support for server commands
+  - Added `chat` message type for sending chat messages and server commands
+  - Added `chat_sent` acknowledgment response
+  - Added `chat_message` server event for incoming chat (command responses, player messages)
+  - Primary use cases: `/set` commands for game configuration, `/save` for saving games
+  - New error codes: E170 (message too long), E171 (chat send failed)
+  - Updated section numbering (8 message type sections)
 
 - **2.0.1** (Nov 2025): Enhanced documentation and security specifications
   - Added comprehensive input validation rules section

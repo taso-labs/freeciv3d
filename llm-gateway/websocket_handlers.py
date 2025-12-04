@@ -559,6 +559,23 @@ class AgentWebSocketHandler:
             # Preserve optional timestamp
             if "timestamp" in message:
                 transformed["timestamp"] = message["timestamp"]
+        elif msg_type == "chat":
+            # Proxy expects: {type: "chat", message: "...", correlation_id (opt)}
+            # Gateway format: {type: "chat", data: {message: "..."}, ...}
+            chat_message = None
+            if "data" in message and isinstance(message["data"], dict):
+                chat_message = message["data"].get("message")
+            if chat_message is None:
+                chat_message = message.get("message")
+            
+            transformed = {
+                "type": "chat",
+                "message": chat_message
+            }
+            
+            # Preserve optional fields
+            if "correlation_id" in message:
+                transformed["correlation_id"] = message["correlation_id"]
         # For other types, pass through as-is
 
         return transformed
