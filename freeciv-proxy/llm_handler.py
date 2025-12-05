@@ -1490,18 +1490,40 @@ class LLMWSHandler(websocket.WebSocketHandler):
         formatted_actions = []
         for action in result.get('actions', []):
             action_type = action.get('action', '')
+            params = action.get('params', {})
+            is_valid = action.get('is_valid', True)
+            reason = action.get('reason')
+            action_id = action.get('action_id')
+            
             formatted = {
                 'action_type': self._map_action_type(action_type),
-                'actor_id': unit_id
+                'actor_id': unit_id,
+                'is_valid': is_valid
             }
-            # Add target based on action type
-            params = action.get('params', {})
-            if action_type == 'move' and 'direction' in params:
-                # Convert direction to coordinates (simplified)
-                formatted['target'] = {'direction': params['direction']}
-            elif action_type in ('build_city', 'build_improvement'):
-                if 'improvement' in params:
+            
+            # Add reason if action is invalid
+            if not is_valid and reason:
+                formatted['reason'] = reason
+            
+            # Add FreeCiv action ID if available (useful for debugging)
+            if action_id is not None:
+                formatted['action_id'] = action_id
+            
+            # Add target based on action type and params
+            if params:
+                if 'direction' in params:
+                    formatted['target'] = {'direction': params['direction']}
+                    if 'target' in params and isinstance(params['target'], dict):
+                        formatted['target'].update(params['target'])
+                elif 'target' in params:
+                    formatted['target'] = params['target']
+                elif 'improvement' in params:
                     formatted['target'] = {'improvement': params['improvement']}
+                elif 'city' in params:
+                    formatted['target'] = {'city': params['city']}
+                elif params:  # Pass through any other params
+                    formatted['target'] = params
+            
             formatted_actions.append(formatted)
         return formatted_actions
 
@@ -1510,10 +1532,53 @@ class LLMWSHandler(websocket.WebSocketHandler):
         mapping = {
             'move': 'unit_move',
             'fortify': 'unit_fortify',
-            'build_city': 'unit_build_city',
+            'build_city': 'unit_found_city',
+            'join_city': 'unit_join_city',
+            'build_road': 'unit_build_road',
+            'build_irrigation': 'unit_build_irrigation',
+            'build_mine': 'unit_build_mine',
+            'build_base': 'unit_build_base',
             'build_improvement': 'unit_build_improvement',
+            'transform': 'unit_transform',
+            'cultivate': 'unit_cultivate',
+            'plant': 'unit_plant',
             'attack': 'unit_attack',
-            'skip': 'unit_skip'
+            'suicide_attack': 'unit_suicide_attack',
+            'bombard': 'unit_bombard',
+            'capture': 'unit_capture',
+            'conquer_city': 'unit_conquer_city',
+            'nuke': 'unit_nuke',
+            'nuke_city': 'unit_nuke_city',
+            'nuke_units': 'unit_nuke_units',
+            'pillage': 'unit_pillage',
+            'clean': 'unit_clean',
+            'trade_route': 'unit_trade_route',
+            'marketplace': 'unit_marketplace',
+            'help_wonder': 'unit_help_wonder',
+            'establish_embassy': 'unit_establish_embassy',
+            'investigate_city': 'spy_investigate_city',
+            'poison': 'spy_poison',
+            'sabotage_city': 'spy_sabotage_city',
+            'steal_tech': 'spy_steal_tech',
+            'incite_city': 'spy_incite_city',
+            'bribe_unit': 'spy_bribe_unit',
+            'sabotage_unit': 'spy_sabotage_unit',
+            'spy_attack': 'spy_attack',
+            'board': 'unit_board',
+            'deboard': 'unit_deboard',
+            'embark': 'unit_embark',
+            'disembark': 'unit_disembark',
+            'load': 'unit_load',
+            'unload': 'unit_unload',
+            'disband': 'unit_disband',
+            'home_city': 'unit_home_city',
+            'upgrade': 'unit_upgrade',
+            'convert': 'unit_convert',
+            'heal': 'unit_heal',
+            'airlift': 'unit_airlift',
+            'paradrop': 'unit_paradrop',
+            'skip': 'unit_skip',
+            'sentry': 'unit_sentry',
         }
         return mapping.get(action, f'unit_{action}')
 

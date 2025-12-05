@@ -38,10 +38,143 @@ from packet_constants import (
     PACKET_RULESET_UNIT,
     PACKET_RULESET_BUILDING,
     PACKET_RULESET_TECH,
+    PACKET_RULESET_TERRAIN,
+    PACKET_RULESET_EXTRA,
+    PACKET_RULESET_UNIT_CLASS,
     PACKET_CONN_PING,
     PACKET_CONN_PONG,
     get_packet_name
 )
+
+# FreeCiv Action IDs - from freeciv/freeciv-web/src/main/webapp/javascript/fc_types.js
+# These define the action types that units can perform
+ACTION_ESTABLISH_EMBASSY = 0
+ACTION_SPY_INVESTIGATE_CITY = 2
+ACTION_SPY_POISON = 4
+ACTION_SPY_STEAL_GOLD = 6
+ACTION_SPY_SABOTAGE_CITY = 8
+ACTION_SPY_TARGETED_SABOTAGE_CITY = 10
+ACTION_SPY_STEAL_TECH = 14
+ACTION_SPY_TARGETED_STEAL_TECH = 16
+ACTION_SPY_INCITE_CITY = 18
+ACTION_TRADE_ROUTE = 20
+ACTION_MARKETPLACE = 21
+ACTION_HELP_WONDER = 22
+ACTION_SPY_BRIBE_UNIT = 23
+ACTION_CAPTURE_UNITS = 24
+ACTION_SPY_SABOTAGE_UNIT = 25
+ACTION_FOUND_CITY = 27
+ACTION_JOIN_CITY = 28
+ACTION_STEAL_MAPS = 29
+ACTION_SPY_NUKE = 31
+ACTION_NUKE = 33
+ACTION_NUKE_CITY = 34
+ACTION_NUKE_UNITS = 35
+ACTION_DESTROY_CITY = 36
+ACTION_EXPEL_UNIT = 37
+ACTION_RECYCLE_UNIT = 38
+ACTION_DISBAND_UNIT = 39
+ACTION_HOME_CITY = 40
+ACTION_UPGRADE_UNIT = 42
+ACTION_CONVERT = 43
+ACTION_AIRLIFT = 44
+ACTION_ATTACK = 45
+ACTION_SUICIDE_ATTACK = 46
+ACTION_CONQUER_CITY = 49
+ACTION_BOMBARD = 53
+ACTION_FORTIFY = 57
+ACTION_CULTIVATE = 58
+ACTION_PLANT = 59
+ACTION_TRANSFORM_TERRAIN = 60
+ACTION_ROAD = 61
+ACTION_IRRIGATE = 62
+ACTION_MINE = 63
+ACTION_BASE = 64
+ACTION_PILLAGE = 65
+ACTION_CLEAN_POLLUTION = 66
+ACTION_CLEAN_FALLOUT = 67
+ACTION_TRANSPORT_BOARD = 68
+ACTION_TRANSPORT_DEBOARD = 71
+ACTION_TRANSPORT_EMBARK = 72
+ACTION_TRANSPORT_DISEMBARK1 = 76
+ACTION_TRANSPORT_LOAD = 80
+ACTION_TRANSPORT_UNLOAD = 83
+ACTION_SPY_SPREAD_PLAGUE = 84
+ACTION_SPY_ATTACK = 85
+ACTION_HUT_ENTER = 90
+ACTION_HEAL_UNIT = 98
+ACTION_PARADROP = 100
+ACTION_UNIT_MOVE = 108
+ACTION_CLEAN = 111
+ACTION_COUNT = 116
+
+# Map FreeCiv action IDs to protocol action type strings
+ACTION_ID_TO_TYPE = {
+    ACTION_FOUND_CITY: 'unit_found_city',
+    ACTION_JOIN_CITY: 'unit_join_city',
+    ACTION_ATTACK: 'unit_attack',
+    ACTION_SUICIDE_ATTACK: 'unit_suicide_attack',
+    ACTION_BOMBARD: 'unit_bombard',
+    ACTION_CAPTURE_UNITS: 'unit_capture',
+    ACTION_CONQUER_CITY: 'unit_conquer_city',
+    ACTION_NUKE: 'unit_nuke',
+    ACTION_NUKE_CITY: 'unit_nuke_city',
+    ACTION_NUKE_UNITS: 'unit_nuke_units',
+    ACTION_FORTIFY: 'unit_fortify',
+    ACTION_ROAD: 'unit_build_road',
+    ACTION_IRRIGATE: 'unit_build_irrigation',
+    ACTION_MINE: 'unit_build_mine',
+    ACTION_BASE: 'unit_build_base',
+    ACTION_PILLAGE: 'unit_pillage',
+    ACTION_CLEAN: 'unit_clean',
+    ACTION_CLEAN_POLLUTION: 'unit_clean',
+    ACTION_CLEAN_FALLOUT: 'unit_clean',
+    ACTION_TRANSFORM_TERRAIN: 'unit_transform',
+    ACTION_CULTIVATE: 'unit_cultivate',
+    ACTION_PLANT: 'unit_plant',
+    ACTION_TRADE_ROUTE: 'unit_trade_route',
+    ACTION_MARKETPLACE: 'unit_marketplace',
+    ACTION_HELP_WONDER: 'unit_help_wonder',
+    ACTION_ESTABLISH_EMBASSY: 'unit_establish_embassy',
+    ACTION_SPY_INVESTIGATE_CITY: 'spy_investigate_city',
+    ACTION_SPY_POISON: 'spy_poison',
+    ACTION_SPY_SABOTAGE_CITY: 'spy_sabotage_city',
+    ACTION_SPY_TARGETED_SABOTAGE_CITY: 'spy_targeted_sabotage_city',
+    ACTION_SPY_STEAL_TECH: 'spy_steal_tech',
+    ACTION_SPY_TARGETED_STEAL_TECH: 'spy_targeted_steal_tech',
+    ACTION_SPY_INCITE_CITY: 'spy_incite_city',
+    ACTION_SPY_STEAL_GOLD: 'spy_steal_gold',
+    ACTION_STEAL_MAPS: 'spy_steal_maps',
+    ACTION_SPY_NUKE: 'spy_nuke',
+    ACTION_SPY_SPREAD_PLAGUE: 'spy_spread_plague',
+    ACTION_SPY_BRIBE_UNIT: 'spy_bribe_unit',
+    ACTION_SPY_SABOTAGE_UNIT: 'spy_sabotage_unit',
+    ACTION_SPY_ATTACK: 'spy_attack',
+    ACTION_DISBAND_UNIT: 'unit_disband',
+    ACTION_RECYCLE_UNIT: 'unit_disband',
+    ACTION_HOME_CITY: 'unit_home_city',
+    ACTION_UPGRADE_UNIT: 'unit_upgrade',
+    ACTION_CONVERT: 'unit_convert',
+    ACTION_AIRLIFT: 'unit_airlift',
+    ACTION_PARADROP: 'unit_paradrop',
+    ACTION_TRANSPORT_BOARD: 'unit_board',
+    ACTION_TRANSPORT_DEBOARD: 'unit_deboard',
+    ACTION_TRANSPORT_EMBARK: 'unit_embark',
+    ACTION_TRANSPORT_DISEMBARK1: 'unit_disembark',
+    ACTION_TRANSPORT_LOAD: 'unit_load',
+    ACTION_TRANSPORT_UNLOAD: 'unit_unload',
+    ACTION_EXPEL_UNIT: 'unit_expel',
+    ACTION_HEAL_UNIT: 'unit_heal',
+    ACTION_HUT_ENTER: 'unit_explore',
+    ACTION_UNIT_MOVE: 'unit_move',
+}
+
+# Terrain class constants - from freeciv/common/terrain.h
+TC_LAND = 0  # Land terrain
+TC_OCEAN = 1  # Ocean terrain
+
+# Default citymindist (minimum distance between cities)
+DEFAULT_CITYMINDIST = 2
 
 HOST = '127.0.0.1'
 logger = logging.getLogger("freeciv-proxy")
@@ -188,6 +321,15 @@ class CivCom(Thread):
         self.unit_types = {}      # {unit_type_id: PACKET_RULESET_UNIT data}
         self.improvements = {}    # {building_id: PACKET_RULESET_BUILDING data}
         self.techs = {}           # {tech_id: PACKET_RULESET_TECH data}
+        self.terrains = {}        # {terrain_id: PACKET_RULESET_TERRAIN data}
+        self.extras = {}          # {extra_id: PACKET_RULESET_EXTRA data}
+        self.unit_classes = {}    # {unit_class_id: PACKET_RULESET_UNIT_CLASS data}
+        
+        # Game settings from PACKET_GAME_INFO
+        self.citymindist = DEFAULT_CITYMINDIST  # Minimum distance between cities
+        
+        # Tile data storage for terrain lookups
+        self.tiles = {}  # {tile_index: {terrain, extras, ...}}
 
     def _get_nation_name(self, nation_id):
         """Convert nation ID to human-readable name using nations registry.
@@ -218,6 +360,161 @@ class CivCom(Thread):
             # If not found in registry, return generic name
             return f'Nation{nation_id}'
         return 'Unknown'
+
+    def utype_can_do_action(self, unit_type_id: int, action_id: int) -> bool:
+        """Check if a unit type can perform a specific action.
+        
+        Uses the utype_actions bitfield from PACKET_RULESET_UNIT to determine
+        if the unit type has the capability to perform the given action.
+        
+        This mirrors the FreeCiv web client's utype_can_do_action() function.
+        
+        Args:
+            unit_type_id: The unit type ID from PACKET_UNIT_INFO
+            action_id: The action ID (e.g., ACTION_FOUND_CITY, ACTION_ATTACK)
+            
+        Returns:
+            True if the unit type can perform the action, False otherwise
+        """
+        if action_id < 0 or action_id >= ACTION_COUNT:
+            return False
+            
+        unit_type = self.unit_types.get(unit_type_id)
+        if not unit_type:
+            return False
+            
+        # The utype_actions field is a list of integers representing a bitfield
+        # Each integer contains 32 bits of action capability flags
+        utype_actions = unit_type.get('utype_actions', [])
+        if not utype_actions:
+            return False
+            
+        # Calculate which integer in the array and which bit within it
+        array_index = action_id // 32
+        bit_index = action_id % 32
+        
+        if array_index >= len(utype_actions):
+            return False
+            
+        # Check if the bit is set
+        return bool(utype_actions[array_index] & (1 << bit_index))
+    
+    def get_unit_type_actions(self, unit_type_id: int) -> list:
+        """Get all actions a unit type can perform.
+        
+        Returns a list of action IDs that the unit type is capable of performing.
+        
+        Args:
+            unit_type_id: The unit type ID from PACKET_UNIT_INFO
+            
+        Returns:
+            List of action IDs the unit type can perform
+        """
+        actions = []
+        for action_id in range(ACTION_COUNT):
+            if self.utype_can_do_action(unit_type_id, action_id):
+                actions.append(action_id)
+        return actions
+    
+    def get_terrain_class(self, terrain_id: int) -> int:
+        """Get the terrain class (land/ocean) for a terrain type.
+        
+        Args:
+            terrain_id: The terrain type ID
+            
+        Returns:
+            TC_LAND (0) for land terrain, TC_OCEAN (1) for ocean terrain
+        """
+        terrain = self.terrains.get(terrain_id)
+        if not terrain:
+            return TC_LAND  # Default to land if unknown
+        return terrain.get('tclass', TC_LAND)
+    
+    def get_tile_terrain_class(self, tile_index: int) -> int:
+        """Get the terrain class for a tile.
+        
+        Args:
+            tile_index: The tile index
+            
+        Returns:
+            TC_LAND (0) for land, TC_OCEAN (1) for ocean
+        """
+        tile = self.tiles.get(tile_index)
+        if not tile:
+            return TC_LAND  # Default to land if unknown
+        terrain_id = tile.get('terrain')
+        if terrain_id is None:
+            return TC_LAND
+        return self.get_terrain_class(terrain_id)
+    
+    def is_unit_class_native_to_terrain(self, unit_class_id: int, terrain_id: int) -> bool:
+        """Check if a unit class can move on a terrain type.
+        
+        Args:
+            unit_class_id: The unit class ID
+            terrain_id: The terrain type ID
+            
+        Returns:
+            True if the unit class can move on the terrain
+        """
+        unit_class = self.unit_classes.get(unit_class_id)
+        terrain = self.terrains.get(terrain_id)
+        
+        if not unit_class or not terrain:
+            return True  # Allow by default if data not available
+            
+        # Check native_to field in terrain
+        native_to = terrain.get('native_to', [])
+        return unit_class_id in native_to if native_to else True
+    
+    def can_city_be_founded_at(self, tile_index: int) -> tuple:
+        """Check if a city can be founded at the given tile.
+        
+        Checks the citymindist constraint against all known cities.
+        
+        Args:
+            tile_index: The tile index where the city would be founded
+            
+        Returns:
+            Tuple of (can_found: bool, reason: str or None)
+        """
+        xsize = self.map_info.get('width', 80)
+        ysize = self.map_info.get('height', 50)
+        
+        # Calculate coordinates from tile index
+        tile_x = tile_index % xsize
+        tile_y = tile_index // xsize
+        
+        # Check terrain - can't build on ocean
+        tile = self.tiles.get(tile_index)
+        if tile:
+            terrain_id = tile.get('terrain')
+            if terrain_id is not None and self.get_terrain_class(terrain_id) == TC_OCEAN:
+                return (False, "Cannot found city on ocean")
+        
+        # Check distance to all cities
+        for city_id, city in self.player_cities.items():
+            city_tile = city.get('tile')
+            if city_tile is not None:
+                city_x = city_tile % xsize
+                city_y = city_tile // xsize
+                
+                # Calculate distance (Chebyshev distance for FreeCiv)
+                dx = abs(tile_x - city_x)
+                dy = abs(tile_y - city_y)
+                
+                # Handle map wrapping if applicable
+                if self.map_info.get('wrap_x', False):
+                    dx = min(dx, xsize - dx)
+                if self.map_info.get('wrap_y', False):
+                    dy = min(dy, ysize - dy)
+                
+                distance = max(dx, dy)
+                
+                if distance < self.citymindist:
+                    return (False, f"Too close to city {city.get('name', city_id)} (distance {distance}, min {self.citymindist})")
+        
+        return (True, None)
 
     def run(self):
         try:
@@ -585,9 +882,15 @@ class CivCom(Thread):
                 }
                 logger.info(f"Stored map info: {self.map_info['width']}x{self.map_info['height']}")
 
-            # Game info packet (turn number, etc)
+            # Game info packet (turn number, citymindist, etc)
             elif packet_type == PACKET_GAME_INFO:
                 self.game_turn = packet.get('turn', self.game_turn)
+                # Extract citymindist (minimum distance between cities) from game info
+                # This is critical for validating city founding actions
+                citymindist = packet.get('citymindist')
+                if citymindist is not None:
+                    self.citymindist = citymindist
+                    logger.debug(f"Updated citymindist: {self.citymindist}")
                 logger.debug(f"Updated game turn: {self.game_turn}")
 
             # CRITICAL: Connection info packet - contains player_num assignment
@@ -690,23 +993,35 @@ class CivCom(Thread):
                     logger.info(f"✓ Stored unit {unit_id} (type={unit_type_name}, type_id={unit_type_raw}) for owner {owner}")
 
             # City info packet - stores cities by ID for all players
+            # NOTE: Verified against packets.def - production is split into production_kind/production_value
             elif packet_type == PACKET_CITY_INFO:
                 city_id = packet.get('id')
                 owner = packet.get('owner')
                 if city_id is not None and owner is not None:
+                    # Calculate x/y from tile index
+                    tile_idx = packet.get('tile')
+                    x, y = None, None
+                    if tile_idx is not None:
+                        xsize = self.map_info.get('width', 80)
+                        x = tile_idx % xsize
+                        y = tile_idx // xsize
+                    
                     city_data = {
                         'id': city_id,
                         'owner': owner,
                         'name': packet.get('name', f'City{city_id}'),
-                        'tile': packet.get('tile'),
+                        'tile': tile_idx,
+                        'x': x,
+                        'y': y,
                         'size': packet.get('size', 1),
-                        'production': packet.get('production'),
+                        # Production is split into kind (0=unit, 1=improvement) and value (type id)
+                        'production_kind': packet.get('production_kind'),
+                        'production_value': packet.get('production_value'),
                         'food_stock': packet.get('food_stock', 0),
                         'shield_stock': packet.get('shield_stock', 0),
-                        'trade': packet.get('trade', [0, 0, 0]),
-                        'luxury': packet.get('luxury', 0),
-                        'science': packet.get('science', 0),
-                        'tax': packet.get('tax', 0)
+                        # surplus and prod are arrays indexed by O_FOOD, O_SHIELD, O_TRADE, etc.
+                        'surplus': packet.get('surplus', []),
+                        'prod': packet.get('prod', []),
                     }
 
                     # Convert player_cities to dict if it's still a list
@@ -733,14 +1048,28 @@ class CivCom(Thread):
 
             # Tile info packet - visibility/fog-of-war updates after movement
             # Sent by server when units move and reveal new tiles
-            # Critical for handling unit_move responses
+            # Critical for action validation (terrain checks, city proximity)
+            # NOTE: packets.def shows PACKET_TILE_INFO has 'tile' (index), not 'x'/'y'
             elif packet_type == PACKET_TILE_INFO:
-                tile_x = packet.get('x')
-                tile_y = packet.get('y')
+                tile_index = packet.get('tile')
                 terrain = packet.get('terrain')
-                if tile_x is not None and tile_y is not None:
-                    logger.debug(f"Tile update at ({tile_x}, {tile_y}) - terrain={terrain}")
-                    # Could store tile info in self.visible_tiles if needed for state queries
+                # Calculate x/y from tile index (same formula as PACKET_UNIT_INFO)
+                if tile_index is not None:
+                    xsize = self.map_info.get('width', 80)
+                    tile_x = tile_index % xsize
+                    tile_y = tile_index // xsize
+                    # Store comprehensive tile data for action validation
+                    self.tiles[tile_index] = {
+                        'x': tile_x,
+                        'y': tile_y,
+                        'terrain': terrain,
+                        'extras': packet.get('extras', []),
+                        'resource': packet.get('resource'),
+                        'owner': packet.get('owner'),
+                        'worked': packet.get('worked'),
+                        'known': packet.get('known', 0),
+                    }
+                    logger.debug(f"Tile update at ({tile_x}, {tile_y}) - terrain={terrain}, index={tile_index}")
 
             # Unit short info packet - abbreviated unit updates
             # Sent by server for units entering/leaving vision range
@@ -794,6 +1123,33 @@ class CivCom(Thread):
                     # Store normalized name in packet for easier lookup
                     self.techs[tech_id]['name'] = tech_name
                     logger.debug(f"Registered tech: {tech_name} (id={tech_id})")
+
+            # RULESET terrain packet - defines terrain types (Plains, Ocean, Hills, etc.)
+            # Used for movement cost calculations and action validity checks
+            elif packet_type == PACKET_RULESET_TERRAIN:
+                terrain_id = packet.get('id')
+                terrain_name = packet.get('name', '')
+                if terrain_id is not None:
+                    self.terrains[terrain_id] = packet
+                    logger.debug(f"Registered terrain: {terrain_name} (id={terrain_id})")
+            
+            # RULESET extra packet - defines extras (roads, irrigation, mines, etc.)
+            # Used for terrain improvement action validity
+            elif packet_type == PACKET_RULESET_EXTRA:
+                extra_id = packet.get('id')
+                extra_name = packet.get('name', '')
+                if extra_id is not None:
+                    self.extras[extra_id] = packet
+                    logger.debug(f"Registered extra: {extra_name} (id={extra_id})")
+            
+            # RULESET unit class packet - defines unit classes (Land, Sea, Air, etc.)
+            # Used for terrain accessibility checks
+            elif packet_type == PACKET_RULESET_UNIT_CLASS:
+                class_id = packet.get('id')
+                class_name = packet.get('name', '')
+                if class_id is not None:
+                    self.unit_classes[class_id] = packet
+                    logger.debug(f"Registered unit class: {class_name} (id={class_id})")
 
             # CRITICAL: Connection ping packet - MUST respond with pong to keep connection alive
             # FreeCiv civserver sends PACKET_CONN_PING every ~2 minutes to verify connection health
