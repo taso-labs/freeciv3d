@@ -845,8 +845,14 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 normalized["city_id"] = action_data["city_id"]
 
             target = action_data.get("target", {})
-            if isinstance(target, dict) and "value" in target:
-                production = target["value"]
+            if isinstance(target, dict):
+                # Support multiple field names for production
+                if "value" in target:
+                    production = target["value"]
+                elif "production" in target:
+                    production = target["production"]
+                else:
+                    production = action_data.get("production_type", "")
             elif isinstance(target, str):
                 production = target
             else:
