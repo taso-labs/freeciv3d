@@ -778,9 +778,31 @@ class LLMWSHandler(websocket.WebSocketHandler):
         # Build normalized action
         normalized = {"type": action_type}
 
-        # Map actor_id to player_id if present
+        # Map actor_id based on action type
+        # NOTE: game_arena uses actor_id for different meanings:
+        # - unit actions: actor_id is a unit ID
+        # - city actions: actor_id is a city ID
+        # - player-level actions: actor_id is a player ID
+        # Map to the appropriate normalized key and don't overwrite explicit fields
         if "actor_id" in action_data:
-            normalized["player_id"] = action_data["actor_id"]
+            # Prefer explicit unit_id/city_id/player_id if provided
+            if action_data.get("unit_id") is not None:
+                normalized["unit_id"] = action_data["unit_id"]
+            elif action_data.get("city_id") is not None:
+                normalized["city_id"] = action_data["city_id"]
+            elif action_data.get("player_id") is not None:
+                normalized["player_id"] = action_data["player_id"]
+            else:
+                # Heuristics: decide mapping based on action type
+                if action_type.startswith("unit_"):
+                    normalized["unit_id"] = action_data["actor_id"]
+                elif action_type.startswith("city_"):
+                    normalized["city_id"] = action_data["actor_id"]
+                elif action_type in ("tech_research", "end_turn", "diplomacy_message"):
+                    normalized["player_id"] = action_data["actor_id"]
+                else:
+                    # Fallback: if unknown action type, leave as player_id to be conservative
+                    normalized["player_id"] = action_data["actor_id"]
 
         # Action-specific field mappings
         if action_type == "tech_research":
