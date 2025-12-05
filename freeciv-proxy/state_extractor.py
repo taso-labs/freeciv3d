@@ -776,9 +776,16 @@ class StateExtractor:
         tile_index = unit.get('tile')
         x = unit.get('x', 0)
         y = unit.get('y', 0)
+        is_transported = unit.get('transported', False)
         
         # Get civcom for ruleset data
         civcom = self._get_civcom_for_player(player_id)
+        
+        # Check if unit is currently working on an activity
+        # These activities should not be interrupted
+        working_activities = {'road', 'railroad', 'mine', 'irrigate', 'transform', 
+                              'fortress', 'airbase', 'pollution', 'fallout', 'base'}
+        is_working = activity in working_activities
         
         # Direction mappings for movement
         directions = ['n', 'ne', 'e', 'se', 's', 'sw', 'w', 'nw']
@@ -825,6 +832,12 @@ class StateExtractor:
                 target_index = target_x + target_y * xsize
                 return (target_x, target_y, target_index)
             return (target_x, target_y, None)
+        
+        # If unit is working on an improvement, add a "continue_work" action
+        # This signals to the AI that it should NOT interrupt this unit
+        if is_working:
+            add_action('continue_work', {'current_activity': activity}, True, 
+                      f"Unit is building {activity}")
         
         # === MOVEMENT ACTIONS ===
         if moves_left > 0:
@@ -1029,18 +1042,28 @@ class StateExtractor:
                 add_action(action_name, {}, True, None, action_id)
         
         # === TRANSPORT ACTIONS ===
-        transport_actions = [
-            (ACTION_TRANSPORT_BOARD, 'board'),
-            (ACTION_TRANSPORT_DEBOARD, 'deboard'),
-            (ACTION_TRANSPORT_EMBARK, 'embark'),
-            (ACTION_TRANSPORT_DISEMBARK1, 'disembark'),
-            (ACTION_TRANSPORT_LOAD, 'load'),
-            (ACTION_TRANSPORT_UNLOAD, 'unload'),
-        ]
-        
-        for action_id, action_name in transport_actions:
-            if can_do_action(action_id):
-                add_action(action_name, {}, True, None, action_id)
+        # Only offer disembark/deboard if unit is actually on a transport
+        # Only offer embark/board if unit is NOT on a transport
+        if is_transported:
+            # Unit is on a transport - can disembark
+            disembark_actions = [
+                (ACTION_TRANSPORT_DEBOARD, 'deboard'),
+                (ACTION_TRANSPORT_DISEMBARK1, 'disembark'),
+                (ACTION_TRANSPORT_UNLOAD, 'unload'),
+            ]
+            for action_id, action_name in disembark_actions:
+                if can_do_action(action_id):
+                    add_action(action_name, {}, True, None, action_id)
+        else:
+            # Unit is NOT on a transport - can embark
+            embark_actions = [
+                (ACTION_TRANSPORT_BOARD, 'board'),
+                (ACTION_TRANSPORT_EMBARK, 'embark'),
+                (ACTION_TRANSPORT_LOAD, 'load'),
+            ]
+            for action_id, action_name in embark_actions:
+                if can_do_action(action_id):
+                    add_action(action_name, {}, True, None, action_id)
         
         # === UNIT MANAGEMENT ACTIONS ===
         if can_do_action(ACTION_DISBAND_UNIT):

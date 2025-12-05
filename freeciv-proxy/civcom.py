@@ -888,6 +888,11 @@ class CivCom(Thread):
                         logger.info(f"Sent PACKET_NATION_SELECT_REQ (nation_no={msg_json.get('nation_no')}) for {self.username}")
                     elif pid == 11:  # PACKET_PLAYER_READY
                         logger.info(f"Sent PACKET_PLAYER_READY (player_no={msg_json.get('player_no')}) for {self.username}")
+                    elif pid == 73:  # PACKET_UNIT_ORDERS - log all unit orders for debugging
+                        unit_id = msg_json.get('unit_id')
+                        dest_tile = msg_json.get('dest_tile')
+                        orders = msg_json.get('orders', [])
+                        logger.info(f"📦 Sent PACKET_UNIT_ORDERS pid=73: unit={unit_id} dest_tile={dest_tile} orders={orders}")
                     else:
                         logger.debug(f"Sent packet pid={pid} for {self.username}")
                 except:

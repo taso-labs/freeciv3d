@@ -595,7 +595,10 @@ class LLMWSHandler(websocket.WebSocketHandler):
             logger.warning(f"🔓 Packet buffering DISABLED due to exception for {self.agent_id} - cleared {buffer_count} buffered packets")
 
             error_response = error_handler.handle_system_error(
-                "authentication", e, self.agent_id, self.session_id
+                agent_id=self.agent_id, 
+                operation="authentication", 
+                error=e, 
+                session_id=self.session_id
             )
             self.write_message(error_response.to_json())
 
@@ -2688,7 +2691,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 'target_id': action.get('cargo_id', action.get('target_id', -1)),
                 'sub_tgt_id': action.get('sub_tgt_id', -1),
                 'name': '',
-                'action_type': 80  # ACTION_TRANSPORT_UNLOAD (approximate)
+                'action_type': 83  # ACTION_TRANSPORT_UNLOAD
             }
         elif action_type == 'unit_airlift':
             return {
