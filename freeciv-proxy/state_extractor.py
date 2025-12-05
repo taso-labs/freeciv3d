@@ -562,9 +562,9 @@ class StateExtractor:
             state = civcom.get_full_state(player_id)
             all_actions = self._generate_legal_actions_from_state(state, player_id)
 
-            # Sort by priority (highest first) and take top 20
+            # Sort by priority (highest first)
             sorted_actions = sorted(all_actions, key=lambda x: x.get('priority', 0), reverse=True)
-            return sorted_actions[:20]
+            return sorted_actions
 
         except (CivComNotFoundError, StateExtractionError) as e:
             # Re-raise specific exceptions with preserved context

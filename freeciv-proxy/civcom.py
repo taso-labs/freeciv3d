@@ -41,6 +41,7 @@ from packet_constants import (
     PACKET_RULESET_TERRAIN,
     PACKET_RULESET_EXTRA,
     PACKET_RULESET_UNIT_CLASS,
+    PACKET_WEB_RULESET_UNIT_ADDITION,
     PACKET_CONN_PING,
     PACKET_CONN_PONG,
     get_packet_name
@@ -381,23 +382,40 @@ class CivCom(Thread):
             
         unit_type = self.unit_types.get(unit_type_id)
         if not unit_type:
-            return False
+            # Unit type not found - ruleset data may not be loaded yet
+            # Log this so we can debug why PACKET_RULESET_UNIT wasn't received
+            logger.warning(
+                f"utype_can_do_action: unit_type_id={unit_type_id} not found in unit_types "
+                f"(have {len(self.unit_types)} unit types). "
+                f"PACKET_RULESET_UNIT may not have been received. Allowing action {action_id}."
+            )
+            return True  # Allow action as defensive fallback
             
-        # The utype_actions field is a list of integers representing a bitfield
-        # Each integer contains 32 bits of action capability flags
+        # The utype_actions is a byte array (list of bytes, not 32-bit integers)
+        # Each byte contains 8 bits of action capability flags
+        # This is populated from PACKET_WEB_RULESET_UNIT_ADDITION (pid=260)
         utype_actions = unit_type.get('utype_actions', [])
         if not utype_actions:
-            return False
+            # Defensive fallback: if utype_actions not yet received, allow action
+            # This prevents blocking valid actions during ruleset loading race conditions
+            unit_name = unit_type.get('name', f'unit_type_{unit_type_id}')
+            logger.warning(
+                f"utype_actions not populated for unit type {unit_name} (id={unit_type_id}). "
+                f"PACKET_WEB_RULESET_UNIT_ADDITION may not have been received yet. "
+                f"Allowing action {action_id} as fallback."
+            )
+            return True
             
-        # Calculate which integer in the array and which bit within it
-        array_index = action_id // 32
-        bit_index = action_id % 32
+        # Calculate which byte in the array and which bit within that byte
+        # utype_actions is a byte array where each byte contains 8 action bits
+        byte_index = action_id // 8
+        bit_index = action_id % 8
         
-        if array_index >= len(utype_actions):
+        if byte_index >= len(utype_actions):
             return False
             
-        # Check if the bit is set
-        return bool(utype_actions[array_index] & (1 << bit_index))
+        # Check if the bit is set (bit order within byte: LSB first)
+        return bool(utype_actions[byte_index] & (1 << bit_index))
     
     def get_unit_type_actions(self, unit_type_id: int) -> list:
         """Get all actions a unit type can perform.
@@ -1098,7 +1116,35 @@ class CivCom(Thread):
                 unit_name = packet.get('name')
                 if unit_id is not None and unit_name:
                     self.unit_types[unit_id] = packet
+                    # Check for pending utype_actions from PACKET_WEB_RULESET_UNIT_ADDITION
+                    # (handles case where addition packet arrived before base packet)
+                    if hasattr(self, '_pending_unit_additions') and unit_id in self._pending_unit_additions:
+                        self.unit_types[unit_id]['utype_actions'] = self._pending_unit_additions.pop(unit_id)
+                        logger.debug(f"Merged buffered utype_actions for unit type: {unit_name} (id={unit_id})")
                     logger.debug(f"Registered unit type: {unit_name} (id={unit_id})")
+
+            # WEB_RULESET_UNIT_ADDITION packet - contains utype_actions bitfield
+            # This packet is sent AFTER PACKET_RULESET_UNIT and contains the action
+            # capability bitfield that defines what actions each unit type can perform.
+            # Must be merged into existing unit_types entry (mirrors web client behavior).
+            # See: freeciv-web/src/main/webapp/javascript/packhand.js handle_web_ruleset_unit_addition()
+            elif packet_type == PACKET_WEB_RULESET_UNIT_ADDITION:
+                unit_id = packet.get('id')
+                if unit_id is not None:
+                    if unit_id in self.unit_types:
+                        # Merge utype_actions into existing unit type entry
+                        # utype_actions is a list of integers representing the action bitfield
+                        utype_actions = packet.get('utype_actions', [])
+                        self.unit_types[unit_id]['utype_actions'] = utype_actions
+                        unit_name = self.unit_types[unit_id].get('name', f'unit_{unit_id}')
+                        logger.debug(f"Merged utype_actions for unit type: {unit_name} (id={unit_id}, actions_len={len(utype_actions)})")
+                    else:
+                        # Handle case where addition packet arrives before base packet
+                        # Store it for later merging when PACKET_RULESET_UNIT arrives
+                        if not hasattr(self, '_pending_unit_additions'):
+                            self._pending_unit_additions = {}
+                        self._pending_unit_additions[unit_id] = packet.get('utype_actions', [])
+                        logger.debug(f"Buffered utype_actions for unit type id={unit_id} (base packet not yet received)")
 
             # RULESET building packet - defines improvements (Barracks, Granary, etc.)
             # Mirrors FreeCiv web client's improvements[] storage pattern

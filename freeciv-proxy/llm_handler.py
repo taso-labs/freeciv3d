@@ -2212,11 +2212,11 @@ class LLMWSHandler(websocket.WebSocketHandler):
             'description': 'End turn and advance game'
         })
 
-        # Sort by priority and limit to top 20 actions (increased from 15 to ensure end_turn is included)
+        # Sort by priority
         priority_order = {'high': 3, 'medium': 2, 'low': 1}
         actions.sort(key=lambda x: priority_order.get(x.get('priority', 'low'), 1), reverse=True)
 
-        return actions[:20]
+        return actions
 
     def _get_current_game_state(self) -> Optional[Dict[str, Any]]:
         """Get current game state for validation"""
