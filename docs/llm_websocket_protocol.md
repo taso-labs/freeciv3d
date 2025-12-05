@@ -708,7 +708,7 @@ City creation and unit-city interactions.
 
 | Action Type       | Description                        | Target                        |
 | ----------------- | ---------------------------------- | ----------------------------- |
-| `unit_found_city` | Found new city at current location | `{"name": string}` (optional) |
+| `unit_build_city` | Found new city at current location | `{"name": string}` (optional) |
 | `unit_join_city`  | Join city to add population        | `{"city_id": int}`            |
 | `unit_home_city`  | Change unit's home city            | `{"city_id": int}`            |
 
@@ -720,7 +720,7 @@ City creation and unit-city interactions.
   "agent_id": "my-agent",
   "timestamp": 1234567890.123,
   "data": {
-    "action_type": "unit_found_city",
+    "action_type": "unit_build_city",
     "actor_id": 456,
     "target": {"name": "New Rome"}
   }
@@ -882,7 +882,7 @@ All user-provided input fields must adhere to validation constraints to ensure s
 
 #### City Names
 
-Used in `unit_found_city` action:
+Used in `unit_build_city` action:
 
 - **Max length**: 50 characters
 - **Allowed characters**: Alphanumeric, spaces, underscores, hyphens `[a-zA-Z0-9 _-]`
@@ -1003,7 +1003,7 @@ All string inputs are scanned for SQL injection patterns:
 
 ```json
 {
-  "action_type": "unit_found_city",
+  "action_type": "unit_build_city",
   "actor_id": 456,
   "target": {"name": "New Rome"}
 }
@@ -1013,7 +1013,7 @@ All string inputs are scanned for SQL injection patterns:
 
 ```json
 {
-  "action_type": "unit_found_city",
+  "action_type": "unit_build_city",
   "actor_id": 456,
   "target": {"name": "This is a very long city name that exceeds the fifty character limit"}
 }
@@ -1040,7 +1040,7 @@ All string inputs are scanned for SQL injection patterns:
 
 ```json
 {
-  "action_type": "unit_found_city",
+  "action_type": "unit_build_city",
   "actor_id": 456,
   "target": {"name": "City'; DROP TABLE cities--"}
 }
@@ -2020,7 +2020,7 @@ async def play_game():
                 "agent_id": "my-agent",
                 "timestamp": time.time(),
                 "data": {
-                    "action_type": "unit_found_city",
+                    "action_type": "unit_build_city",
                     "actor_id": 456,
                     "target": {"name": "New Rome"}
                 }

@@ -501,7 +501,7 @@ class InputValidator:
                     return result
 
         # Validate string fields based on action type
-        if action_type in ['unit_found_city', 'unit_build_city']:
+        if action_type == 'unit_build_city':
             if 'city_name' in params:
                 result = self.validate_string_field(params['city_name'], 'city_name')
                 if not result.is_valid:

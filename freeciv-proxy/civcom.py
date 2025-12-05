@@ -111,7 +111,7 @@ ACTION_COUNT = 116
 
 # Map FreeCiv action IDs to protocol action type strings
 ACTION_ID_TO_TYPE = {
-    ACTION_FOUND_CITY: 'unit_found_city',
+    ACTION_FOUND_CITY: 'unit_build_city',
     ACTION_JOIN_CITY: 'unit_join_city',
     ACTION_ATTACK: 'unit_attack',
     ACTION_SUICIDE_ATTACK: 'unit_suicide_attack',

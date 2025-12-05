@@ -1532,7 +1532,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
         mapping = {
             'move': 'unit_move',
             'fortify': 'unit_fortify',
-            'build_city': 'unit_found_city',
+            'build_city': 'unit_build_city',
             'join_city': 'unit_join_city',
             'build_road': 'unit_build_road',
             'build_irrigation': 'unit_build_irrigation',

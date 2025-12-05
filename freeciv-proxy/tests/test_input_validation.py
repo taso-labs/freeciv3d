@@ -578,23 +578,23 @@ class TestActionParamsValidation:
         assert result.is_valid is False
         assert result.error_code == "E221"
 
-    def test_unit_found_city_valid(self, validator):
-        """unit_found_city with valid city name should pass"""
+    def test_unit_build_city_valid(self, validator):
+        """unit_build_city with valid city name should pass"""
         params = {'unit_id': 123, 'city_name': 'New York'}
-        result = validator.validate_action_params('unit_found_city', params)
+        result = validator.validate_action_params('unit_build_city', params)
         assert result.is_valid is True
 
-    def test_unit_found_city_sql_injection(self, validator):
-        """unit_found_city with SQL injection should fail"""
+    def test_unit_build_city_sql_injection(self, validator):
+        """unit_build_city with SQL injection should fail"""
         params = {'unit_id': 123, 'city_name': "New York'; DROP TABLE--"}
-        result = validator.validate_action_params('unit_found_city', params)
+        result = validator.validate_action_params('unit_build_city', params)
         assert result.is_valid is False
         assert result.error_code == "E223"
 
-    def test_unit_found_city_xss(self, validator):
-        """unit_found_city with XSS should fail"""
+    def test_unit_build_city_xss(self, validator):
+        """unit_build_city with XSS should fail"""
         params = {'unit_id': 123, 'city_name': "<script>alert(1)</script>"}
-        result = validator.validate_action_params('unit_found_city', params)
+        result = validator.validate_action_params('unit_build_city', params)
         assert result.is_valid is False
         assert result.error_code == "E223"
 

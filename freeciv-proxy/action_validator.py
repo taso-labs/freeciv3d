@@ -88,8 +88,7 @@ class ActionType(Enum):
     UNIT_NUKE_UNITS = "unit_nuke_units"
 
     # === City Foundation ===
-    UNIT_FOUND_CITY = "unit_found_city"
-    UNIT_BUILD_CITY = "unit_build_city"  # Legacy alias
+    UNIT_BUILD_CITY = "unit_build_city"
     UNIT_JOIN_CITY = "unit_join_city"
     UNIT_HOME_CITY = "unit_home_city"
 
@@ -198,7 +197,6 @@ ACTION_CATEGORIES = {
     ActionType.UNIT_NUKE_CITY: ActionCategory.COMBAT,
     ActionType.UNIT_NUKE_UNITS: ActionCategory.COMBAT,
     # City Foundation
-    ActionType.UNIT_FOUND_CITY: ActionCategory.CITY_FOUNDATION,
     ActionType.UNIT_BUILD_CITY: ActionCategory.CITY_FOUNDATION,
     ActionType.UNIT_JOIN_CITY: ActionCategory.CITY_FOUNDATION,
     ActionType.UNIT_HOME_CITY: ActionCategory.CITY_FOUNDATION,

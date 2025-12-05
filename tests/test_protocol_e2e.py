@@ -423,7 +423,7 @@ class TestInputValidation:
             await client.send({
                 'type': 'action',
                 'action': {
-                    'type': 'unit_found_city',
+                    'type': 'unit_build_city',
                     'unit_id': 1,
                     'city_name': "Test'; DROP TABLE users;--"
                 }
@@ -458,7 +458,7 @@ class TestInputValidation:
             await client.send({
                 'type': 'action',
                 'action': {
-                    'type': 'unit_found_city',
+                    'type': 'unit_build_city',
                     'unit_id': 1,
                     'city_name': "A" * 100  # Way over 50 char limit
                 }
