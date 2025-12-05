@@ -468,6 +468,19 @@ class CivCom(Thread):
     def is_unit_class_native_to_terrain(self, unit_class_id: int, terrain_id: int) -> bool:
         """Check if a unit class can move on a terrain type.
         
+        The native_to field from PACKET_RULESET_TERRAIN is a multi-word bitvector
+        where each integer represents 32 bits of the bitvector.
+        
+        Format: native_to = [word0, word1, word2, word3]
+        - word0 contains bits 0-31 (unit classes 0-31)
+        - word1 contains bits 32-63 (unit classes 32-63)
+        - etc.
+        
+        To check if unit class N is native:
+        - word_index = N // 32
+        - bit_position = N % 32
+        - is_native = (native_to[word_index] & (1 << bit_position)) != 0
+        
         Args:
             unit_class_id: The unit class ID
             terrain_id: The terrain type ID
@@ -481,9 +494,28 @@ class CivCom(Thread):
         if not unit_class or not terrain:
             return True  # Allow by default if data not available
             
-        # Check native_to field in terrain
         native_to = terrain.get('native_to', [])
-        return unit_class_id in native_to if native_to else True
+        
+        if not native_to:
+            return True  # Allow all if no native_to data
+        
+        # native_to is a multi-word bitvector: list of integers where each int is 32 bits
+        # e.g., [61, 0, 0, 0] means bits 0,2,3,4,5 are set (61 = 0b111101)
+        if isinstance(native_to, list) and native_to and isinstance(native_to[0], int):
+            word_index = unit_class_id // 32
+            bit_position = unit_class_id % 32
+            
+            if word_index < len(native_to):
+                is_native = bool(native_to[word_index] & (1 << bit_position))
+            else:
+                is_native = False  # Bit not in range
+            
+            return is_native
+        elif isinstance(native_to, int):
+            # Single integer bitvector (unlikely but handle it)
+            return bool(native_to & (1 << unit_class_id))
+        else:
+            return True  # Unknown format, allow
     
     def can_city_be_founded_at(self, tile_index: int) -> tuple:
         """Check if a city can be founded at the given tile.
@@ -1175,9 +1207,14 @@ class CivCom(Thread):
             elif packet_type == PACKET_RULESET_TERRAIN:
                 terrain_id = packet.get('id')
                 terrain_name = packet.get('name', '')
+                native_to = packet.get('native_to', [])
+                tclass = packet.get('tclass', 0)
                 if terrain_id is not None:
                     self.terrains[terrain_id] = packet
-                    logger.debug(f"Registered terrain: {terrain_name} (id={terrain_id})")
+                    logger.debug(
+                        f"Registered terrain: {terrain_name} (id={terrain_id}, "
+                        f"tclass={tclass}, native_to={native_to})"
+                    )
             
             # RULESET extra packet - defines extras (roads, irrigation, mines, etc.)
             # Used for terrain improvement action validity

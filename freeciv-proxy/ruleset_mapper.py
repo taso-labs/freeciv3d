@@ -190,6 +190,9 @@ class RulesetMapper:
             >>> mapper.get_tech_id("UnknownTech")
             None
         """
+        # Ensure we have loaded mappings (lazy load if needed)
+        self._ensure_loaded()
+        
         if not self._loaded:
             logger.warning("RulesetMapper not loaded. Cannot map tech names. "
                           "Ensure RULESET packets have been received.")
@@ -225,6 +228,23 @@ class RulesetMapper:
         """
         return sorted(self.techs.keys())
 
+    def _ensure_loaded(self):
+        """
+        Ensure mappings are loaded from civcom.
+        
+        Lazily reloads if mappings are empty but civcom has data.
+        This handles the case where the mapper was created before
+        RULESET packets were received.
+        """
+        # If we have no unit types but civcom does, reload
+        if not self.unit_types and hasattr(self.civcom, 'unit_types') and self.civcom.unit_types:
+            logger.info(f"RulesetMapper: Lazy loading - civcom has {len(self.civcom.unit_types)} unit types")
+            self._load_mappings()
+        # Same for buildings
+        if not self.buildings and hasattr(self.civcom, 'improvements') and self.civcom.improvements:
+            logger.info(f"RulesetMapper: Lazy loading - civcom has {len(self.civcom.improvements)} improvements")
+            self._load_mappings()
+
     def map_production_to_kind_value(self, production_name: str) -> Tuple[Optional[int], Optional[int]]:
         """
         Map production name to (kind, value) tuple for PACKET_CITY_CHANGE.
@@ -252,9 +272,11 @@ class RulesetMapper:
             >>> mapper.map_production_to_kind_value("InvalidName")
             (None, None)  # Unknown production
         """
+        # Ensure we have loaded mappings (lazy load if needed)
+        self._ensure_loaded()
+        
         if not self._loaded:
-            logger.error(f"RulesetMapper not loaded for game {self.game_id}. "
-                        "Cannot map production names.")
+            logger.error(f"RulesetMapper not loaded. Cannot map production names.")
             return (None, None)
 
         # Normalize to lowercase and strip whitespace for reliable lookup

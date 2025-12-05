@@ -448,15 +448,17 @@ class LLMActionValidator:
         city_id = action['city_id']
         production_type = action['production_type']
 
-        # Validate production type is reasonable
-        valid_production_types = [
-            'warrior', 'settler', 'worker', 'archer', 'spearman',
-            'barracks', 'granary', 'library', 'marketplace',
-            'temple', 'aqueduct', 'walls'
-        ]
-
-        if production_type not in valid_production_types:
-            return self._validation_error('E031', f'Invalid production type: {production_type}')
+        # Basic sanity check - actual validation happens in llm_handler via RulesetMapper
+        # which uses runtime unit/building data from PACKET_RULESET_UNIT and PACKET_RULESET_BUILDING
+        # Here we just check for obviously invalid values (empty, too long, etc.)
+        if not production_type:
+            return self._validation_error('E031', 'production_type cannot be empty')
+        if len(production_type) > 64:
+            return self._validation_error('E031', f'production_type too long: {len(production_type)} chars')
+        # Check for valid characters (alphanumeric, spaces, hyphens, periods allowed)
+        import re
+        if not re.match(r'^[a-zA-Z0-9\s\-\.]+$', production_type):
+            return self._validation_error('E031', f'Invalid characters in production_type: {production_type}')
 
         # If game state available, verify city ownership
         if game_state and 'cities' in game_state:

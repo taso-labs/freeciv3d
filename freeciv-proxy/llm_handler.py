@@ -2346,6 +2346,42 @@ class LLMWSHandler(websocket.WebSocketHandler):
             # Get unit's current tile for sanity checking
             src_tile = self._get_unit_tile(action['unit_id'])
 
+            # Calculate direction for unit movement
+            # FreeCiv requires the dir field to contain the actual direction index
+            # Direction indices follow DIR_DX/DIR_DY arrays in map.js:
+            #   0: NW (dx=-1, dy=-1)  1: N  (dx=0, dy=-1)   2: NE (dx=1, dy=-1)
+            #   3: W  (dx=-1, dy=0)                         4: E  (dx=1, dy=0)
+            #   5: SW (dx=-1, dy=1)   6: S  (dx=0, dy=1)    7: SE (dx=1, dy=1)
+            src_x = src_tile % map_width
+            src_y = src_tile // map_width
+            dest_x = action['dest_x']
+            dest_y = action['dest_y']
+            dx = dest_x - src_x
+            dy = dest_y - src_y
+
+            # Clamp to -1, 0, 1 for single-step movement
+            dx = max(-1, min(1, dx))
+            dy = max(-1, min(1, dy))
+
+            # Map (dx, dy) to direction index using FreeCiv's DIR_DX/DIR_DY arrays
+            # DIR_DX = [-1, 0, 1, -1, 1, -1, 0, 1]
+            # DIR_DY = [-1, -1, -1, 0, 0, 1, 1, 1]
+            dir_map = {
+                (-1, -1): 0,  # NW
+                (0, -1): 1,   # N
+                (1, -1): 2,   # NE
+                (-1, 0): 3,   # W
+                (1, 0): 4,    # E
+                (-1, 1): 5,   # SW
+                (0, 1): 6,    # S
+                (1, 1): 7,    # SE
+            }
+            direction = dir_map.get((dx, dy), -1)
+
+            # If no movement or invalid direction, use -1
+            if dx == 0 and dy == 0:
+                direction = -1
+
             return {
                 'pid': 73,  # PACKET_UNIT_ORDERS (client-to-server)
                 'unit_id': action['unit_id'],
@@ -2357,12 +2393,14 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 'orders': [{
                     # CRITICAL: All 6 fields required by FreeCiv JSON parser (dataio_json.c:597-666)
                     # Even though some fields are only used for specific order types, all must be present
-                    'order': 0,        # ORDER_MOVE (not ORDER_FULL_MP=2!)
+                    # Use ORDER_ACTION_MOVE (3) instead of ORDER_MOVE (0)
+                    # Web client uses ORDER_ACTION_MOVE by default (control.js), and sets dir to actual direction
+                    'order': 3,        # ORDER_ACTION_MOVE (web client default for movement)
                     'activity': 18,    # ACTIVITY_LAST (matching web client control.js:1664)
                     'target': 0,       # No specific target
-                    'sub_target': 0,   # Required field (missing caused "incompatible packet contents")
+                    'sub_target': 0,   # FIX: PACKET_UNIT_ORDERS uses 'sub_target' (dataio_json.c:dio_put_unit_order_json)
                     'action': 116,     # ACTION_COUNT (matching web client, means no action)
-                    'dir': -1          # Direction computed by server from src/dest
+                    'dir': direction   # CRITICAL: Actual direction index, NOT -1!
                 }]
             }
         elif action_type == 'city_production':
@@ -2517,7 +2555,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 'pid': 84,  # PACKET_UNIT_DO_ACTION
                 'actor_id': action['unit_id'],
                 'target_id': action.get('target_id', -1),
-                'sub_target': action.get('sub_target', -1),
+                'sub_tgt_id': action.get('sub_tgt_id', -1),
                 'name': '',
                 'action_type': 45  # ACTION_ATTACK
             }
@@ -2526,7 +2564,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 'pid': 84,  # PACKET_UNIT_DO_ACTION
                 'actor_id': action['unit_id'],
                 'target_id': action.get('target_id', -1),
-                'sub_target': action.get('sub_target', -1),
+                'sub_tgt_id': action.get('sub_tgt_id', -1),
                 'name': '',
                 'action_type': 46  # ACTION_SUICIDE_ATTACK
             }
@@ -2535,7 +2573,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 'pid': 84,  # PACKET_UNIT_DO_ACTION
                 'actor_id': action['unit_id'],
                 'target_id': action.get('target_id', -1),
-                'sub_target': action.get('sub_target', -1),
+                'sub_tgt_id': action.get('sub_tgt_id', -1),
                 'name': '',
                 'action_type': 53  # ACTION_BOMBARD
             }
@@ -2544,7 +2582,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 'pid': 84,  # PACKET_UNIT_DO_ACTION
                 'actor_id': action['unit_id'],
                 'target_id': action.get('target_id', -1),
-                'sub_target': action.get('sub_target', -1),
+                'sub_tgt_id': action.get('sub_tgt_id', -1),
                 'name': '',
                 'action_type': 24  # ACTION_CAPTURE_UNITS
             }
@@ -2553,7 +2591,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 'pid': 84,  # PACKET_UNIT_DO_ACTION
                 'actor_id': action['unit_id'],
                 'target_id': action.get('target_id', -1),
-                'sub_target': action.get('sub_target', -1),
+                'sub_tgt_id': action.get('sub_tgt_id', -1),
                 'name': '',
                 'action_type': 49  # ACTION_CONQUER_CITY
             }
@@ -2562,7 +2600,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 'pid': 84,  # PACKET_UNIT_DO_ACTION
                 'actor_id': action['unit_id'],
                 'target_id': action.get('target_id', -1),
-                'sub_target': action.get('sub_target', -1),
+                'sub_tgt_id': action.get('sub_tgt_id', -1),
                 'name': '',
                 'action_type': 33  # ACTION_NUKE
             }
@@ -2571,7 +2609,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 'pid': 84,  # PACKET_UNIT_DO_ACTION
                 'actor_id': action['unit_id'],
                 'target_id': action.get('target_id', -1),
-                'sub_target': action.get('sub_target', -1),
+                'sub_tgt_id': action.get('sub_tgt_id', -1),
                 'name': '',
                 'action_type': 34  # ACTION_NUKE_CITY
             }
@@ -2580,7 +2618,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 'pid': 84,  # PACKET_UNIT_DO_ACTION
                 'actor_id': action['unit_id'],
                 'target_id': action.get('target_id', -1),
-                'sub_target': action.get('sub_target', -1),
+                'sub_tgt_id': action.get('sub_tgt_id', -1),
                 'name': '',
                 'action_type': 35  # ACTION_NUKE_UNITS
             }
@@ -2589,7 +2627,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 'pid': 84,  # PACKET_UNIT_DO_ACTION
                 'actor_id': action['unit_id'],
                 'target_id': action.get('target_id', -1),
-                'sub_target': action.get('sub_target', -1),
+                'sub_tgt_id': action.get('sub_tgt_id', -1),
                 'name': '',
                 'action_type': 37  # ACTION_EXPEL_UNIT
             }
@@ -2598,7 +2636,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 'pid': 84,  # PACKET_UNIT_DO_ACTION
                 'actor_id': action['unit_id'],
                 'target_id': action.get('target_id', -1),
-                'sub_target': action.get('sub_target', -1),
+                'sub_tgt_id': action.get('sub_tgt_id', -1),
                 'name': '',
                 'action_type': 98  # ACTION_HEAL_UNIT
             }
@@ -2607,7 +2645,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 'pid': 84,  # PACKET_UNIT_DO_ACTION
                 'actor_id': action['unit_id'],
                 'target_id': action.get('target_id', action.get('tile_id', -1)),
-                'sub_target': action.get('extra_id', -1),  # Which improvement to pillage
+                'sub_tgt_id': action.get('extra_id', -1),  # Which improvement to pillage
                 'name': '',
                 'action_type': 65  # ACTION_PILLAGE
             }
@@ -2620,7 +2658,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 'pid': 84,  # PACKET_UNIT_DO_ACTION
                 'actor_id': action['unit_id'],
                 'target_id': action.get('transport_id', action.get('target_id', -1)),
-                'sub_target': action.get('sub_target', -1),
+                'sub_tgt_id': action.get('sub_tgt_id', -1),
                 'name': '',
                 'action_type': 68  # ACTION_TRANSPORT_BOARD
             }
@@ -2629,7 +2667,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 'pid': 84,  # PACKET_UNIT_DO_ACTION
                 'actor_id': action['unit_id'],
                 'target_id': action.get('transport_id', action.get('target_id', -1)),
-                'sub_target': action.get('sub_target', -1),
+                'sub_tgt_id': action.get('sub_tgt_id', -1),
                 'name': '',
                 'action_type': 72  # ACTION_TRANSPORT_EMBARK
             }
@@ -2638,7 +2676,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 'pid': 84,  # PACKET_UNIT_DO_ACTION
                 'actor_id': action['unit_id'],
                 'target_id': action.get('tile_id', action.get('target_id', -1)),
-                'sub_target': action.get('sub_target', -1),
+                'sub_tgt_id': action.get('sub_tgt_id', -1),
                 'name': '',
                 'action_type': 76  # ACTION_TRANSPORT_DISEMBARK1
             }
@@ -2648,7 +2686,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 'pid': 84,  # PACKET_UNIT_DO_ACTION
                 'actor_id': action.get('transport_id', action['unit_id']),
                 'target_id': action.get('cargo_id', action.get('target_id', -1)),
-                'sub_target': action.get('sub_target', -1),
+                'sub_tgt_id': action.get('sub_tgt_id', -1),
                 'name': '',
                 'action_type': 80  # ACTION_TRANSPORT_UNLOAD (approximate)
             }
@@ -2657,7 +2695,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 'pid': 84,  # PACKET_UNIT_DO_ACTION
                 'actor_id': action['unit_id'],
                 'target_id': action.get('city_id', action.get('target_id', -1)),
-                'sub_target': action.get('sub_target', -1),
+                'sub_tgt_id': action.get('sub_tgt_id', -1),
                 'name': '',
                 'action_type': 44  # ACTION_AIRLIFT
             }
@@ -2666,7 +2704,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 'pid': 84,  # PACKET_UNIT_DO_ACTION
                 'actor_id': action['unit_id'],
                 'target_id': action.get('tile_id', action.get('target_id', -1)),
-                'sub_target': action.get('sub_target', -1),
+                'sub_tgt_id': action.get('sub_tgt_id', -1),
                 'name': '',
                 'action_type': 100  # ACTION_PARADROP
             }
@@ -2679,7 +2717,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 'pid': 84,  # PACKET_UNIT_DO_ACTION
                 'actor_id': action['unit_id'],
                 'target_id': action.get('city_id', action.get('target_id', -1)),
-                'sub_target': action.get('sub_target', -1),
+                'sub_tgt_id': action.get('sub_tgt_id', -1),
                 'name': '',
                 'action_type': 2  # ACTION_SPY_INVESTIGATE_CITY
             }
@@ -2688,7 +2726,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 'pid': 84,  # PACKET_UNIT_DO_ACTION
                 'actor_id': action['unit_id'],
                 'target_id': action.get('city_id', action.get('target_id', -1)),
-                'sub_target': action.get('sub_target', -1),
+                'sub_tgt_id': action.get('sub_tgt_id', -1),
                 'name': '',
                 'action_type': 4  # ACTION_SPY_POISON
             }
@@ -2697,7 +2735,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 'pid': 84,  # PACKET_UNIT_DO_ACTION
                 'actor_id': action['unit_id'],
                 'target_id': action.get('city_id', action.get('target_id', -1)),
-                'sub_target': action.get('building_id', -1),  # Specific building or -1 for random
+                'sub_tgt_id': action.get('building_id', -1),  # Specific building or -1 for random
                 'name': '',
                 'action_type': 8  # ACTION_SPY_SABOTAGE_CITY
             }
@@ -2706,7 +2744,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 'pid': 84,  # PACKET_UNIT_DO_ACTION
                 'actor_id': action['unit_id'],
                 'target_id': action.get('city_id', action.get('target_id', -1)),
-                'sub_target': action['building_id'],  # Required for targeted sabotage
+                'sub_tgt_id': action['building_id'],  # Required for targeted sabotage
                 'name': '',
                 'action_type': 10  # ACTION_SPY_TARGETED_SABOTAGE_CITY
             }
@@ -2715,7 +2753,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 'pid': 84,  # PACKET_UNIT_DO_ACTION
                 'actor_id': action['unit_id'],
                 'target_id': action.get('city_id', action.get('target_id', -1)),
-                'sub_target': action.get('sub_target', -1),
+                'sub_tgt_id': action.get('sub_tgt_id', -1),
                 'name': '',
                 'action_type': 14  # ACTION_SPY_STEAL_TECH
             }
@@ -2724,7 +2762,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 'pid': 84,  # PACKET_UNIT_DO_ACTION
                 'actor_id': action['unit_id'],
                 'target_id': action.get('city_id', action.get('target_id', -1)),
-                'sub_target': action['tech_id'],  # Required - which tech to steal
+                'sub_tgt_id': action['tech_id'],  # Required - which tech to steal
                 'name': '',
                 'action_type': 16  # ACTION_SPY_TARGETED_STEAL_TECH
             }
@@ -2733,7 +2771,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 'pid': 84,  # PACKET_UNIT_DO_ACTION
                 'actor_id': action['unit_id'],
                 'target_id': action.get('city_id', action.get('target_id', -1)),
-                'sub_target': action.get('sub_target', -1),
+                'sub_tgt_id': action.get('sub_tgt_id', -1),
                 'name': '',
                 'action_type': 18  # ACTION_SPY_INCITE_CITY
             }
@@ -2742,7 +2780,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 'pid': 84,  # PACKET_UNIT_DO_ACTION
                 'actor_id': action['unit_id'],
                 'target_id': action.get('target_unit_id', action.get('target_id', -1)),
-                'sub_target': action.get('sub_target', -1),
+                'sub_tgt_id': action.get('sub_tgt_id', -1),
                 'name': '',
                 'action_type': 23  # ACTION_SPY_BRIBE_UNIT
             }
@@ -2751,7 +2789,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 'pid': 84,  # PACKET_UNIT_DO_ACTION
                 'actor_id': action['unit_id'],
                 'target_id': action.get('city_id', action.get('target_id', -1)),
-                'sub_target': action.get('sub_target', -1),
+                'sub_tgt_id': action.get('sub_tgt_id', -1),
                 'name': '',
                 'action_type': 0  # ACTION_ESTABLISH_EMBASSY
             }
@@ -2760,7 +2798,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 'pid': 84,  # PACKET_UNIT_DO_ACTION
                 'actor_id': action['unit_id'],
                 'target_id': action.get('city_id', action.get('target_id', -1)),
-                'sub_target': action.get('sub_target', -1),
+                'sub_tgt_id': action.get('sub_tgt_id', -1),
                 'name': '',
                 'action_type': 82  # ACTION_SPY_STEAL_GOLD (approximate)
             }
@@ -2769,7 +2807,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 'pid': 84,  # PACKET_UNIT_DO_ACTION
                 'actor_id': action['unit_id'],
                 'target_id': action.get('city_id', action.get('target_id', -1)),
-                'sub_target': action.get('sub_target', -1),
+                'sub_tgt_id': action.get('sub_tgt_id', -1),
                 'name': '',
                 'action_type': 84  # ACTION_SPY_SPREAD_PLAGUE (approximate)
             }
@@ -2778,7 +2816,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 'pid': 84,  # PACKET_UNIT_DO_ACTION
                 'actor_id': action['unit_id'],
                 'target_id': action.get('city_id', action.get('target_id', -1)),
-                'sub_target': action.get('sub_target', -1),
+                'sub_tgt_id': action.get('sub_tgt_id', -1),
                 'name': '',
                 'action_type': 86  # ACTION_SPY_NUKE_CITY (approximate)
             }
@@ -2791,7 +2829,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 'pid': 84,  # PACKET_UNIT_DO_ACTION
                 'actor_id': action['unit_id'],
                 'target_id': action.get('city_id', action.get('target_id', -1)),
-                'sub_target': action.get('sub_target', -1),
+                'sub_tgt_id': action.get('sub_tgt_id', -1),
                 'name': '',
                 'action_type': 20  # ACTION_TRADE_ROUTE
             }
@@ -2800,7 +2838,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 'pid': 84,  # PACKET_UNIT_DO_ACTION
                 'actor_id': action['unit_id'],
                 'target_id': action.get('city_id', action.get('target_id', -1)),
-                'sub_target': action.get('sub_target', -1),
+                'sub_tgt_id': action.get('sub_tgt_id', -1),
                 'name': '',
                 'action_type': 21  # ACTION_MARKETPLACE
             }
@@ -2809,7 +2847,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 'pid': 84,  # PACKET_UNIT_DO_ACTION
                 'actor_id': action['unit_id'],
                 'target_id': action.get('city_id', action.get('target_id', -1)),
-                'sub_target': action.get('sub_target', -1),
+                'sub_tgt_id': action.get('sub_tgt_id', -1),
                 'name': '',
                 'action_type': 22  # ACTION_HELP_WONDER
             }
@@ -2934,7 +2972,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 'pid': 84,  # PACKET_UNIT_DO_ACTION
                 'actor_id': action['unit_id'],
                 'target_id': action.get('city_id', action.get('target_id', -1)),
-                'sub_target': action.get('sub_target', -1),
+                'sub_tgt_id': action.get('sub_tgt_id', -1),
                 'name': '',
                 'action_type': 42  # ACTION_UPGRADE_UNIT
             }
@@ -2943,7 +2981,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 'pid': 84,  # PACKET_UNIT_DO_ACTION
                 'actor_id': action['unit_id'],
                 'target_id': action.get('city_id', action.get('target_id', -1)),
-                'sub_target': action.get('sub_target', -1),
+                'sub_tgt_id': action.get('sub_tgt_id', -1),
                 'name': '',
                 'action_type': 28  # ACTION_JOIN_CITY
             }
@@ -2973,7 +3011,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 'pid': 84,  # PACKET_UNIT_DO_ACTION
                 'actor_id': action['unit_id'],
                 'target_id': action.get('tile_id', action.get('target_id', -1)),
-                'sub_target': action.get('sub_target', -1),
+                'sub_tgt_id': action.get('sub_tgt_id', -1),
                 'name': '',
                 'action_type': 64  # ACTION_CULTIVATE
             }
@@ -2982,7 +3020,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 'pid': 84,  # PACKET_UNIT_DO_ACTION
                 'actor_id': action['unit_id'],
                 'target_id': action.get('tile_id', action.get('target_id', -1)),
-                'sub_target': action.get('sub_target', -1),
+                'sub_tgt_id': action.get('sub_tgt_id', -1),
                 'name': '',
                 'action_type': 66  # ACTION_PLANT
             }
@@ -2991,7 +3029,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 'pid': 84,  # PACKET_UNIT_DO_ACTION
                 'actor_id': action['unit_id'],
                 'target_id': action.get('target_id', -1),
-                'sub_target': action.get('sub_target', -1),
+                'sub_tgt_id': action.get('sub_tgt_id', -1),
                 'name': '',
                 'action_type': 30  # ACTION_DISBAND_UNIT
             }
@@ -3000,7 +3038,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 'pid': 84,  # PACKET_UNIT_DO_ACTION
                 'actor_id': action['unit_id'],
                 'target_id': action.get('city_id', action.get('target_id', -1)),
-                'sub_target': action.get('sub_target', -1),
+                'sub_tgt_id': action.get('sub_tgt_id', -1),
                 'name': '',
                 'action_type': 32  # ACTION_HOME_CITY
             }

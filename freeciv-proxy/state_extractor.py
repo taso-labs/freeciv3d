@@ -828,6 +828,19 @@ class StateExtractor:
         
         # === MOVEMENT ACTIONS ===
         if moves_left > 0:
+            # Pre-compute city tile indexes for efficient lookup
+            city_tiles = set()
+            if civcom:
+                for city_id, city in civcom.player_cities.items():
+                    city_tile = city.get('tile')
+                    if city_tile is not None:
+                        city_tiles.add(city_tile)
+                # Also check enemy cities
+                for city in getattr(civcom, 'other_cities', {}).values():
+                    city_tile = city.get('tile')
+                    if city_tile is not None:
+                        city_tiles.add(city_tile)
+            
             for direction in directions:
                 target_x, target_y, target_index = get_target_tile(direction)
                 
@@ -841,26 +854,42 @@ class StateExtractor:
                         terrain_id = tile.get('terrain')
                         terrain_class = civcom.get_terrain_class(terrain_id) if terrain_id is not None else TC_LAND
                         
-                        # Check if unit can move on this terrain
+                        # Get unit class info for terrain checking
                         unit_type_data = civcom.unit_types.get(unit_type_id, {})
                         unit_class_id = unit_type_data.get('unit_class')
                         
-                        # Simple land/sea check - naval units need water, land units need land
-                        unit_class = civcom.unit_classes.get(unit_class_id, {}) if unit_class_id else {}
-                        class_name = unit_class.get('name', '').lower()
+                        # Check if target tile has a city (cities allow entry for most unit types)
+                        tile_has_city = target_index in city_tiles
                         
-                        if terrain_class == TC_OCEAN:
-                            # Only naval/air units can enter ocean
-                            if 'sea' not in class_name and 'air' not in class_name and 'trireme' not in class_name:
-                                # Check if unit can embark (has transport available)
-                                if not can_do_action(ACTION_TRANSPORT_EMBARK):
+                        # Use proper native_to checking if available, fall back to class name check
+                        if unit_class_id is not None and terrain_id is not None:
+                            is_native = civcom.is_unit_class_native_to_terrain(unit_class_id, terrain_id)
+                            if not is_native and not tile_has_city:
+                                # Not native terrain and no city - check if can embark on transport
+                                if terrain_class == TC_OCEAN:
+                                    if not can_do_action(ACTION_TRANSPORT_EMBARK):
+                                        is_valid = False
+                                        reason = "Cannot enter ocean (non-naval unit, no transport available)"
+                                else:
                                     is_valid = False
-                                    reason = "Cannot enter ocean (non-naval unit)"
-                        elif terrain_class == TC_LAND:
-                            # Naval units can't enter land (except through cities)
-                            if 'sea' in class_name:
-                                is_valid = False
-                                reason = "Cannot enter land (naval unit)"
+                                    reason = "Cannot enter non-native terrain"
+                        else:
+                            # Fallback: simple land/sea check by class name
+                            unit_class = civcom.unit_classes.get(unit_class_id, {}) if unit_class_id else {}
+                            class_name = unit_class.get('name', '').lower()
+                            
+                            if terrain_class == TC_OCEAN and not tile_has_city:
+                                # Check if unit class can enter ocean
+                                # Sea, Trireme, Air, Helicopter can enter ocean
+                                if class_name not in ('sea', 'trireme', 'air', 'helicopter', 'missile'):
+                                    if not can_do_action(ACTION_TRANSPORT_EMBARK):
+                                        is_valid = False
+                                        reason = "Cannot enter ocean (land unit, no transport)"
+                            elif terrain_class == TC_LAND and not tile_has_city:
+                                # Sea and Trireme classes cannot enter land (except through cities)
+                                if class_name in ('sea', 'trireme'):
+                                    is_valid = False
+                                    reason = "Cannot enter land (naval unit)"
                 
                 add_action('move', {'direction': direction, 'target': {'x': target_x, 'y': target_y}}, 
                           is_valid, reason)
@@ -1714,7 +1743,10 @@ class StateExtractor:
 
     def _generate_legal_actions_from_state(self, state: Dict[str, Any], player_id: int) -> List[Dict[str, Any]]:
         """Generate legal actions based on actual game state from civcom"""
+        from civcom import TC_LAND, TC_OCEAN
+        
         actions = []
+        civcom = None
 
         try:
             # Get civcom instance for this game
@@ -1735,26 +1767,63 @@ class StateExtractor:
         # Get player's units and cities
         units = [u for u in self._dict_to_list(state.get('units', {})) if u.get('owner') == player_id]
         cities = [c for c in self._dict_to_list(state.get('cities', {})) if c.get('owner') == player_id]
+        
+        # Get map info for coordinate validation
+        map_info = state.get('map', {})
+        map_width = map_info.get('width', 80)
+        map_height = map_info.get('height', 50)
 
         # Generate realistic unit movement actions (only if unit hasn't finished moving)
         # Use done_moving flag instead of moves_left to handle Turn 1 correctly
         for unit in units:
             if not unit.get('done_moving', False):
-                unit_type = unit.get('type', 'unknown')
+                unit_type = unit.get('type', 'unknown').lower()
+                unit_x, unit_y = unit.get('x', 0), unit.get('y', 0)
+                
+                # Determine if unit is a naval/air unit (can traverse water)
+                is_naval = unit_type in ('trireme', 'caravel', 'galleon', 'frigate', 'ironclad', 
+                                          'destroyer', 'cruiser', 'battleship', 'submarine', 'carrier',
+                                          'transport', 'boat')
+                is_air = unit_type in ('fighter', 'bomber', 'helicopter', 'stealth fighter', 
+                                        'stealth bomber', 'cruise missile', 'nuclear')
+                can_enter_water = is_naval or is_air
+                
                 # Check adjacent tiles for valid moves
                 for dx, dy in [(0, 1), (1, 0), (0, -1), (-1, 0), (1, 1), (-1, -1), (1, -1), (-1, 1)]:
-                    target_x, target_y = unit['x'] + dx, unit['y'] + dy
+                    target_x, target_y = unit_x + dx, unit_y + dy
 
-                    # Basic validity check (positive coordinates)
-                    if target_x >= 0 and target_y >= 0:
+                    # Basic validity check (within map bounds)
+                    if target_x < 0 or target_y < 0 or target_x >= map_width or target_y >= map_height:
+                        continue
+                    
+                    # Check terrain if we have civcom data
+                    is_valid = True
+                    if civcom:
+                        target_index = target_x + target_y * map_width
+                        tile = civcom.tiles.get(target_index)
+                        if tile:
+                            terrain_id = tile.get('terrain')
+                            terrain_class = civcom.get_terrain_class(terrain_id) if terrain_id is not None else TC_LAND
+                            
+                            # Check if there's a city at the target (cities allow most entries)
+                            tile_has_city = any(c.get('tile') == target_index 
+                                              for c in civcom.player_cities.values())
+                            
+                            if terrain_class == TC_OCEAN and not can_enter_water and not tile_has_city:
+                                is_valid = False
+                            elif terrain_class == TC_LAND and is_naval and not tile_has_city:
+                                is_valid = False
+                    
+                    if is_valid:
                         actions.append({
                             'type': 'unit_move',
                             'unit_id': unit['id'],
-                            'source': {'x': unit['x'], 'y': unit['y']},
+                            'source': {'x': unit_x, 'y': unit_y},
                             'target': {'x': target_x, 'y': target_y},
                             'cost': 1,
                             'unit_type': unit_type,
-                            'priority': 5 + (2 if unit_type == 'settler' else 1 if unit_type == 'explorer' else 0)
+                            'is_valid': True,
+                            'priority': 5 + (2 if unit_type in ('settler', 'settlers') else 1 if unit_type == 'explorer' else 0)
                         })
 
                 # Add non-movement unit actions
@@ -1763,6 +1832,7 @@ class StateExtractor:
                     actions.append({
                         'type': 'unit_fortify',
                         'unit_id': unit['id'],
+                        'is_valid': True,
                         'priority': 4
                     })
 
@@ -1771,7 +1841,8 @@ class StateExtractor:
                     actions.append({
                         'type': 'unit_build_city',
                         'unit_id': unit['id'],
-                        'location': {'x': unit['x'], 'y': unit['y']},
+                        'location': {'x': unit_x, 'y': unit_y},
+                        'is_valid': True,
                         'priority': 8
                     })
 
@@ -1781,21 +1852,24 @@ class StateExtractor:
                     actions.append({
                         'type': 'unit_build_road',
                         'unit_id': unit['id'],
-                        'location': {'x': unit['x'], 'y': unit['y']},
+                        'location': {'x': unit_x, 'y': unit_y},
+                        'is_valid': True,
                         'priority': 6
                     })
                     # Build irrigation
                     actions.append({
                         'type': 'unit_build_irrigation',
                         'unit_id': unit['id'],
-                        'location': {'x': unit['x'], 'y': unit['y']},
+                        'location': {'x': unit_x, 'y': unit_y},
+                        'is_valid': True,
                         'priority': 5
                     })
                     # Build mine
                     actions.append({
                         'type': 'unit_build_mine',
                         'unit_id': unit['id'],
-                        'location': {'x': unit['x'], 'y': unit['y']},
+                        'location': {'x': unit_x, 'y': unit_y},
+                        'is_valid': True,
                         'priority': 5
                     })
 
@@ -1803,6 +1877,7 @@ class StateExtractor:
                 actions.append({
                     'type': 'unit_sentry',
                     'unit_id': unit['id'],
+                    'is_valid': True,
                     'priority': 3
                 })
 
