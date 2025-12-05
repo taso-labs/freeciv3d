@@ -179,18 +179,22 @@ class RedisRateLimiter(RateLimiter):
 class DistributedRateLimiter:
     """
     Main rate limiter that attempts Redis first, falls back to in-memory
+    Supports turn-based rate limit resets for turn-based games like FreeCiv.
     """
 
-    def __init__(self, redis_config: dict[str, Any] | None = None):
+    def __init__(self, redis_config: dict[str, Any] | None = None,
+                 rate_limit_config: dict[str, Any] | None = None):
         self.redis_limiter = RedisRateLimiter(redis_config=redis_config)
         self.memory_limiter = InMemoryRateLimiter()
 
         # Default rate limits (optimized for turn-based gameplay with bursts of 20-24 messages/turn)
+        # Can be overridden via rate_limit_config from llm_config.json
         self.default_limits = {
-            'requests_per_second': 50,   # Increased from 10 to handle turn-based bursts
-            'burst_capacity': 200,        # Increased from 100 for multi-player games
-            'window_seconds': 60
+            'requests_per_second': rate_limit_config.get('requests_per_second', 100) if rate_limit_config else 100,
+            'burst_capacity': rate_limit_config.get('burst_capacity', 300) if rate_limit_config else 300,
+            'window_seconds': rate_limit_config.get('window_seconds', 60) if rate_limit_config else 60
         }
+        logger.info(f"Rate limiter initialized with limits: {self.default_limits}")
 
     def check_limit(self, agent_id: str, operation: str = 'default',
                    custom_limit: int | None = None, custom_window: int | None = None) -> bool:
@@ -251,7 +255,11 @@ class DistributedRateLimiter:
         }
 
     def reset_limits(self, agent_id: str):
-        """Reset rate limits for an agent (admin function)"""
+        """
+        Reset rate limits for an agent.
+        Called on turn end to give agents a fresh quota for the next turn.
+        This is critical for turn-based games where action bursts occur at turn boundaries.
+        """
         if self.redis_limiter.is_available():
             try:
                 # Delete all rate limit keys for this agent
@@ -259,7 +267,7 @@ class DistributedRateLimiter:
                 keys = self.redis_limiter.redis.keys(pattern)
                 if keys:
                     self.redis_limiter.redis.delete(*keys)
-                logger.info(f"Reset rate limits for agent: {agent_id}")
+                logger.info(f"Reset rate limits for agent: {agent_id} (Redis)")
             except Exception as e:
                 logger.error(f"Failed to reset rate limits for {agent_id}: {e}")
         else:
@@ -268,6 +276,7 @@ class DistributedRateLimiter:
                             if key.startswith(f"rate_limit:{agent_id}:")]
             for key in keys_to_remove:
                 del self.memory_limiter.buckets[key]
+            logger.info(f"Reset rate limits for agent: {agent_id} (in-memory)")
 
 class CircuitBreaker:
     """

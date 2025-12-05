@@ -72,13 +72,16 @@ NATION_MAP = {
 }
 DEFAULT_NATIONS = ["Americans", "Romans", "Chinese", "French", "Germans"]
 
-# Global distributed rate limiter
-distributed_rate_limiter = DistributedRateLimiter({
-    'host': llm_config.get('redis.host', 'localhost'),
-    'port': llm_config.get('redis.port', 6379),
-    'password': llm_config.get('redis.password'),
-    'db': llm_config.get('redis.db', 0)
-})
+# Global distributed rate limiter with config from llm_config.json
+distributed_rate_limiter = DistributedRateLimiter(
+    redis_config={
+        'host': llm_config.get('redis.host', 'localhost'),
+        'port': llm_config.get('redis.port', 6379),
+        'password': llm_config.get('redis.password'),
+        'db': llm_config.get('redis.db', 0)
+    },
+    rate_limit_config=llm_config.get('validation.rate_limit', {})
+)
 
 class LLMWSHandler(websocket.WebSocketHandler):
     """
@@ -1146,6 +1149,14 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 # CRITICAL: Must call send_packets_to_civserver() to actually send queued packets!
                 # Without this, actions are queued but never transmitted to civserver
                 self.civcom.send_packets_to_civserver()
+
+                # Reset rate limits on end_turn to give agent fresh quota for next turn
+                # This prevents cumulative rate limiting across turns in turn-based games
+                if sanitized_action.get('type') == 'end_turn' and self.agent_id:
+                    reset_on_turn_end = llm_config.get('validation.rate_limit.reset_on_turn_end', True)
+                    if reset_on_turn_end:
+                        distributed_rate_limiter.reset_limits(self.agent_id)
+                        logger.info(f"Rate limits reset for {self.agent_id} after end_turn")
 
                 SecurityLogger.log_connection_event(self.agent_id, "ACTION_EXECUTED",
                                                   f"type={sanitized_action.get('type')}")

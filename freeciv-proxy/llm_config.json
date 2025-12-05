@@ -21,8 +21,10 @@
         "strict": true,
         "log_failures": true,
         "rate_limit": {
-            "requests_per_second": 10,
-            "burst_capacity": 100
+            "requests_per_second": 100,
+            "burst_capacity": 300,
+            "window_seconds": 60,
+            "reset_on_turn_end": true
         }
     },
     "authentication": {
