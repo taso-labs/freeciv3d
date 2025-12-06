@@ -26,7 +26,33 @@ from error_handler import error_handler, ErrorSeverity, ErrorCategory
 from game_session_manager import game_session_manager
 from ruleset_mapper import RulesetMapper
 from typing import Dict, Any, Optional, List
-from packet_constants import PACKET_CHAT_MSG_REQ
+from packet_constants import (
+    PACKET_CHAT_MSG_REQ,
+    PACKET_SERVER_JOIN_REQ,
+    PACKET_UNIT_ORDERS,
+    PACKET_CITY_CHANGE,
+    PACKET_PLAYER_RESEARCH,
+    PACKET_NATION_SELECT_REQ,
+    PACKET_PLAYER_READY,
+    PACKET_PLAYER_PHASE_DONE,
+    PACKET_UNIT_DO_ACTION,
+    PACKET_UNIT_SERVER_SIDE_AGENT_SET,
+    PACKET_UNIT_CHANGE_ACTIVITY,
+    PACKET_CITY_BUY,
+    PACKET_CITY_SELL,
+    PACKET_CITY_RENAME,
+    PACKET_CITY_WORKLIST,
+    PACKET_DIPLOMACY_INIT_MEETING_REQ,
+    PACKET_DIPLOMACY_CANCEL_MEETING_REQ,
+    PACKET_DIPLOMACY_CREATE_CLAUSE_REQ,
+    PACKET_DIPLOMACY_REMOVE_CLAUSE_REQ,
+    PACKET_DIPLOMACY_ACCEPT_TREATY_REQ,
+    PACKET_DIPLOMACY_CANCEL_PACT,
+)
+from action_constants import *
+from activity_constants import *
+from order_constants import *
+from packet_converter import convert_action_to_packet
 
 logger = logging.getLogger("freeciv-proxy")
 
@@ -452,7 +478,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 # Send PACKET_NATION_SELECT_REQ immediately with self-assigned player_id
                 logger.debug(f"Sending PACKET_NATION_SELECT_REQ for {self.agent_id}: nation={nation_name} (id={nation_id})")
                 nation_packet = json.dumps({
-                    "pid": 10,  # PACKET_NATION_SELECT_REQ from packets.def:426
+                    "pid": PACKET_NATION_SELECT_REQ,  # PACKET_NATION_SELECT_REQ from packets.def:426
                     "player_no": self.player_id,
                     "nation_no": nation_id,
                     "is_male": True,
@@ -481,7 +507,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                     )
 
                     ready_packet = {
-                        "pid": 11,  # PACKET_PLAYER_READY from packets.def:434
+                        "pid": PACKET_PLAYER_READY,  # PACKET_PLAYER_READY from packets.def:434
                         "player_no": self.player_id,
                         "is_ready": True
                     }
@@ -1350,7 +1376,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
 
         # Create PACKET_PLAYER_READY packet
         ready_packet = {
-            "pid": 11,  # PACKET_PLAYER_READY from packets.def:434
+            "pid": PACKET_PLAYER_READY,  # PACKET_PLAYER_READY from packets.def:434
             "player_no": self.player_id,
             "is_ready": is_ready
         }
@@ -2333,8 +2359,11 @@ class LLMWSHandler(websocket.WebSocketHandler):
         })
 
     def _convert_action_to_packet(self, action: Dict[str, Any]) -> Dict[str, Any]:
-        """Convert LLM action to FreeCiv packet format"""
-        action_type = action.get('type')
+        """Convert LLM action to FreeCiv packet format by delegating to the
+        standalone packet_converter.convert_action_to_packet function.
+        """
+        # Delegate to shared, importable implementation which uses canonical constants
+        return convert_action_to_packet(action, civcom=self.civcom)
 
         if action_type == 'unit_move':
             # CRITICAL FIX: Use correct packet ID 73 (PACKET_UNIT_ORDERS)
@@ -2386,7 +2415,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 direction = -1
 
             return {
-                'pid': 73,  # PACKET_UNIT_ORDERS (client-to-server)
+                'pid': PACKET_UNIT_ORDERS,  # PACKET_UNIT_ORDERS (client-to-server)
                 'unit_id': action['unit_id'],
                 'src_tile': src_tile,  # Origin tile, included for sanity checking
                 'dest_tile': dest_tile,  # Destination tile index
@@ -2395,14 +2424,12 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 'vigilant': False,  # Don't auto-wake on enemy contact
                 'orders': [{
                     # CRITICAL: All 6 fields required by FreeCiv JSON parser (dataio_json.c:597-666)
-                    # Even though some fields are only used for specific order types, all must be present
-                    # Use ORDER_ACTION_MOVE (3) instead of ORDER_MOVE (0)
-                    # Web client uses ORDER_ACTION_MOVE by default (control.js), and sets dir to actual direction
-                    'order': 3,        # ORDER_ACTION_MOVE (web client default for movement)
-                    'activity': 18,    # ACTIVITY_LAST (matching web client control.js:1664)
+                    # Use named constants from order_constants/activity_constants/action_constants
+                    'order': ORDER_ACTION_MOVE,        # ORDER_ACTION_MOVE (web client default for movement)
+                    'activity': ACTIVITY_LAST,    # ACTIVITY_LAST (matching web client control.js:1664)
                     'target': 0,       # No specific target
                     'sub_target': 0,   # FIX: PACKET_UNIT_ORDERS uses 'sub_target' (dataio_json.c:dio_put_unit_order_json)
-                    'action': 116,     # ACTION_COUNT (matching web client, means no action)
+                    'action': ACTION_NONE,     # Semantic 'no action' sentinel
                     'dir': direction   # CRITICAL: Actual direction index, NOT -1!
                 }]
             }
@@ -2438,7 +2465,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                        f"(kind={kind}, value={value})")
 
             return {
-                'pid': 35,  # PACKET_CITY_CHANGE (NOT 45!)
+                'pid': PACKET_CITY_CHANGE,  # PACKET_CITY_CHANGE (NOT 45!)
                 'city_id': action['city_id'],
                 'production_kind': kind,      # 6 for units (VUT_UTYPE), 3 for buildings (VUT_IMPROVEMENT)
                 'production_value': value     # unit_type_id or building_id
@@ -2473,7 +2500,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
             logger.info(f"Research: '{tech_name}' -> tech_id {tech_id}")
 
             return {
-                'pid': 55,  # PACKET_PLAYER_RESEARCH
+                'pid': PACKET_PLAYER_RESEARCH,  # PACKET_PLAYER_RESEARCH
                 'tech': tech_id  # Field name is 'tech', not 'tech_name'!
             }
         elif action_type == 'end_turn':
@@ -2483,7 +2510,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
             # CRITICAL FIX (AGE-192): Must send 'turn' field, not 'player_no'
             # Per packets.def:971-973: PACKET_PLAYER_PHASE_DONE requires TURN turn field
             return {
-                'pid': 52,  # PACKET_PLAYER_PHASE_DONE
+                'pid': PACKET_PLAYER_PHASE_DONE,  # PACKET_PLAYER_PHASE_DONE
                 'turn': self.civcom.game_turn if hasattr(self.civcom, 'game_turn') else 1
             }
         elif action_type == 'unit_build_city':
@@ -2496,11 +2523,12 @@ class LLMWSHandler(websocket.WebSocketHandler):
             city_name = action.get('name', f'City{unit_id}')
 
             return {
-                'pid': 84,              # PACKET_UNIT_DO_ACTION
-                'action_type': 27,      # ACTION_FOUND_CITY
+                'pid': PACKET_UNIT_DO_ACTION,              # PACKET_UNIT_DO_ACTION
+                'action_type': ACTION_FOUND_CITY,      # ACTION_FOUND_CITY
                 'actor_id': unit_id,
                 'target_id': tile_id,
                 'sub_tgt_id': 0,
+                'sub_target': 0,
                 'name': city_name
             }
         elif action_type == 'unit_explore':
@@ -2509,44 +2537,44 @@ class LLMWSHandler(websocket.WebSocketHandler):
             # Should use PACKET_UNIT_SERVER_SIDE_AGENT_SET (pid=74)
             # Matches web client control.js:2459-2467 request_unit_ssa_set()
             return {
-                'pid': 74,  # PACKET_UNIT_SERVER_SIDE_AGENT_SET
+                'pid': PACKET_UNIT_SERVER_SIDE_AGENT_SET,  # PACKET_UNIT_SERVER_SIDE_AGENT_SET
                 'unit_id': action['unit_id'],
                 'agent': 1  # SSA_AUTOEXPLORE
             }
         # AGE-192: New unit action packet converters
         elif action_type == 'unit_fortify':
             return {
-                'pid': 222,  # PACKET_UNIT_CHANGE_ACTIVITY
+                'pid': PACKET_UNIT_CHANGE_ACTIVITY,  # PACKET_UNIT_CHANGE_ACTIVITY
                 'unit_id': action['unit_id'],
-                'activity': 10,  # ACTIVITY_FORTIFYING
+                'activity': ACTIVITY_FORTIFYING,  # ACTIVITY_FORTIFYING
                 'target': -1  # EXTRA_NONE (server decides)
             }
         elif action_type == 'unit_sentry':
             return {
-                'pid': 222,  # PACKET_UNIT_CHANGE_ACTIVITY
+                'pid': PACKET_UNIT_CHANGE_ACTIVITY,  # PACKET_UNIT_CHANGE_ACTIVITY
                 'unit_id': action['unit_id'],
-                'activity': 5,  # ACTIVITY_SENTRY
+                'activity': ACTIVITY_SENTRY,  # ACTIVITY_SENTRY
                 'target': -1  # EXTRA_NONE (server decides)
             }
         elif action_type == 'unit_build_road':
             return {
-                'pid': 222,  # PACKET_UNIT_CHANGE_ACTIVITY
+                'pid': PACKET_UNIT_CHANGE_ACTIVITY,  # PACKET_UNIT_CHANGE_ACTIVITY
                 'unit_id': action['unit_id'],
-                'activity': 13,  # ACTIVITY_GEN_ROAD
+                'activity': ACTIVITY_GEN_ROAD,  # ACTIVITY_GEN_ROAD
                 'target': -1  # EXTRA_NONE (server auto-selects Road or Railroad)
             }
         elif action_type == 'unit_build_irrigation':
             return {
-                'pid': 222,  # PACKET_UNIT_CHANGE_ACTIVITY
+                'pid': PACKET_UNIT_CHANGE_ACTIVITY,  # PACKET_UNIT_CHANGE_ACTIVITY
                 'unit_id': action['unit_id'],
-                'activity': 3,  # ACTIVITY_IRRIGATE
+                'activity': ACTIVITY_IRRIGATE,  # ACTIVITY_IRRIGATE
                 'target': -1  # EXTRA_NONE (server decides irrigation type)
             }
         elif action_type == 'unit_build_mine':
             return {
-                'pid': 222,  # PACKET_UNIT_CHANGE_ACTIVITY
+                'pid': PACKET_UNIT_CHANGE_ACTIVITY,  # PACKET_UNIT_CHANGE_ACTIVITY
                 'unit_id': action['unit_id'],
-                'activity': 2,  # ACTIVITY_MINE
+                'activity': ACTIVITY_MINE,  # ACTIVITY_MINE
                 'target': -1  # EXTRA_NONE (server decides mine type)
             }
 
@@ -2555,102 +2583,107 @@ class LLMWSHandler(websocket.WebSocketHandler):
         # =================================================================
         elif action_type == 'unit_attack':
             return {
-                'pid': 84,  # PACKET_UNIT_DO_ACTION
+                'pid': PACKET_UNIT_DO_ACTION,  # PACKET_UNIT_DO_ACTION
                 'actor_id': action['unit_id'],
                 'target_id': action.get('target_id', -1),
                 'sub_tgt_id': action.get('sub_tgt_id', -1),
+                'sub_target': action.get('sub_tgt_id', -1),
                 'name': '',
-                'action_type': 45  # ACTION_ATTACK
+                'action_type': ACTION_ATTACK  # ACTION_ATTACK
             }
         elif action_type == 'unit_suicide_attack':
             return {
-                'pid': 84,  # PACKET_UNIT_DO_ACTION
+                'pid': PACKET_UNIT_DO_ACTION,
                 'actor_id': action['unit_id'],
                 'target_id': action.get('target_id', -1),
                 'sub_tgt_id': action.get('sub_tgt_id', -1),
+                'sub_target': action.get('sub_tgt_id', -1),
                 'name': '',
-                'action_type': 46  # ACTION_SUICIDE_ATTACK
+                'action_type': ACTION_SUICIDE_ATTACK
             }
         elif action_type == 'unit_bombard':
             return {
-                'pid': 84,  # PACKET_UNIT_DO_ACTION
+                'pid': PACKET_UNIT_DO_ACTION,
                 'actor_id': action['unit_id'],
                 'target_id': action.get('target_id', -1),
                 'sub_tgt_id': action.get('sub_tgt_id', -1),
+                'sub_target': action.get('sub_tgt_id', -1),
                 'name': '',
-                'action_type': 53  # ACTION_BOMBARD
+                'action_type': ACTION_BOMBARD
             }
         elif action_type == 'unit_capture':
             return {
-                'pid': 84,  # PACKET_UNIT_DO_ACTION
+                'pid': PACKET_UNIT_DO_ACTION,
                 'actor_id': action['unit_id'],
                 'target_id': action.get('target_id', -1),
                 'sub_tgt_id': action.get('sub_tgt_id', -1),
+                'sub_target': action.get('sub_tgt_id', -1),
                 'name': '',
-                'action_type': 24  # ACTION_CAPTURE_UNITS
+                'action_type': ACTION_CAPTURE_UNITS
             }
         elif action_type == 'unit_conquer_city':
             return {
-                'pid': 84,  # PACKET_UNIT_DO_ACTION
+                'pid': PACKET_UNIT_DO_ACTION,
                 'actor_id': action['unit_id'],
                 'target_id': action.get('target_id', -1),
                 'sub_tgt_id': action.get('sub_tgt_id', -1),
                 'name': '',
-                'action_type': 49  # ACTION_CONQUER_CITY
+                'action_type': ACTION_CONQUER_CITY
             }
         elif action_type == 'unit_nuke':
             return {
-                'pid': 84,  # PACKET_UNIT_DO_ACTION
+                'pid': PACKET_UNIT_DO_ACTION,
                 'actor_id': action['unit_id'],
                 'target_id': action.get('target_id', -1),
                 'sub_tgt_id': action.get('sub_tgt_id', -1),
                 'name': '',
-                'action_type': 33  # ACTION_NUKE
+                'action_type': ACTION_NUKE
             }
         elif action_type == 'unit_nuke_city':
             return {
-                'pid': 84,  # PACKET_UNIT_DO_ACTION
+                'pid': PACKET_UNIT_DO_ACTION,
                 'actor_id': action['unit_id'],
                 'target_id': action.get('target_id', -1),
                 'sub_tgt_id': action.get('sub_tgt_id', -1),
                 'name': '',
-                'action_type': 34  # ACTION_NUKE_CITY
+                'action_type': ACTION_NUKE_CITY
             }
         elif action_type == 'unit_nuke_units':
             return {
-                'pid': 84,  # PACKET_UNIT_DO_ACTION
+                'pid': PACKET_UNIT_DO_ACTION,
                 'actor_id': action['unit_id'],
                 'target_id': action.get('target_id', -1),
                 'sub_tgt_id': action.get('sub_tgt_id', -1),
                 'name': '',
-                'action_type': 35  # ACTION_NUKE_UNITS
+                'action_type': ACTION_NUKE_UNITS
             }
         elif action_type == 'unit_expel':
             return {
-                'pid': 84,  # PACKET_UNIT_DO_ACTION
+                'pid': PACKET_UNIT_DO_ACTION,
                 'actor_id': action['unit_id'],
                 'target_id': action.get('target_id', -1),
                 'sub_tgt_id': action.get('sub_tgt_id', -1),
                 'name': '',
-                'action_type': 37  # ACTION_EXPEL_UNIT
+                'action_type': ACTION_EXPEL_UNIT
             }
         elif action_type == 'unit_heal':
             return {
-                'pid': 84,  # PACKET_UNIT_DO_ACTION
+                'pid': PACKET_UNIT_DO_ACTION,
                 'actor_id': action['unit_id'],
                 'target_id': action.get('target_id', -1),
                 'sub_tgt_id': action.get('sub_tgt_id', -1),
                 'name': '',
-                'action_type': 98  # ACTION_HEAL_UNIT
+                'action_type': ACTION_HEAL_UNIT
             }
         elif action_type == 'unit_pillage':
             return {
-                'pid': 84,  # PACKET_UNIT_DO_ACTION
+                'pid': PACKET_UNIT_DO_ACTION,
                 'actor_id': action['unit_id'],
                 'target_id': action.get('target_id', action.get('tile_id', -1)),
                 'sub_tgt_id': action.get('extra_id', -1),  # Which improvement to pillage
+                'sub_target': action.get('extra_id', -1),
                 'name': '',
-                'action_type': 65  # ACTION_PILLAGE
+                'action_type': ACTION_PILLAGE
             }
 
         # =================================================================
@@ -2658,58 +2691,64 @@ class LLMWSHandler(websocket.WebSocketHandler):
         # =================================================================
         elif action_type == 'unit_board':
             return {
-                'pid': 84,  # PACKET_UNIT_DO_ACTION
+                'pid': PACKET_UNIT_DO_ACTION,  # PACKET_UNIT_DO_ACTION
                 'actor_id': action['unit_id'],
                 'target_id': action.get('transport_id', action.get('target_id', -1)),
                 'sub_tgt_id': action.get('sub_tgt_id', -1),
+                'sub_target': action.get('sub_tgt_id', -1),
                 'name': '',
-                'action_type': 68  # ACTION_TRANSPORT_BOARD
+                'action_type': ACTION_TRANSPORT_BOARD
             }
         elif action_type == 'unit_embark':
             return {
-                'pid': 84,  # PACKET_UNIT_DO_ACTION
+                'pid': PACKET_UNIT_DO_ACTION,
                 'actor_id': action['unit_id'],
                 'target_id': action.get('transport_id', action.get('target_id', -1)),
                 'sub_tgt_id': action.get('sub_tgt_id', -1),
+                'sub_target': action.get('sub_tgt_id', -1),
                 'name': '',
-                'action_type': 72  # ACTION_TRANSPORT_EMBARK
+                'action_type': ACTION_TRANSPORT_EMBARK
             }
         elif action_type == 'unit_disembark':
             return {
-                'pid': 84,  # PACKET_UNIT_DO_ACTION
+                'pid': PACKET_UNIT_DO_ACTION,
                 'actor_id': action['unit_id'],
                 'target_id': action.get('tile_id', action.get('target_id', -1)),
                 'sub_tgt_id': action.get('sub_tgt_id', -1),
+                'sub_target': action.get('sub_tgt_id', -1),
                 'name': '',
-                'action_type': 76  # ACTION_TRANSPORT_DISEMBARK1
+                'action_type': ACTION_TRANSPORT_DISEMBARK1
             }
         elif action_type == 'unit_unload':
             # Unload a unit from transport at current location
             return {
-                'pid': 84,  # PACKET_UNIT_DO_ACTION
+                'pid': PACKET_UNIT_DO_ACTION,
                 'actor_id': action.get('transport_id', action['unit_id']),
                 'target_id': action.get('cargo_id', action.get('target_id', -1)),
                 'sub_tgt_id': action.get('sub_tgt_id', -1),
+                'sub_target': action.get('sub_tgt_id', -1),
                 'name': '',
-                'action_type': 83  # ACTION_TRANSPORT_UNLOAD
+                'action_type': ACTION_TRANSPORT_UNLOAD
             }
         elif action_type == 'unit_airlift':
             return {
-                'pid': 84,  # PACKET_UNIT_DO_ACTION
+                'pid': PACKET_UNIT_DO_ACTION,
                 'actor_id': action['unit_id'],
                 'target_id': action.get('city_id', action.get('target_id', -1)),
                 'sub_tgt_id': action.get('sub_tgt_id', -1),
+                'sub_target': action.get('sub_tgt_id', -1),
                 'name': '',
-                'action_type': 44  # ACTION_AIRLIFT
+                'action_type': ACTION_AIRLIFT
             }
         elif action_type == 'unit_paradrop':
             return {
-                'pid': 84,  # PACKET_UNIT_DO_ACTION
+                'pid': PACKET_UNIT_DO_ACTION,
                 'actor_id': action['unit_id'],
                 'target_id': action.get('tile_id', action.get('target_id', -1)),
                 'sub_tgt_id': action.get('sub_tgt_id', -1),
+                'sub_target': action.get('sub_tgt_id', -1),
                 'name': '',
-                'action_type': 100  # ACTION_PARADROP
+                'action_type': ACTION_PARADROP
             }
 
         # =================================================================
@@ -2717,111 +2756,118 @@ class LLMWSHandler(websocket.WebSocketHandler):
         # =================================================================
         elif action_type == 'spy_investigate_city':
             return {
-                'pid': 84,  # PACKET_UNIT_DO_ACTION
+                'pid': PACKET_UNIT_DO_ACTION,
                 'actor_id': action['unit_id'],
                 'target_id': action.get('city_id', action.get('target_id', -1)),
                 'sub_tgt_id': action.get('sub_tgt_id', -1),
                 'name': '',
-                'action_type': 2  # ACTION_SPY_INVESTIGATE_CITY
+                'action_type': ACTION_SPY_INVESTIGATE_CITY
             }
         elif action_type == 'spy_poison':
             return {
-                'pid': 84,  # PACKET_UNIT_DO_ACTION
+                'pid': PACKET_UNIT_DO_ACTION,
                 'actor_id': action['unit_id'],
                 'target_id': action.get('city_id', action.get('target_id', -1)),
                 'sub_tgt_id': action.get('sub_tgt_id', -1),
                 'name': '',
-                'action_type': 4  # ACTION_SPY_POISON
+                'action_type': ACTION_SPY_POISON
             }
         elif action_type == 'spy_sabotage_city':
+            # Include both sub_tgt_id and sub_target for compatibility; remove normalization helper usage
+            sub = action.get('building_id', -1)
             return {
-                'pid': 84,  # PACKET_UNIT_DO_ACTION
+                'pid': PACKET_UNIT_DO_ACTION,
                 'actor_id': action['unit_id'],
                 'target_id': action.get('city_id', action.get('target_id', -1)),
-                'sub_tgt_id': action.get('building_id', -1),  # Specific building or -1 for random
+                'sub_tgt_id': sub,  # Specific building or -1 for random
+                'sub_target': sub,
                 'name': '',
-                'action_type': 8  # ACTION_SPY_SABOTAGE_CITY
+                'action_type': ACTION_SPY_SABOTAGE_CITY
             }
         elif action_type == 'spy_targeted_sabotage_city':
+            sub = action.get('building_id')
             return {
-                'pid': 84,  # PACKET_UNIT_DO_ACTION
+                'pid': PACKET_UNIT_DO_ACTION,
                 'actor_id': action['unit_id'],
                 'target_id': action.get('city_id', action.get('target_id', -1)),
-                'sub_tgt_id': action['building_id'],  # Required for targeted sabotage
+                'sub_tgt_id': sub,  # Required for targeted sabotage
+                'sub_target': sub,
                 'name': '',
-                'action_type': 10  # ACTION_SPY_TARGETED_SABOTAGE_CITY
+                'action_type': ACTION_SPY_TARGETED_SABOTAGE_CITY
             }
         elif action_type == 'spy_steal_tech':
             return {
-                'pid': 84,  # PACKET_UNIT_DO_ACTION
+                'pid': PACKET_UNIT_DO_ACTION,
                 'actor_id': action['unit_id'],
                 'target_id': action.get('city_id', action.get('target_id', -1)),
                 'sub_tgt_id': action.get('sub_tgt_id', -1),
                 'name': '',
-                'action_type': 14  # ACTION_SPY_STEAL_TECH
+                'action_type': ACTION_SPY_STEAL_TECH
             }
         elif action_type == 'spy_targeted_steal_tech':
+            tech = action.get('tech_id')
             return {
-                'pid': 84,  # PACKET_UNIT_DO_ACTION
+                'pid': PACKET_UNIT_DO_ACTION,
                 'actor_id': action['unit_id'],
                 'target_id': action.get('city_id', action.get('target_id', -1)),
-                'sub_tgt_id': action['tech_id'],  # Required - which tech to steal
+                'sub_tgt_id': tech,  # Required - which tech to steal
+                'sub_target': tech,
                 'name': '',
-                'action_type': 16  # ACTION_SPY_TARGETED_STEAL_TECH
+                'action_type': ACTION_SPY_TARGETED_STEAL_TECH
             }
         elif action_type == 'spy_incite_city':
             return {
-                'pid': 84,  # PACKET_UNIT_DO_ACTION
+                'pid': PACKET_UNIT_DO_ACTION,
                 'actor_id': action['unit_id'],
                 'target_id': action.get('city_id', action.get('target_id', -1)),
                 'sub_tgt_id': action.get('sub_tgt_id', -1),
                 'name': '',
-                'action_type': 18  # ACTION_SPY_INCITE_CITY
+                'action_type': ACTION_SPY_INCITE_CITY
             }
         elif action_type == 'spy_bribe_unit':
             return {
-                'pid': 84,  # PACKET_UNIT_DO_ACTION
+                'pid': PACKET_UNIT_DO_ACTION,
                 'actor_id': action['unit_id'],
                 'target_id': action.get('target_unit_id', action.get('target_id', -1)),
                 'sub_tgt_id': action.get('sub_tgt_id', -1),
                 'name': '',
-                'action_type': 23  # ACTION_SPY_BRIBE_UNIT
+                'action_type': ACTION_SPY_BRIBE_UNIT
             }
         elif action_type == 'establish_embassy':
             return {
-                'pid': 84,  # PACKET_UNIT_DO_ACTION
+                'pid': PACKET_UNIT_DO_ACTION,
                 'actor_id': action['unit_id'],
                 'target_id': action.get('city_id', action.get('target_id', -1)),
                 'sub_tgt_id': action.get('sub_tgt_id', -1),
                 'name': '',
-                'action_type': 0  # ACTION_ESTABLISH_EMBASSY
+                'action_type': ACTION_ESTABLISH_EMBASSY
             }
         elif action_type == 'spy_steal_gold':
             return {
-                'pid': 84,  # PACKET_UNIT_DO_ACTION
+                'pid': PACKET_UNIT_DO_ACTION,
                 'actor_id': action['unit_id'],
                 'target_id': action.get('city_id', action.get('target_id', -1)),
                 'sub_tgt_id': action.get('sub_tgt_id', -1),
                 'name': '',
-                'action_type': 82  # ACTION_SPY_STEAL_GOLD (approximate)
+                'action_type': ACTION_SPY_STEAL_GOLD
             }
         elif action_type == 'spy_spread_plague':
             return {
-                'pid': 84,  # PACKET_UNIT_DO_ACTION
+                'pid': PACKET_UNIT_DO_ACTION,
                 'actor_id': action['unit_id'],
                 'target_id': action.get('city_id', action.get('target_id', -1)),
                 'sub_tgt_id': action.get('sub_tgt_id', -1),
                 'name': '',
-                'action_type': 84  # ACTION_SPY_SPREAD_PLAGUE (approximate)
+                'action_type': ACTION_SPY_SPREAD_PLAGUE
             }
         elif action_type == 'spy_nuke_city':
             return {
-                'pid': 84,  # PACKET_UNIT_DO_ACTION
+                'pid': PACKET_UNIT_DO_ACTION,
                 'actor_id': action['unit_id'],
                 'target_id': action.get('city_id', action.get('target_id', -1)),
                 'sub_tgt_id': action.get('sub_tgt_id', -1),
                 'name': '',
-                'action_type': 86  # ACTION_SPY_NUKE_CITY (approximate)
+                'action_type': ACTION_CONQUER_EXTRAS
             }
 
         # =================================================================
@@ -2829,30 +2875,30 @@ class LLMWSHandler(websocket.WebSocketHandler):
         # =================================================================
         elif action_type == 'unit_trade_route':
             return {
-                'pid': 84,  # PACKET_UNIT_DO_ACTION
+                'pid': PACKET_UNIT_DO_ACTION,
                 'actor_id': action['unit_id'],
                 'target_id': action.get('city_id', action.get('target_id', -1)),
                 'sub_tgt_id': action.get('sub_tgt_id', -1),
                 'name': '',
-                'action_type': 20  # ACTION_TRADE_ROUTE
+                'action_type': ACTION_TRADE_ROUTE
             }
         elif action_type == 'unit_marketplace':
             return {
-                'pid': 84,  # PACKET_UNIT_DO_ACTION
+                'pid': PACKET_UNIT_DO_ACTION,
                 'actor_id': action['unit_id'],
                 'target_id': action.get('city_id', action.get('target_id', -1)),
                 'sub_tgt_id': action.get('sub_tgt_id', -1),
                 'name': '',
-                'action_type': 21  # ACTION_MARKETPLACE
+                'action_type': ACTION_MARKETPLACE
             }
         elif action_type == 'unit_help_wonder':
             return {
-                'pid': 84,  # PACKET_UNIT_DO_ACTION
+                'pid': PACKET_UNIT_DO_ACTION,
                 'actor_id': action['unit_id'],
                 'target_id': action.get('city_id', action.get('target_id', -1)),
                 'sub_tgt_id': action.get('sub_tgt_id', -1),
                 'name': '',
-                'action_type': 22  # ACTION_HELP_WONDER
+                'action_type': ACTION_HELP_WONDER
             }
 
         # =================================================================
@@ -2860,37 +2906,37 @@ class LLMWSHandler(websocket.WebSocketHandler):
         # =================================================================
         elif action_type == 'diplomacy_start_negotiation':
             return {
-                'pid': 95,  # PACKET_DIPLOMACY_INIT_MEETING_REQ
+                'pid': PACKET_DIPLOMACY_INIT_MEETING_REQ,
                 'counterpart': action['player_id']
             }
         elif action_type == 'diplomacy_cancel_meeting':
             return {
-                'pid': 97,  # PACKET_DIPLOMACY_CANCEL_MEETING_REQ
+                'pid': PACKET_DIPLOMACY_CANCEL_MEETING_REQ,
                 'counterpart': action['player_id']
             }
         elif action_type == 'diplomacy_accept_treaty':
             return {
-                'pid': 99,  # PACKET_DIPLOMACY_ACCEPT_TREATY_REQ
+                'pid': PACKET_DIPLOMACY_ACCEPT_TREATY_REQ,
                 'counterpart': action['player_id']
             }
         elif action_type == 'diplomacy_cancel_pact':
             # CLAUSE_CEASEFIRE = 5, CLAUSE_PEACE = 6, CLAUSE_ALLIANCE = 7
             clause_type = action.get('clause_type', 6)  # Default to CLAUSE_PEACE
             return {
-                'pid': 105,  # PACKET_DIPLOMACY_CANCEL_PACT
+                'pid': PACKET_DIPLOMACY_CANCEL_PACT,
                 'other_player_id': action['player_id'],
                 'clause': clause_type
             }
         elif action_type == 'diplomacy_declare_war':
             # Cancel all peace clauses to declare war
             return {
-                'pid': 105,  # PACKET_DIPLOMACY_CANCEL_PACT
+                'pid': PACKET_DIPLOMACY_CANCEL_PACT,
                 'other_player_id': action['player_id'],
                 'clause': 5  # CLAUSE_CEASEFIRE - canceling to declare war
             }
         elif action_type == 'diplomacy_propose_ceasefire':
             return {
-                'pid': 101,  # PACKET_DIPLOMACY_CREATE_CLAUSE_REQ
+                'pid': PACKET_DIPLOMACY_CREATE_CLAUSE_REQ,
                 'counterpart': action['player_id'],
                 'giver': action.get('giver', -1),  # Player giving the clause
                 'type': 5,  # CLAUSE_CEASEFIRE
@@ -2898,7 +2944,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
             }
         elif action_type == 'diplomacy_propose_peace':
             return {
-                'pid': 101,  # PACKET_DIPLOMACY_CREATE_CLAUSE_REQ
+                'pid': PACKET_DIPLOMACY_CREATE_CLAUSE_REQ,
                 'counterpart': action['player_id'],
                 'giver': action.get('giver', -1),
                 'type': 6,  # CLAUSE_PEACE
@@ -2906,7 +2952,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
             }
         elif action_type == 'diplomacy_propose_alliance':
             return {
-                'pid': 101,  # PACKET_DIPLOMACY_CREATE_CLAUSE_REQ
+                'pid': PACKET_DIPLOMACY_CREATE_CLAUSE_REQ,
                 'counterpart': action['player_id'],
                 'giver': action.get('giver', -1),
                 'type': 7,  # CLAUSE_ALLIANCE
@@ -2914,7 +2960,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
             }
         elif action_type == 'diplomacy_share_vision':
             return {
-                'pid': 101,  # PACKET_DIPLOMACY_CREATE_CLAUSE_REQ
+                'pid': PACKET_DIPLOMACY_CREATE_CLAUSE_REQ,
                 'counterpart': action['player_id'],
                 'giver': action.get('giver', -1),
                 'type': 8,  # CLAUSE_VISION
@@ -2922,7 +2968,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
             }
         elif action_type == 'diplomacy_withdraw_vision':
             return {
-                'pid': 103,  # PACKET_DIPLOMACY_REMOVE_CLAUSE_REQ
+                'pid': PACKET_DIPLOMACY_REMOVE_CLAUSE_REQ,
                 'counterpart': action['player_id'],
                 'giver': action.get('giver', -1),
                 'type': 8,  # CLAUSE_VISION
@@ -2934,26 +2980,26 @@ class LLMWSHandler(websocket.WebSocketHandler):
         # =================================================================
         elif action_type == 'city_buy':
             return {
-                'pid': 34,  # PACKET_CITY_BUY
+                'pid': PACKET_CITY_BUY,  # PACKET_CITY_BUY
                 'city_id': action['city_id']
             }
         elif action_type == 'city_sell_improvement':
             return {
-                'pid': 33,  # PACKET_CITY_SELL
+                'pid': PACKET_CITY_SELL,  # PACKET_CITY_SELL
                 'city_id': action['city_id'],
                 'build_id': action['improvement_id']
             }
         elif action_type == 'city_unload':
             # Unload all units from city (equivalent to activating them)
             return {
-                'pid': 222,  # PACKET_UNIT_CHANGE_ACTIVITY
+                'pid': PACKET_UNIT_CHANGE_ACTIVITY,  # PACKET_UNIT_CHANGE_ACTIVITY
                 'unit_id': action.get('unit_id', -1),
-                'activity': 0,  # ACTIVITY_IDLE - activate the unit
+                'activity': ACTIVITY_IDLE,  # ACTIVITY_IDLE - activate the unit
                 'target': -1
             }
         elif action_type == 'city_rename':
             return {
-                'pid': 36,  # PACKET_CITY_RENAME
+                'pid': PACKET_CITY_RENAME,  # PACKET_CITY_RENAME
                 'city_id': action['city_id'],
                 'name': action['name']
             }
@@ -2961,7 +3007,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
             # Set city worklist - this typically uses multiple packets
             # For simplicity, we handle the change production case
             return {
-                'pid': 35,  # PACKET_CITY_CHANGE
+                'pid': PACKET_CITY_CHANGE,  # PACKET_CITY_CHANGE
                 'city_id': action['city_id'],
                 'production_kind': action.get('production_kind', 0),
                 'production_value': action.get('production_value', 0)
@@ -2972,89 +3018,89 @@ class LLMWSHandler(websocket.WebSocketHandler):
         # =================================================================
         elif action_type == 'unit_upgrade':
             return {
-                'pid': 84,  # PACKET_UNIT_DO_ACTION
+                'pid': PACKET_UNIT_DO_ACTION,
                 'actor_id': action['unit_id'],
                 'target_id': action.get('city_id', action.get('target_id', -1)),
                 'sub_tgt_id': action.get('sub_tgt_id', -1),
                 'name': '',
-                'action_type': 42  # ACTION_UPGRADE_UNIT
+                'action_type': ACTION_UPGRADE_UNIT
             }
         elif action_type == 'unit_join_city':
             return {
-                'pid': 84,  # PACKET_UNIT_DO_ACTION
+                'pid': PACKET_UNIT_DO_ACTION,
                 'actor_id': action['unit_id'],
                 'target_id': action.get('city_id', action.get('target_id', -1)),
                 'sub_tgt_id': action.get('sub_tgt_id', -1),
                 'name': '',
-                'action_type': 28  # ACTION_JOIN_CITY
+                'action_type': ACTION_JOIN_CITY
             }
         elif action_type == 'unit_clean_pollution':
             return {
-                'pid': 222,  # PACKET_UNIT_CHANGE_ACTIVITY
+                'pid': PACKET_UNIT_CHANGE_ACTIVITY,  # PACKET_UNIT_CHANGE_ACTIVITY
                 'unit_id': action['unit_id'],
-                'activity': 7,  # ACTIVITY_POLLUTION (clean pollution)
+                'activity': ACTIVITY_POLLUTION,  # ACTIVITY_POLLUTION (clean pollution)
                 'target': action.get('tile_id', -1)
             }
         elif action_type == 'unit_clean_fallout':
             return {
-                'pid': 222,  # PACKET_UNIT_CHANGE_ACTIVITY
+                'pid': PACKET_UNIT_CHANGE_ACTIVITY,  # PACKET_UNIT_CHANGE_ACTIVITY
                 'unit_id': action['unit_id'],
-                'activity': 11,  # ACTIVITY_FALLOUT (clean fallout)
+                'activity': ACTIVITY_FALLOUT,  # ACTIVITY_FALLOUT (clean fallout)
                 'target': action.get('tile_id', -1)
             }
         elif action_type == 'unit_transform':
             return {
-                'pid': 222,  # PACKET_UNIT_CHANGE_ACTIVITY
+                'pid': PACKET_UNIT_CHANGE_ACTIVITY,  # PACKET_UNIT_CHANGE_ACTIVITY
                 'unit_id': action['unit_id'],
-                'activity': 8,  # ACTIVITY_TRANSFORM
+                'activity': ACTIVITY_TRANSFORM,  # ACTIVITY_TRANSFORM
                 'target': -1
             }
         elif action_type == 'unit_cultivate':
             return {
-                'pid': 84,  # PACKET_UNIT_DO_ACTION
+                'pid': PACKET_UNIT_DO_ACTION,
                 'actor_id': action['unit_id'],
                 'target_id': action.get('tile_id', action.get('target_id', -1)),
                 'sub_tgt_id': action.get('sub_tgt_id', -1),
                 'name': '',
-                'action_type': 64  # ACTION_CULTIVATE
+                'action_type': ACTION_CULTIVATE
             }
         elif action_type == 'unit_plant':
             return {
-                'pid': 84,  # PACKET_UNIT_DO_ACTION
+                'pid': PACKET_UNIT_DO_ACTION,
                 'actor_id': action['unit_id'],
                 'target_id': action.get('tile_id', action.get('target_id', -1)),
                 'sub_tgt_id': action.get('sub_tgt_id', -1),
                 'name': '',
-                'action_type': 66  # ACTION_PLANT
+                'action_type': ACTION_PLANT
             }
         elif action_type == 'unit_disband':
             return {
-                'pid': 84,  # PACKET_UNIT_DO_ACTION
+                'pid': PACKET_UNIT_DO_ACTION,
                 'actor_id': action['unit_id'],
                 'target_id': action.get('target_id', -1),
                 'sub_tgt_id': action.get('sub_tgt_id', -1),
                 'name': '',
-                'action_type': 30  # ACTION_DISBAND_UNIT
+                'action_type': ACTION_DISBAND_UNIT
             }
         elif action_type == 'unit_home_city':
             return {
-                'pid': 84,  # PACKET_UNIT_DO_ACTION
+                'pid': PACKET_UNIT_DO_ACTION,
                 'actor_id': action['unit_id'],
                 'target_id': action.get('city_id', action.get('target_id', -1)),
                 'sub_tgt_id': action.get('sub_tgt_id', -1),
                 'name': '',
-                'action_type': 32  # ACTION_HOME_CITY
+                'action_type': ACTION_HOME_CITY
             }
         elif action_type == 'unit_wake':
             return {
-                'pid': 222,  # PACKET_UNIT_CHANGE_ACTIVITY
+                'pid': PACKET_UNIT_CHANGE_ACTIVITY,  # PACKET_UNIT_CHANGE_ACTIVITY
                 'unit_id': action['unit_id'],
-                'activity': 0,  # ACTIVITY_IDLE (wake up/activate)
+                'activity': ACTIVITY_IDLE,  # ACTIVITY_IDLE (wake up/activate)
                 'target': -1
             }
         elif action_type == 'unit_auto_worker':
             return {
-                'pid': 74,  # PACKET_UNIT_SERVER_SIDE_AGENT_SET
+                'pid': PACKET_UNIT_SERVER_SIDE_AGENT_SET,  # PACKET_UNIT_SERVER_SIDE_AGENT_SET
                 'unit_id': action['unit_id'],
                 'agent': 1  # Auto-worker mode
             }
@@ -3176,7 +3222,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
             # Create proper FreeCiv login packet (PACKET_SERVER_JOIN_REQ)
             # Must include pid=4 and version fields for server to parse it
             login_packet = json.dumps({
-                'pid': 4,  # PACKET_SERVER_JOIN_REQ
+                'pid': PACKET_SERVER_JOIN_REQ,  # PACKET_SERVER_JOIN_REQ
                 'username': self.agent_id,
                 'capability': '+Freeciv.Web.Devel-3.3',
                 'version_label': '-dev',

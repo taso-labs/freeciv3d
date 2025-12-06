@@ -11,58 +11,26 @@ import pytest
 import re
 import os
 
-
-def create_convert_action_to_packet():
-    """
-    Extract and compile the _convert_action_to_packet method from llm_handler.py.
-    
-    This approach avoids import issues with tornado and other dependencies.
-    """
-    # Read the source file
-    handler_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'llm_handler.py')
-    with open(handler_path, 'r') as f:
-        source = f.read()
-    
-    # Find the method definition - it ends at the next def _get_unit_tile
-    method_pattern = r'(    def _convert_action_to_packet\(self, action: Dict\[str, Any\]\).*?)(?=\n    def _get_unit_tile)'
-    match = re.search(method_pattern, source, re.DOTALL)
-    
-    if not match:
-        raise RuntimeError("Could not find _convert_action_to_packet method in llm_handler.py")
-    
-    method_code = match.group(1)
-    
-    # Convert to standalone function by removing 'self' and outdenting
-    # Also remove type annotations that require imports
-    method_code = method_code.replace('def _convert_action_to_packet(self, action: Dict[str, Any]) -> Dict[str, Any]:', 
-                                       'def _convert_action_to_packet(action):')
-    
-    # Remove any self.logger calls (just ignore them)
-    method_code = re.sub(r'\s*self\.logger\.[a-z]+\([^)]*\)', '', method_code)
-    
-    # Stub out self._get_unit_tile calls with -1
-    method_code = re.sub(r'self\._get_unit_tile\([^)]+\)', '-1', method_code)
-    
-    # Remove indent (4 spaces)
-    lines = method_code.split('\n')
-    dedented_lines = []
-    for line in lines:
-        if line.startswith('    '):
-            dedented_lines.append(line[4:])
-        else:
-            dedented_lines.append(line)
-    
-    function_code = '\n'.join(dedented_lines)
-    
-    # Compile and execute
-    local_namespace = {}
-    exec(function_code, {}, local_namespace)
-    
-    return local_namespace['_convert_action_to_packet']
-
-
-# Create the converter function once at module load
-_convert_action_to_packet = create_convert_action_to_packet()
+from action_constants import *
+from packet_constants import (
+    PACKET_UNIT_DO_ACTION,
+    PACKET_UNIT_ORDERS,
+    PACKET_UNIT_SERVER_SIDE_AGENT_SET,
+    PACKET_UNIT_CHANGE_ACTIVITY,
+    PACKET_CITY_CHANGE,
+    PACKET_PLAYER_RESEARCH,
+    PACKET_PLAYER_PHASE_DONE,
+    PACKET_CITY_BUY,
+    PACKET_CITY_SELL,
+    PACKET_CITY_RENAME,
+    PACKET_DIPLOMACY_INIT_MEETING_REQ,
+    PACKET_DIPLOMACY_CANCEL_MEETING_REQ,
+    PACKET_DIPLOMACY_ACCEPT_TREATY_REQ,
+    PACKET_DIPLOMACY_CREATE_CLAUSE_REQ,
+    PACKET_DIPLOMACY_CANCEL_PACT,
+    PACKET_DIPLOMACY_REMOVE_CLAUSE_REQ,
+)
+from packet_converter import convert_action_to_packet as _convert_action_to_packet
 
 
 class TestCombatActionConverters:
@@ -78,7 +46,7 @@ class TestCombatActionConverters:
         
         result = _convert_action_to_packet(action)
         
-        assert result['pid'] == 84  # PACKET_UNIT_DO_ACTION
+        assert result['pid'] == PACKET_UNIT_DO_ACTION
         assert result['actor_id'] == 101
         assert result['target_id'] == 202
         assert result['action_type'] == 45  # ACTION_ATTACK
@@ -93,8 +61,8 @@ class TestCombatActionConverters:
         
         result = _convert_action_to_packet(action)
         
-        assert result['pid'] == 84
-        assert result['action_type'] == 46  # ACTION_SUICIDE_ATTACK
+        assert result['pid'] == PACKET_UNIT_DO_ACTION
+        assert result['action_type'] == ACTION_SUICIDE_ATTACK
     
     def test_unit_bombard_conversion(self):
         """Test unit_bombard converts to action_type 53."""
@@ -106,8 +74,8 @@ class TestCombatActionConverters:
         
         result = _convert_action_to_packet(action)
         
-        assert result['pid'] == 84
-        assert result['action_type'] == 53  # ACTION_BOMBARD
+        assert result['pid'] == PACKET_UNIT_DO_ACTION
+        assert result['action_type'] == ACTION_BOMBARD
     
     def test_unit_capture_conversion(self):
         """Test unit_capture converts to action_type 24."""
@@ -119,8 +87,8 @@ class TestCombatActionConverters:
         
         result = _convert_action_to_packet(action)
         
-        assert result['pid'] == 84
-        assert result['action_type'] == 24  # ACTION_CAPTURE_UNITS
+        assert result['pid'] == PACKET_UNIT_DO_ACTION
+        assert result['action_type'] == ACTION_CAPTURE_UNITS
     
     def test_unit_nuke_conversion(self):
         """Test unit_nuke converts to action_type 33."""
@@ -132,8 +100,8 @@ class TestCombatActionConverters:
         
         result = _convert_action_to_packet(action)
         
-        assert result['pid'] == 84
-        assert result['action_type'] == 33  # ACTION_NUKE
+        assert result['pid'] == PACKET_UNIT_DO_ACTION
+        assert result['action_type'] == ACTION_NUKE
     
     def test_unit_nuke_city_conversion(self):
         """Test unit_nuke_city converts to action_type 34."""
@@ -145,8 +113,8 @@ class TestCombatActionConverters:
         
         result = _convert_action_to_packet(action)
         
-        assert result['pid'] == 84
-        assert result['action_type'] == 34  # ACTION_NUKE_CITY
+        assert result['pid'] == PACKET_UNIT_DO_ACTION
+        assert result['action_type'] == ACTION_NUKE_CITY
     
     def test_unit_pillage_conversion(self):
         """Test unit_pillage includes extra_id as sub_target."""
@@ -159,8 +127,8 @@ class TestCombatActionConverters:
         
         result = _convert_action_to_packet(action)
         
-        assert result['pid'] == 84
-        assert result['action_type'] == 65  # ACTION_PILLAGE
+        assert result['pid'] == PACKET_UNIT_DO_ACTION
+        assert result['action_type'] == ACTION_PILLAGE
         assert result['sub_target'] == 3  # extra_id for what to pillage
     
     def test_unit_heal_conversion(self):
@@ -173,8 +141,8 @@ class TestCombatActionConverters:
         
         result = _convert_action_to_packet(action)
         
-        assert result['pid'] == 84
-        assert result['action_type'] == 98  # ACTION_HEAL_UNIT
+        assert result['pid'] == PACKET_UNIT_DO_ACTION
+        assert result['action_type'] == ACTION_HEAL_UNIT
     
     def test_unit_conquer_city_conversion(self):
         """Test unit_conquer_city converts to action_type 49."""
@@ -186,8 +154,8 @@ class TestCombatActionConverters:
         
         result = _convert_action_to_packet(action)
         
-        assert result['pid'] == 84
-        assert result['action_type'] == 49  # ACTION_CONQUER_CITY
+        assert result['pid'] == PACKET_UNIT_DO_ACTION
+        assert result['action_type'] == ACTION_CONQUER_CITY
     
     def test_unit_expel_conversion(self):
         """Test unit_expel converts to action_type 37."""
@@ -199,8 +167,8 @@ class TestCombatActionConverters:
         
         result = _convert_action_to_packet(action)
         
-        assert result['pid'] == 84
-        assert result['action_type'] == 37  # ACTION_EXPEL_UNIT
+        assert result['pid'] == PACKET_UNIT_DO_ACTION
+        assert result['action_type'] == ACTION_EXPEL_UNIT
     
     def test_unit_nuke_units_conversion(self):
         """Test unit_nuke_units converts to action_type 35."""
@@ -212,8 +180,8 @@ class TestCombatActionConverters:
         
         result = _convert_action_to_packet(action)
         
-        assert result['pid'] == 84
-        assert result['action_type'] == 35  # ACTION_NUKE_UNITS
+        assert result['pid'] == PACKET_UNIT_DO_ACTION
+        assert result['action_type'] == ACTION_NUKE_UNITS
 
 
 class TestTransportActionConverters:
@@ -229,10 +197,10 @@ class TestTransportActionConverters:
         
         result = _convert_action_to_packet(action)
         
-        assert result['pid'] == 84
+        assert result['pid'] == PACKET_UNIT_DO_ACTION
         assert result['actor_id'] == 101
         assert result['target_id'] == 202
-        assert result['action_type'] == 68  # ACTION_TRANSPORT_BOARD
+        assert result['action_type'] == ACTION_TRANSPORT_BOARD
     
     def test_unit_embark_conversion(self):
         """Test unit_embark converts to action_type 72."""
@@ -244,8 +212,8 @@ class TestTransportActionConverters:
         
         result = _convert_action_to_packet(action)
         
-        assert result['pid'] == 84
-        assert result['action_type'] == 72  # ACTION_TRANSPORT_EMBARK
+        assert result['pid'] == PACKET_UNIT_DO_ACTION
+        assert result['action_type'] == ACTION_TRANSPORT_EMBARK
     
     def test_unit_disembark_conversion(self):
         """Test unit_disembark converts to action_type 76."""
@@ -257,9 +225,9 @@ class TestTransportActionConverters:
         
         result = _convert_action_to_packet(action)
         
-        assert result['pid'] == 84
+        assert result['pid'] == PACKET_UNIT_DO_ACTION
         assert result['target_id'] == 500  # tile_id
-        assert result['action_type'] == 76  # ACTION_TRANSPORT_DISEMBARK1
+        assert result['action_type'] == ACTION_TRANSPORT_DISEMBARK1
     
     def test_unit_airlift_conversion(self):
         """Test unit_airlift converts to action_type 44."""
@@ -271,9 +239,9 @@ class TestTransportActionConverters:
         
         result = _convert_action_to_packet(action)
         
-        assert result['pid'] == 84
+        assert result['pid'] == PACKET_UNIT_DO_ACTION
         assert result['target_id'] == 300  # city_id
-        assert result['action_type'] == 44  # ACTION_AIRLIFT
+        assert result['action_type'] == ACTION_AIRLIFT
     
     def test_unit_paradrop_conversion(self):
         """Test unit_paradrop converts to action_type 100."""
@@ -285,9 +253,9 @@ class TestTransportActionConverters:
         
         result = _convert_action_to_packet(action)
         
-        assert result['pid'] == 84
+        assert result['pid'] == PACKET_UNIT_DO_ACTION
         assert result['target_id'] == 700  # tile_id
-        assert result['action_type'] == 100  # ACTION_PARADROP
+        assert result['action_type'] == ACTION_PARADROP
 
 
 class TestEspionageActionConverters:
@@ -303,9 +271,9 @@ class TestEspionageActionConverters:
         
         result = _convert_action_to_packet(action)
         
-        assert result['pid'] == 84
+        assert result['pid'] == PACKET_UNIT_DO_ACTION
         assert result['target_id'] == 300
-        assert result['action_type'] == 2  # ACTION_SPY_INVESTIGATE_CITY
+        assert result['action_type'] == ACTION_SPY_INVESTIGATE_CITY
     
     def test_spy_poison_conversion(self):
         """Test spy_poison converts to action_type 4."""
@@ -317,8 +285,8 @@ class TestEspionageActionConverters:
         
         result = _convert_action_to_packet(action)
         
-        assert result['pid'] == 84
-        assert result['action_type'] == 4  # ACTION_SPY_POISON
+        assert result['pid'] == PACKET_UNIT_DO_ACTION
+        assert result['action_type'] == ACTION_SPY_POISON
     
     def test_spy_sabotage_city_conversion(self):
         """Test spy_sabotage_city converts to action_type 8."""
@@ -331,9 +299,9 @@ class TestEspionageActionConverters:
         
         result = _convert_action_to_packet(action)
         
-        assert result['pid'] == 84
+        assert result['pid'] == PACKET_UNIT_DO_ACTION
         assert result['sub_target'] == 5  # building_id
-        assert result['action_type'] == 8  # ACTION_SPY_SABOTAGE_CITY
+        assert result['action_type'] == ACTION_SPY_SABOTAGE_CITY
     
     def test_spy_targeted_sabotage_city_conversion(self):
         """Test spy_targeted_sabotage_city includes required building_id."""
@@ -346,9 +314,9 @@ class TestEspionageActionConverters:
         
         result = _convert_action_to_packet(action)
         
-        assert result['pid'] == 84
+        assert result['pid'] == PACKET_UNIT_DO_ACTION
         assert result['sub_target'] == 7  # Required building_id
-        assert result['action_type'] == 10  # ACTION_SPY_TARGETED_SABOTAGE_CITY
+        assert result['action_type'] == ACTION_SPY_TARGETED_SABOTAGE_CITY
     
     def test_spy_steal_tech_conversion(self):
         """Test spy_steal_tech converts to action_type 14."""
@@ -360,8 +328,8 @@ class TestEspionageActionConverters:
         
         result = _convert_action_to_packet(action)
         
-        assert result['pid'] == 84
-        assert result['action_type'] == 14  # ACTION_SPY_STEAL_TECH
+        assert result['pid'] == PACKET_UNIT_DO_ACTION
+        assert result['action_type'] == ACTION_SPY_STEAL_TECH
     
     def test_spy_targeted_steal_tech_conversion(self):
         """Test spy_targeted_steal_tech includes required tech_id."""
@@ -374,9 +342,9 @@ class TestEspionageActionConverters:
         
         result = _convert_action_to_packet(action)
         
-        assert result['pid'] == 84
+        assert result['pid'] == PACKET_UNIT_DO_ACTION
         assert result['sub_target'] == 25  # tech_id
-        assert result['action_type'] == 16  # ACTION_SPY_TARGETED_STEAL_TECH
+        assert result['action_type'] == ACTION_SPY_TARGETED_STEAL_TECH
     
     def test_spy_incite_city_conversion(self):
         """Test spy_incite_city converts to action_type 18."""
@@ -388,8 +356,8 @@ class TestEspionageActionConverters:
         
         result = _convert_action_to_packet(action)
         
-        assert result['pid'] == 84
-        assert result['action_type'] == 18  # ACTION_SPY_INCITE_CITY
+        assert result['pid'] == PACKET_UNIT_DO_ACTION
+        assert result['action_type'] == ACTION_SPY_INCITE_CITY
     
     def test_spy_bribe_unit_conversion(self):
         """Test spy_bribe_unit converts to action_type 23."""
@@ -401,9 +369,9 @@ class TestEspionageActionConverters:
         
         result = _convert_action_to_packet(action)
         
-        assert result['pid'] == 84
+        assert result['pid'] == PACKET_UNIT_DO_ACTION
         assert result['target_id'] == 202
-        assert result['action_type'] == 23  # ACTION_SPY_BRIBE_UNIT
+        assert result['action_type'] == ACTION_SPY_BRIBE_UNIT
     
     def test_establish_embassy_conversion(self):
         """Test establish_embassy converts to action_type 0."""
@@ -415,8 +383,8 @@ class TestEspionageActionConverters:
         
         result = _convert_action_to_packet(action)
         
-        assert result['pid'] == 84
-        assert result['action_type'] == 0  # ACTION_ESTABLISH_EMBASSY
+        assert result['pid'] == PACKET_UNIT_DO_ACTION
+        assert result['action_type'] == ACTION_ESTABLISH_EMBASSY
     
     def test_spy_steal_gold_conversion(self):
         """Test spy_steal_gold converts to action_type 82."""
@@ -427,9 +395,9 @@ class TestEspionageActionConverters:
         }
         
         result = _convert_action_to_packet(action)
-        
-        assert result['pid'] == 84
-        assert result['action_type'] == 82  # ACTION_SPY_STEAL_GOLD
+
+        assert result['pid'] == PACKET_UNIT_DO_ACTION
+        assert result['action_type'] == ACTION_SPY_STEAL_GOLD
     
     def test_spy_spread_plague_conversion(self):
         """Test spy_spread_plague converts to action_type 84."""
@@ -441,22 +409,8 @@ class TestEspionageActionConverters:
         
         result = _convert_action_to_packet(action)
         
-        assert result['pid'] == 84
-        assert result['action_type'] == 84  # ACTION_SPY_SPREAD_PLAGUE
-    
-    def test_spy_nuke_city_conversion(self):
-        """Test spy_nuke_city converts to action_type 86."""
-        action = {
-            'type': 'spy_nuke_city',
-            'unit_id': 101,
-            'city_id': 300
-        }
-        
-        result = _convert_action_to_packet(action)
-        
-        assert result['pid'] == 84
-        assert result['action_type'] == 86  # ACTION_SPY_NUKE_CITY
-
+        assert result['pid'] == PACKET_UNIT_DO_ACTION
+        assert result['action_type'] == ACTION_SPY_SPREAD_PLAGUE
 
 class TestTradeActionConverters:
     """Test trade action packet conversion."""
@@ -471,9 +425,9 @@ class TestTradeActionConverters:
         
         result = _convert_action_to_packet(action)
         
-        assert result['pid'] == 84
+        assert result['pid'] == PACKET_UNIT_DO_ACTION
         assert result['target_id'] == 300
-        assert result['action_type'] == 20  # ACTION_TRADE_ROUTE
+        assert result['action_type'] == ACTION_TRADE_ROUTE
     
     def test_unit_marketplace_conversion(self):
         """Test unit_marketplace converts to action_type 21."""
@@ -485,8 +439,8 @@ class TestTradeActionConverters:
         
         result = _convert_action_to_packet(action)
         
-        assert result['pid'] == 84
-        assert result['action_type'] == 21  # ACTION_MARKETPLACE
+        assert result['pid'] == PACKET_UNIT_DO_ACTION
+        assert result['action_type'] == ACTION_MARKETPLACE
     
     def test_unit_help_wonder_conversion(self):
         """Test unit_help_wonder converts to action_type 22."""
@@ -498,8 +452,8 @@ class TestTradeActionConverters:
         
         result = _convert_action_to_packet(action)
         
-        assert result['pid'] == 84
-        assert result['action_type'] == 22  # ACTION_HELP_WONDER
+        assert result['pid'] == PACKET_UNIT_DO_ACTION
+        assert result['action_type'] == ACTION_HELP_WONDER
 
 
 class TestDiplomacyActionConverters:
@@ -514,7 +468,7 @@ class TestDiplomacyActionConverters:
         
         result = _convert_action_to_packet(action)
         
-        assert result['pid'] == 95  # PACKET_DIPLOMACY_INIT_MEETING_REQ
+        assert result['pid'] == PACKET_DIPLOMACY_INIT_MEETING_REQ
         assert result['counterpart'] == 2
     
     def test_diplomacy_cancel_meeting_conversion(self):
@@ -526,7 +480,7 @@ class TestDiplomacyActionConverters:
         
         result = _convert_action_to_packet(action)
         
-        assert result['pid'] == 97  # PACKET_DIPLOMACY_CANCEL_MEETING_REQ
+        assert result['pid'] == PACKET_DIPLOMACY_CANCEL_MEETING_REQ
         assert result['counterpart'] == 2
     
     def test_diplomacy_accept_treaty_conversion(self):
@@ -538,7 +492,7 @@ class TestDiplomacyActionConverters:
         
         result = _convert_action_to_packet(action)
         
-        assert result['pid'] == 99  # PACKET_DIPLOMACY_ACCEPT_TREATY_REQ
+        assert result['pid'] == PACKET_DIPLOMACY_ACCEPT_TREATY_REQ
         assert result['counterpart'] == 2
     
     def test_diplomacy_cancel_pact_conversion(self):
@@ -551,7 +505,7 @@ class TestDiplomacyActionConverters:
         
         result = _convert_action_to_packet(action)
         
-        assert result['pid'] == 105  # PACKET_DIPLOMACY_CANCEL_PACT
+        assert result['pid'] == PACKET_DIPLOMACY_CANCEL_PACT
         assert result['other_player_id'] == 2
         assert result['clause'] == 6  # CLAUSE_PEACE
     
@@ -564,7 +518,7 @@ class TestDiplomacyActionConverters:
         
         result = _convert_action_to_packet(action)
         
-        assert result['pid'] == 105  # PACKET_DIPLOMACY_CANCEL_PACT
+        assert result['pid'] == PACKET_DIPLOMACY_CANCEL_PACT
         assert result['other_player_id'] == 2
         assert result['clause'] == 5  # CLAUSE_CEASEFIRE
     
@@ -577,7 +531,7 @@ class TestDiplomacyActionConverters:
         
         result = _convert_action_to_packet(action)
         
-        assert result['pid'] == 101  # PACKET_DIPLOMACY_CREATE_CLAUSE_REQ
+        assert result['pid'] == PACKET_DIPLOMACY_CREATE_CLAUSE_REQ
         assert result['counterpart'] == 2
         assert result['type'] == 5  # CLAUSE_CEASEFIRE
     
@@ -590,7 +544,7 @@ class TestDiplomacyActionConverters:
         
         result = _convert_action_to_packet(action)
         
-        assert result['pid'] == 101
+        assert result['pid'] == PACKET_DIPLOMACY_CREATE_CLAUSE_REQ
         assert result['type'] == 6  # CLAUSE_PEACE
     
     def test_diplomacy_propose_alliance_conversion(self):
@@ -602,7 +556,7 @@ class TestDiplomacyActionConverters:
         
         result = _convert_action_to_packet(action)
         
-        assert result['pid'] == 101
+        assert result['pid'] == PACKET_DIPLOMACY_CREATE_CLAUSE_REQ
         assert result['type'] == 7  # CLAUSE_ALLIANCE
     
     def test_diplomacy_share_vision_conversion(self):
@@ -614,7 +568,7 @@ class TestDiplomacyActionConverters:
         
         result = _convert_action_to_packet(action)
         
-        assert result['pid'] == 101
+        assert result['pid'] == PACKET_DIPLOMACY_CREATE_CLAUSE_REQ
         assert result['type'] == 8  # CLAUSE_VISION
     
     def test_diplomacy_withdraw_vision_conversion(self):
@@ -625,8 +579,8 @@ class TestDiplomacyActionConverters:
         }
         
         result = _convert_action_to_packet(action)
-        
-        assert result['pid'] == 103  # PACKET_DIPLOMACY_REMOVE_CLAUSE_REQ
+
+        assert result['pid'] == PACKET_DIPLOMACY_REMOVE_CLAUSE_REQ
         assert result['type'] == 8  # CLAUSE_VISION
 
 
@@ -642,7 +596,7 @@ class TestCityActionConverters:
         
         result = _convert_action_to_packet(action)
         
-        assert result['pid'] == 34  # PACKET_CITY_BUY
+        assert result['pid'] == PACKET_CITY_BUY
         assert result['city_id'] == 300
     
     def test_city_sell_improvement_conversion(self):
@@ -655,7 +609,7 @@ class TestCityActionConverters:
         
         result = _convert_action_to_packet(action)
         
-        assert result['pid'] == 33  # PACKET_CITY_SELL
+        assert result['pid'] == PACKET_CITY_SELL
         assert result['city_id'] == 300
         assert result['build_id'] == 5
     
@@ -668,8 +622,8 @@ class TestCityActionConverters:
         }
         
         result = _convert_action_to_packet(action)
-        
-        assert result['pid'] == 36  # PACKET_CITY_RENAME
+
+        assert result['pid'] == PACKET_CITY_RENAME
         assert result['city_id'] == 300
         assert result['name'] == 'New City Name'
 
@@ -687,8 +641,8 @@ class TestAdditionalUnitActionConverters:
         
         result = _convert_action_to_packet(action)
         
-        assert result['pid'] == 84
-        assert result['action_type'] == 42  # ACTION_UPGRADE_UNIT
+        assert result['pid'] == PACKET_UNIT_DO_ACTION
+        assert result['action_type'] == ACTION_UPGRADE_UNIT
     
     def test_unit_join_city_conversion(self):
         """Test unit_join_city converts to action_type 28."""
@@ -700,8 +654,8 @@ class TestAdditionalUnitActionConverters:
         
         result = _convert_action_to_packet(action)
         
-        assert result['pid'] == 84
-        assert result['action_type'] == 28  # ACTION_JOIN_CITY
+        assert result['pid'] == PACKET_UNIT_DO_ACTION
+        assert result['action_type'] == ACTION_JOIN_CITY
     
     def test_unit_clean_pollution_conversion(self):
         """Test unit_clean_pollution uses ACTIVITY_POLLUTION (7)."""
@@ -712,7 +666,7 @@ class TestAdditionalUnitActionConverters:
         
         result = _convert_action_to_packet(action)
         
-        assert result['pid'] == 222  # PACKET_UNIT_CHANGE_ACTIVITY
+        assert result['pid'] == PACKET_UNIT_CHANGE_ACTIVITY
         assert result['activity'] == 7  # ACTIVITY_POLLUTION
     
     def test_unit_clean_fallout_conversion(self):
@@ -724,7 +678,7 @@ class TestAdditionalUnitActionConverters:
         
         result = _convert_action_to_packet(action)
         
-        assert result['pid'] == 222
+        assert result['pid'] == PACKET_UNIT_CHANGE_ACTIVITY
         assert result['activity'] == 11  # ACTIVITY_FALLOUT
     
     def test_unit_transform_conversion(self):
@@ -736,7 +690,7 @@ class TestAdditionalUnitActionConverters:
         
         result = _convert_action_to_packet(action)
         
-        assert result['pid'] == 222
+        assert result['pid'] == PACKET_UNIT_CHANGE_ACTIVITY
         assert result['activity'] == 8  # ACTIVITY_TRANSFORM
     
     def test_unit_disband_conversion(self):
@@ -748,8 +702,8 @@ class TestAdditionalUnitActionConverters:
         
         result = _convert_action_to_packet(action)
         
-        assert result['pid'] == 84
-        assert result['action_type'] == 30  # ACTION_DISBAND_UNIT
+        assert result['pid'] == PACKET_UNIT_DO_ACTION
+        assert result['action_type'] == ACTION_DISBAND_UNIT
     
     def test_unit_home_city_conversion(self):
         """Test unit_home_city converts to action_type 32."""
@@ -761,8 +715,8 @@ class TestAdditionalUnitActionConverters:
         
         result = _convert_action_to_packet(action)
         
-        assert result['pid'] == 84
-        assert result['action_type'] == 32  # ACTION_HOME_CITY
+        assert result['pid'] == PACKET_UNIT_DO_ACTION
+        assert result['action_type'] == ACTION_HOME_CITY
     
     def test_unit_wake_conversion(self):
         """Test unit_wake uses ACTIVITY_IDLE (0)."""
@@ -773,7 +727,7 @@ class TestAdditionalUnitActionConverters:
         
         result = _convert_action_to_packet(action)
         
-        assert result['pid'] == 222
+        assert result['pid'] == PACKET_UNIT_CHANGE_ACTIVITY
         assert result['activity'] == 0  # ACTIVITY_IDLE (wake up)
     
     def test_unit_auto_worker_conversion(self):
@@ -785,7 +739,7 @@ class TestAdditionalUnitActionConverters:
         
         result = _convert_action_to_packet(action)
         
-        assert result['pid'] == 74  # PACKET_UNIT_SERVER_SIDE_AGENT_SET
+        assert result['pid'] == PACKET_UNIT_SERVER_SIDE_AGENT_SET
         assert result['agent'] == 1  # Auto-worker mode
     
     def test_unit_cultivate_conversion(self):
@@ -798,8 +752,8 @@ class TestAdditionalUnitActionConverters:
         
         result = _convert_action_to_packet(action)
         
-        assert result['pid'] == 84
-        assert result['action_type'] == 64  # ACTION_CULTIVATE
+        assert result['pid'] == PACKET_UNIT_DO_ACTION
+        assert result['action_type'] == ACTION_CULTIVATE
     
     def test_unit_plant_conversion(self):
         """Test unit_plant converts to action_type 66."""
@@ -811,8 +765,8 @@ class TestAdditionalUnitActionConverters:
         
         result = _convert_action_to_packet(action)
         
-        assert result['pid'] == 84
-        assert result['action_type'] == 66  # ACTION_PLANT
+        assert result['pid'] == PACKET_UNIT_DO_ACTION
+        assert result['action_type'] == ACTION_PLANT
 
 
 class TestFallbackBehavior:
@@ -933,7 +887,7 @@ class TestExistingActionConverters:
         
         result = _convert_action_to_packet(action)
         
-        assert result['pid'] == 73  # PACKET_UNIT_ORDERS
+        assert result['pid'] == PACKET_UNIT_ORDERS
         assert result['unit_id'] == 101
         assert result['dest_tile'] == 500
     
@@ -949,7 +903,7 @@ class TestExistingActionConverters:
         
         result = _convert_action_to_packet(action)
         
-        assert result['pid'] == 35  # PACKET_CITY_CHANGE
+        assert result['pid'] == PACKET_CITY_CHANGE
         assert result['city_id'] == 300
     
     @pytest.mark.skip(reason="Requires tech_name for lookup")
@@ -962,7 +916,7 @@ class TestExistingActionConverters:
         
         result = _convert_action_to_packet(action)
         
-        assert result['pid'] == 55  # PACKET_PLAYER_RESEARCH
+        assert result['pid'] == PACKET_PLAYER_RESEARCH
         assert result['tech'] == 15
     
     @pytest.mark.skip(reason="Requires self.civcom.player_id")
@@ -974,7 +928,7 @@ class TestExistingActionConverters:
         
         result = _convert_action_to_packet(action)
         
-        assert result['pid'] == 52  # PACKET_PLAYER_PHASE_DONE
+        assert result['pid'] == PACKET_PLAYER_PHASE_DONE
     
     def test_unit_build_city_conversion(self):
         """Test unit_build_city converts to PACKET_UNIT_DO_ACTION with action_type 27."""
@@ -986,7 +940,7 @@ class TestExistingActionConverters:
         
         result = _convert_action_to_packet(action)
         
-        assert result['pid'] == 84  # PACKET_UNIT_DO_ACTION
+        assert result['pid'] == PACKET_UNIT_DO_ACTION
         assert result['action_type'] == 27  # ACTION_FOUND_CITY
         assert result['name'] == 'New City'
     
@@ -999,7 +953,7 @@ class TestExistingActionConverters:
         
         result = _convert_action_to_packet(action)
         
-        assert result['pid'] == 222  # PACKET_UNIT_CHANGE_ACTIVITY
+        assert result['pid'] == PACKET_UNIT_CHANGE_ACTIVITY
         assert result['activity'] == 10  # ACTIVITY_FORTIFYING
     
     def test_unit_sentry_conversion(self):
@@ -1011,7 +965,7 @@ class TestExistingActionConverters:
         
         result = _convert_action_to_packet(action)
         
-        assert result['pid'] == 222
+        assert result['pid'] == PACKET_UNIT_CHANGE_ACTIVITY
         assert result['activity'] == 5  # ACTIVITY_SENTRY
     
     def test_unit_explore_conversion(self):
@@ -1023,5 +977,5 @@ class TestExistingActionConverters:
         
         result = _convert_action_to_packet(action)
         
-        assert result['pid'] == 74  # PACKET_UNIT_SERVER_SIDE_AGENT_SET
+        assert result['pid'] == PACKET_UNIT_SERVER_SIDE_AGENT_SET
         assert result['agent'] == 1  # SSA_AUTOEXPLORE

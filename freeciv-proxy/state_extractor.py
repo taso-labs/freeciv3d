@@ -113,15 +113,25 @@ class CivComRegistry:
         self._civcom_instances: Dict[Tuple[str, str], CivCom] = {}
         self._game_metadata: Dict[Tuple[str, str], Dict[str, Any]] = {}
 
-    def register_game(self, game_id: str, agent_id: str, civcom: CivCom, metadata: Optional[Dict[str, Any]] = None):
-        """Register a CivCom instance for a game with specific agent
+    def register_game(self, game_id: str, agent_id: str | CivCom = None, civcom: Optional[CivCom] = None, metadata: Optional[Dict[str, Any]] = None):
+        """Register a CivCom instance for a game.
+
+        Backwards-compatible signature support:
+        - register_game(game_id, civcom)
+        - register_game(game_id, agent_id, civcom)
 
         Args:
             game_id: Unique game identifier
-            agent_id: Unique agent/player identifier
-            civcom: CivCom instance to register
+            agent_id: Either agent_id (str) or a CivCom instance when using legacy 2-arg form
+            civcom: CivCom instance to register (required when specifying agent_id)
             metadata: Optional metadata dictionary
         """
+        # Backwards compatibility: allow register_game(game_id, civcom)
+        if civcom is None:
+            # agent_id parameter is actually the civcom instance in legacy calls
+            civcom = agent_id
+            agent_id = "default"
+
         if not isinstance(game_id, str) or not game_id.strip():
             raise ValueError("game_id must be a non-empty string")
 

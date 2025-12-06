@@ -884,11 +884,11 @@ class CivCom(Thread):
                         logger.info(f"Sent /start command to civserver on port {self.civserverport} for {self.username}")
                     elif pid == PACKET_CHAT_MSG:
                         logger.debug(f"Sent chat message to civserver: {message_text}")
-                    elif pid == 10:  # PACKET_NATION_SELECT_REQ
+                    elif pid == PACKET_NATION_SELECT_REQ:  # PACKET_NATION_SELECT_REQ
                         logger.info(f"Sent PACKET_NATION_SELECT_REQ (nation_no={msg_json.get('nation_no')}) for {self.username}")
-                    elif pid == 11:  # PACKET_PLAYER_READY
+                    elif pid == PACKET_PLAYER_READY:  # PACKET_PLAYER_READY
                         logger.info(f"Sent PACKET_PLAYER_READY (player_no={msg_json.get('player_no')}) for {self.username}")
-                    elif pid == 73:  # PACKET_UNIT_ORDERS - log all unit orders for debugging
+                    elif pid == PACKET_UNIT_ORDERS:  # PACKET_UNIT_ORDERS - log all unit orders for debugging
                         unit_id = msg_json.get('unit_id')
                         dest_tile = msg_json.get('dest_tile')
                         orders = msg_json.get('orders', [])

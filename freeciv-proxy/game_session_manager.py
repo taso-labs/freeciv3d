@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 
 from state_extractor import civcom_registry
+from packet_constants import PACKET_CHAT_MSG_REQ
 
 logger = logging.getLogger("freeciv-proxy")
 
@@ -260,7 +261,7 @@ class GameSession:
             # Multi-player games require /start command - they don't auto-start like single-player
             # All players have sent PACKET_PLAYER_READY, now we initiate the game
             logger.info(f"Game {self.game_id}: All {len(self.players)} players ready - sending /start command")
-            civcom.queue_to_civserver(json.dumps({"pid": 26, "message": "/start"}))
+            civcom.queue_to_civserver(json.dumps({"pid": PACKET_CHAT_MSG_REQ, "message": "/start"}))
             civcom.send_packets_to_civserver()
             logger.info(f"Game {self.game_id}: ✅ /start command sent to civserver")
 
