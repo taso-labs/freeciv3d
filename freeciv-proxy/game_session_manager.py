@@ -11,11 +11,13 @@ import json
 import logging
 import threading
 import time
-from typing import Dict, Set, Optional, Any
+import aiohttp
+from typing import Dict, Optional, Any
 from dataclasses import dataclass, field
 from enum import Enum
 
 from state_extractor import civcom_registry
+from packet_constants import PACKET_CHAT_MSG_REQ
 
 logger = logging.getLogger("freeciv-proxy")
 
@@ -259,7 +261,7 @@ class GameSession:
             # Multi-player games require /start command - they don't auto-start like single-player
             # All players have sent PACKET_PLAYER_READY, now we initiate the game
             logger.info(f"Game {self.game_id}: All {len(self.players)} players ready - sending /start command")
-            civcom.queue_to_civserver(json.dumps({"pid": 26, "message": "/start"}))
+            civcom.queue_to_civserver(json.dumps({"pid": PACKET_CHAT_MSG_REQ, "message": "/start"}))
             civcom.send_packets_to_civserver()
             logger.info(f"Game {self.game_id}: ✅ /start command sent to civserver")
 
@@ -359,26 +361,75 @@ class GameSession:
 class GameSessionManager:
     """Global manager for all game sessions"""
 
-    def __init__(self):
+    def __init__(self, metaserver_url: str = "http://localhost:8080"):
         self.sessions: Dict[str, GameSession] = {}
         self._lock = asyncio.Lock()
-        self._next_multiplayer_port = 6001  # Start with first multiplayer server
         self._port_lock = asyncio.Lock()  # Separate lock for port allocation
+        self.metaserver_url = metaserver_url
+        self._last_port_used = None  # Track last allocated port for round-robin
+
+    async def _query_metaserver_for_multiplayer_ports(self) -> list[int]:
+        """Query metaserver /meta/allocate to find available multiplayer ports
+        
+        Queries the metaserver's allocation endpoint to discover which ports
+        are running multiplayer servers (type='multiplayer', available >= 1).
+        
+        Returns:
+            List of available multiplayer server ports
+            Empty list if query fails
+        """
+        try:
+            async with aiohttp.ClientSession(self.metaserver_url) as session:
+                # Make POST request with type=multiplayer to trigger allocation logic
+                # The endpoint queries: SELECT * FROM servers WHERE type='multiplayer' AND available != 0
+                async with session.post(
+                    "/freeciv-web/meta/allocate",
+                    params={"type": "multiplayer"},
+                    timeout=aiohttp.ClientTimeout(total=5),
+                ) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        if data.get("success") and "port" in data:
+                            # Got an allocated port - this is ONE available port
+                            port = data["port"]
+                            logger.info(f"Metaserver allocated port {port} for multiplayer game")
+
+                            # Release it immediately since we're just querying
+                            release_url = f"{self.metaserver_url}/meta/release"
+                            async with session.post(
+                                release_url,
+                                data={"host": "localhost", "port": port},
+                                timeout=aiohttp.ClientTimeout(total=5)
+                            ) as release_response:
+                                if release_response.status == 200:
+                                    logger.debug(f"Released port {port} back to pool")
+
+                            # Return this port as available
+                            return [port]
+                    elif response.status == 503:
+                        # No available servers
+                        logger.warning(f"Metaserver reports no available multiplayer servers (503), {response}")
+                        return []
+                    else:
+                        logger.error(f"Metaserver allocate failed with status {response.status}")
+                        return []
+
+        except Exception as e:
+            logger.error(f"Error querying metaserver for multiplayer ports: {e}")
+            return []
 
     async def allocate_civserver_port(self, game_id: str) -> int:
-        """Allocate a civserver port for a game, reusing existing if available
-
-        Multiplayer servers run on ODD ports (6001, 6003, 6005, 6007, 6009) and use
-        pubscript_multiplayer.serv with aifill=2 (exactly 2 AI players for LLM agents to /take).
-
-        Singleplayer servers run on EVEN ports (6000, 6002, 6004, 6006, 6008) and use
-        pubscript_singleplayer.serv with aifill=12.
-
-        CRITICAL: Only allocate ODD ports for LLM multiplayer games!
-
-        THREAD-SAFETY: Creates placeholder session immediately to prevent race condition
-        where two players with same game_id could get different ports if allocation
-        happens before session creation.
+        """Allocate a civserver port for a game by querying metaserver
+        
+        Queries the metaserver /meta/allocate endpoint to find an available
+        multiplayer server port. The metaserver maintains the authoritative
+        database of servers with their types and availability status.
+        
+        IMPORTANT: Does NOT assume odd/even port distinction. Queries actual
+        server type from database via metaserver HTTP API.
+        
+        THREAD-SAFETY: Creates placeholder session immediately to prevent race
+        condition where two players with same game_id could get different ports.
         """
         async with self._port_lock:
             # Check if game already has an allocated port (for second+ player)
@@ -386,40 +437,43 @@ class GameSessionManager:
                 port = self.sessions[game_id].civserver_port
                 existing_session = self.sessions[game_id]
                 player_count = len(existing_session.players)
-                is_multiplayer = port % 2 == 1  # Odd ports are multiplayer
                 logger.info(
                     f"🔄 Game {game_id}: REUSING existing port {port}\n"
                     f"   Current players in session: {player_count}\n"
-                    f"   Session phase: {existing_session.phase.value}\n"
-                    f"   Port type: {'MULTIPLAYER (odd port)' if is_multiplayer else '⚠️ SINGLEPLAYER (even port) - WRONG!'}"
+                    f"   Session phase: {existing_session.phase.value}"
                 )
                 return port
 
-            # Allocate next available multiplayer port using round-robin from publite2-created ports
-            # IMPORTANT: ONLY allocate ODD ports (6001, 6003, 6005, 6007, 6009)
-            # - ODD ports = multiplayer servers with aifill=2 (AI*1, AI*2 for LLM agents)
-            # - EVEN ports = singleplayer servers with aifill=12 (wrong for LLM multiplayer!)
-            #
-            # Publite2 creates ports dynamically on-demand based on metaserver capacity
-            # If allocated port doesn't exist yet, connection will fail with E140
-            # This is acceptable - the port will be created by publite2 on next metaserver check
-            port = self._next_multiplayer_port
+            # Query metaserver for available multiplayer ports
+            logger.info(f"🔍 Game {game_id}: Querying metaserver for available multiplayer server")
+            available_ports = await self._query_metaserver_for_multiplayer_ports()
+
+            if not available_ports:
+                # No servers available - fail allocation
+                logger.error(
+                    f"❌ Game {game_id}: No multiplayer servers available\n"
+                    f"   Metaserver returned no available ports\n"
+                    f"   This means either:\n"
+                    f"   1. All multiplayer servers are in use\n"
+                    f"   2. Metaserver is unreachable\n"
+                    f"   3. Publite2 hasn't created any multiplayer servers yet\n"
+                    f"   Cannot allocate port for this game."
+                )
+                raise RuntimeError(
+                    "No multiplayer servers available. "
+                    "Please wait for servers to become available or check metaserver status."
+                )
+
+            # Use port from metaserver query
+            port = available_ports[0]
+            logger.info(f"✅ Game {game_id}: Allocated port {port} from metaserver")
+            self._last_port_used = port
+
             total_sessions = len(self.sessions)
-
-            # Increment by 2 to skip singleplayer ports and only use multiplayer ports
-            # Multiplayer ports are ODD (6001, 6003, 6005, 6007, 6009) with aifill=2
-            # Singleplayer ports are EVEN (6000, 6002, 6004, 6006, 6008) with aifill=12
-            next_port = port + 2
-            if next_port > 6009:
-                next_port = 6001  # Wrap to first multiplayer port
-
-            is_multiplayer = port % 2 == 1
             logger.info(
-                f"🆕 Game {game_id}: Allocated multiplayer server port {port}\n"
+                f"🆕 Game {game_id}: Allocated server port {port}\n"
                 f"   Total active sessions: {total_sessions}\n"
-                f"   Next port will be: {next_port}\n"
-                f"   Port type: {'MULTIPLAYER (odd)' if is_multiplayer else 'singleplayer (even)'}\n"
-                f"   ⚠️ WARNING: Port allocation is best-effort. Port may not exist yet!"
+                f"   Port type will be determined by publite2 configuration"
             )
 
             # Create placeholder session immediately to reserve this port for this game_id
@@ -428,9 +482,6 @@ class GameSessionManager:
             session = GameSession(game_id, port, min_players=2)
             self.sessions[game_id] = session
             logger.debug(f"Game {game_id}: Created placeholder session to reserve port {port}")
-
-            # Increment for next game (simple sequential)
-            self._next_multiplayer_port = next_port
 
             return port
 

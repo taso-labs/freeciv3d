@@ -41,7 +41,6 @@ class SessionInfo:
     last_activity: float
     expires_at: float
     player_id: Optional[int] = None
-    capabilities: Set[str] = field(default_factory=set)
     connection_count: int = 0
     state: SessionState = SessionState.ACTIVE
     metadata: Dict[str, Any] = field(default_factory=dict)
@@ -81,15 +80,13 @@ class SessionManager:
             'authentication_failures': 0
         }
 
-    def create_session(self, agent_id: str, api_token: str,
-                      capabilities: Optional[Set[str]] = None) -> Optional[SessionInfo]:
+    def create_session(self, agent_id: str, api_token: str) -> Optional[SessionInfo]:
         """
         Create a new session for an agent
 
         Args:
             agent_id: Unique agent identifier
             api_token: API token for authentication
-            capabilities: Set of allowed capabilities
 
         Returns:
             SessionInfo if successful, None if failed
@@ -118,7 +115,6 @@ class SessionManager:
                     created_at=now,
                     last_activity=now,
                     expires_at=now + self.session_timeout,
-                    capabilities=capabilities or set(),
                     state=SessionState.ACTIVE
                 )
 

@@ -95,11 +95,6 @@ class LLMConnectData(BaseModel):
     game_id: constr(min_length=1, max_length=64, pattern=r'^[a-zA-Z0-9\-_]+$') = Field(
         ..., description="Game identifier"
     )
-    capabilities: Optional[List[str]] = Field(
-        default=None,
-        description="List of agent capabilities",
-        max_items=20
-    )
     nation: Optional[str] = Field(
         default=None,
         description="Preferred nation/civilization name",
@@ -115,16 +110,6 @@ class LLMConnectData(BaseModel):
     def validate_token(cls, v):
         if not re.match(r'^[a-zA-Z0-9\-_]+$', v):
             raise ValueError('API token format invalid')
-        return v
-
-    @validator('capabilities', each_item=True)
-    def validate_capability(cls, v):
-        valid_capabilities = [
-            'move', 'attack', 'build', 'research', 'diplomacy',
-            'trade', 'explore', 'defend', 'city_management'
-        ]
-        if v not in valid_capabilities:
-            raise ValueError(f'Invalid capability: {v}')
         return v
 
 
@@ -197,7 +182,7 @@ class LLMMessage(BaseModel):
         valid_types = [
             'llm_connect', 'llm_disconnect', 'state_query', 'state_update',
             'action', 'action_result', 'turn_start', 'turn_end',
-            'ping', 'pong', 'error'
+            'ping', 'pong', 'error', 'chat'
         ]
         if v not in valid_types:
             raise ValueError(f'Invalid message type: {v}')

@@ -113,15 +113,25 @@ class CivComRegistry:
         self._civcom_instances: Dict[Tuple[str, str], CivCom] = {}
         self._game_metadata: Dict[Tuple[str, str], Dict[str, Any]] = {}
 
-    def register_game(self, game_id: str, agent_id: str, civcom: CivCom, metadata: Optional[Dict[str, Any]] = None):
-        """Register a CivCom instance for a game with specific agent
+    def register_game(self, game_id: str, agent_id: str | CivCom = None, civcom: Optional[CivCom] = None, metadata: Optional[Dict[str, Any]] = None):
+        """Register a CivCom instance for a game.
+
+        Backwards-compatible signature support:
+        - register_game(game_id, civcom)
+        - register_game(game_id, agent_id, civcom)
 
         Args:
             game_id: Unique game identifier
-            agent_id: Unique agent/player identifier
-            civcom: CivCom instance to register
+            agent_id: Either agent_id (str) or a CivCom instance when using legacy 2-arg form
+            civcom: CivCom instance to register (required when specifying agent_id)
             metadata: Optional metadata dictionary
         """
+        # Backwards compatibility: allow register_game(game_id, civcom)
+        if civcom is None:
+            # agent_id parameter is actually the civcom instance in legacy calls
+            civcom = agent_id
+            agent_id = "default"
+
         if not isinstance(game_id, str) or not game_id.strip():
             raise ValueError("game_id must be a non-empty string")
 
@@ -562,9 +572,9 @@ class StateExtractor:
             state = civcom.get_full_state(player_id)
             all_actions = self._generate_legal_actions_from_state(state, player_id)
 
-            # Sort by priority (highest first) and take top 20
+            # Sort by priority (highest first)
             sorted_actions = sorted(all_actions, key=lambda x: x.get('priority', 0), reverse=True)
-            return sorted_actions[:20]
+            return sorted_actions
 
         except (CivComNotFoundError, StateExtractionError) as e:
             # Re-raise specific exceptions with preserved context
@@ -583,6 +593,638 @@ class StateExtractor:
                 player_id=player_id,
                 cause=e
             )
+
+    def get_unit_actions(self, unit_id: int, player_id: int) -> Dict[str, Any]:
+        """
+        Get available actions for a specific unit.
+        
+        Args:
+            unit_id: The ID of the unit to query
+            player_id: The ID of the player making the query
+            
+        Returns:
+            Dictionary with:
+            - 'unit_type': str - Type name of the unit
+            - 'actions': list - Available actions for this unit
+            - 'location': dict - Current x, y coordinates
+            
+            Or on error:
+            - 'error': str - Error message
+            - 'error_code': str - Error code (E230, E231, etc.)
+        """
+        try:
+            # Get civcom for current game
+            civcom = self._get_civcom_for_player(player_id)
+            if not civcom:
+                return {
+                    'error': 'Not connected to game server',
+                    'error_code': 'E500'
+                }
+            
+            # Get full state to find the unit
+            state = civcom.get_full_state(player_id)
+            units = state.get('units', {})
+            
+            # Handle both dict and list formats
+            if isinstance(units, list):
+                units = {str(u.get('id', i)): u for i, u in enumerate(units)}
+            
+            unit_key = str(unit_id)
+            if unit_key not in units:
+                return {
+                    'error': f'Unit {unit_id} not found',
+                    'error_code': 'E230'  # UNIT_NOT_FOUND
+                }
+            
+            unit = units[unit_key]
+            
+            # Check ownership
+            if unit.get('owner') != player_id:
+                return {
+                    'error': f'Unit {unit_id} is not owned by player {player_id}',
+                    'error_code': 'E231'  # UNIT_NOT_OWNED
+                }
+            
+            # Generate available actions based on unit type
+            unit_type = unit.get('type_name', unit.get('type', 'Unknown'))
+            actions = self._generate_unit_actions(unit, state, player_id)
+            
+            return {
+                'unit_type': unit_type,
+                'location': {'x': unit.get('x', 0), 'y': unit.get('y', 0)},
+                'actions': actions
+            }
+            
+        except Exception as e:
+            logger.error(f"Error getting unit actions for unit {unit_id}: {e}")
+            return {
+                'error': str(e),
+                'error_code': 'E500'
+            }
+    
+    def get_city_actions(self, city_id: int, player_id: int) -> Dict[str, Any]:
+        """
+        Get available actions for a specific city.
+        
+        Args:
+            city_id: The ID of the city to query
+            player_id: The ID of the player making the query
+            
+        Returns:
+            Dictionary with:
+            - 'city_name': str - Name of the city
+            - 'actions': list - Available actions for this city
+            - 'location': dict - Current x, y coordinates
+            
+            Or on error:
+            - 'error': str - Error message
+            - 'error_code': str - Error code (E240, E241, etc.)
+        """
+        try:
+            # Get civcom for current game
+            civcom = self._get_civcom_for_player(player_id)
+            if not civcom:
+                return {
+                    'error': 'Not connected to game server',
+                    'error_code': 'E500'
+                }
+            
+            # Get full state to find the city
+            state = civcom.get_full_state(player_id)
+            cities = state.get('cities', {})
+            
+            # Handle both dict and list formats
+            if isinstance(cities, list):
+                cities = {str(c.get('id', i)): c for i, c in enumerate(cities)}
+            
+            city_key = str(city_id)
+            if city_key not in cities:
+                return {
+                    'error': f'City {city_id} not found',
+                    'error_code': 'E240'  # CITY_NOT_FOUND
+                }
+            
+            city = cities[city_key]
+            
+            # Check ownership
+            if city.get('owner') != player_id:
+                return {
+                    'error': f'City {city_id} is not owned by player {player_id}',
+                    'error_code': 'E241'  # CITY_NOT_OWNED
+                }
+            
+            # Generate available actions based on city state
+            city_name = city.get('name', 'Unknown')
+            actions = self._generate_city_actions(city, state, player_id)
+            
+            return {
+                'city_name': city_name,
+                'location': {'x': city.get('x', 0), 'y': city.get('y', 0)},
+                'actions': actions
+            }
+            
+        except Exception as e:
+            logger.error(f"Error getting city actions for city {city_id}: {e}")
+            return {
+                'error': str(e),
+                'error_code': 'E500'
+            }
+    
+    def _get_civcom_for_player(self, player_id: int) -> Optional[CivCom]:
+        """Get CivCom instance for a player from the registry"""
+        # Try to find civcom in registry
+        for key, civcom in civcom_registry._civcom_instances.items():
+            if civcom and hasattr(civcom, 'player_id'):
+                if civcom.player_id == player_id:
+                    return civcom
+        # Fallback: use self.civcom if available
+        if hasattr(self, 'civcom') and self.civcom:
+            return self.civcom
+        return None
+    
+    def _generate_unit_actions(self, unit: Dict[str, Any], state: Dict[str, Any], player_id: int) -> List[Dict[str, Any]]:
+        """Generate all legal actions for a unit based on ruleset data and game state.
+        
+        This method uses server-provided ruleset data to determine which actions
+        a unit can perform, avoiding hardcoded values whenever possible.
+        
+        Args:
+            unit: Unit data dict from game state
+            state: Full game state dict
+            player_id: The player ID making the query
+            
+        Returns:
+            List of action dicts with action type, params, and validity info
+        """
+        from civcom import (
+            ACTION_FOUND_CITY, ACTION_JOIN_CITY, ACTION_ATTACK, ACTION_FORTIFY,
+            ACTION_ROAD, ACTION_IRRIGATE, ACTION_MINE, ACTION_BASE, ACTION_PILLAGE,
+            ACTION_CLEAN, ACTION_TRANSFORM_TERRAIN, ACTION_CULTIVATE, ACTION_PLANT,
+            ACTION_TRADE_ROUTE, ACTION_MARKETPLACE, ACTION_HELP_WONDER,
+            ACTION_ESTABLISH_EMBASSY, ACTION_SPY_INVESTIGATE_CITY, ACTION_SPY_POISON,
+            ACTION_SPY_SABOTAGE_CITY, ACTION_SPY_STEAL_TECH, ACTION_SPY_INCITE_CITY,
+            ACTION_SPY_BRIBE_UNIT, ACTION_SPY_SABOTAGE_UNIT, ACTION_SPY_ATTACK,
+            ACTION_DISBAND_UNIT, ACTION_HOME_CITY, ACTION_UPGRADE_UNIT,
+            ACTION_CONVERT, ACTION_AIRLIFT, ACTION_PARADROP,
+            ACTION_TRANSPORT_BOARD, ACTION_TRANSPORT_DEBOARD,
+            ACTION_TRANSPORT_EMBARK, ACTION_TRANSPORT_DISEMBARK1,
+            ACTION_TRANSPORT_LOAD, ACTION_TRANSPORT_UNLOAD,
+            ACTION_HEAL_UNIT, ACTION_BOMBARD, ACTION_CAPTURE_UNITS,
+            ACTION_NUKE, ACTION_NUKE_CITY, ACTION_NUKE_UNITS,
+            ACTION_SUICIDE_ATTACK, ACTION_CONQUER_CITY,
+            ACTION_ID_TO_TYPE, TC_LAND, TC_OCEAN
+        )
+        
+        actions = []
+        
+        # Get unit properties
+        unit_id = unit.get('id')
+        unit_type_id = unit.get('type_id')
+        unit_type_name = unit.get('type', unit.get('type_name', '')).lower()
+        moves_left = unit.get('moves_left', unit.get('moves', 0))
+        activity = unit.get('activity', 'idle')
+        tile_index = unit.get('tile')
+        # Variables x, y are captured by get_target_tile() closure below (line ~829)
+        x = unit.get('x', 0)
+        y = unit.get('y', 0)
+        is_transported = unit.get('transported', False)
+        
+        # Get civcom for ruleset data
+        civcom = self._get_civcom_for_player(player_id)
+        
+        # Check if unit is currently working on an activity
+        # These activities should not be interrupted
+        working_activities = {'road', 'railroad', 'mine', 'irrigate', 'transform', 
+                              'fortress', 'airbase', 'pollution', 'fallout', 'base'}
+        is_working = activity in working_activities
+        
+        # Direction mappings for movement
+        directions = ['n', 'ne', 'e', 'se', 's', 'sw', 'w', 'nw']
+        direction_offsets = {
+            'n': (0, -1), 'ne': (1, -1), 'e': (1, 0), 'se': (1, 1),
+            's': (0, 1), 'sw': (-1, 1), 'w': (-1, 0), 'nw': (-1, -1)
+        }
+        
+        # Helper to add action with proper formatting
+        def add_action(action_type: str, params: dict = None, is_valid: bool = True, 
+                      reason: str = None, action_id: int = None):
+            action = {
+                'action': action_type,
+                'params': params or {},
+                'is_valid': is_valid
+            }
+            if reason:
+                action['reason'] = reason
+            if action_id is not None:
+                action['action_id'] = action_id
+            actions.append(action)
+        
+        # Helper to check if unit type can do action using ruleset
+        def can_do_action(action_id: int) -> bool:
+            if civcom and unit_type_id is not None:
+                return civcom.utype_can_do_action(unit_type_id, action_id)
+            # Fallback to name-based heuristics if no ruleset data
+            return self._fallback_can_do_action(unit_type_name, action_id)
+        
+        # Helper to get target tile info
+        def get_target_tile(direction: str) -> tuple:
+            dx, dy = direction_offsets.get(direction, (0, 0))
+            target_x = x + dx
+            target_y = y + dy
+            
+            # Handle map wrapping
+            if civcom:
+                xsize = civcom.map_info.get('width', 80)
+                ysize = civcom.map_info.get('height', 50)
+                if civcom.map_info.get('wrap_x', True):
+                    target_x = target_x % xsize
+                if civcom.map_info.get('wrap_y', False):
+                    target_y = target_y % ysize
+                target_index = target_x + target_y * xsize
+                return (target_x, target_y, target_index)
+            return (target_x, target_y, None)
+        
+        # If unit is working on an improvement, add a "continue_work" action
+        # This signals to the AI that it should NOT interrupt this unit
+        if is_working:
+            add_action('continue_work', {'current_activity': activity}, True, 
+                      f"Unit is building {activity}")
+        
+        # === MOVEMENT ACTIONS ===
+        if moves_left > 0:
+            # Pre-compute city tile indexes for efficient lookup
+            city_tiles = set()
+            if civcom:
+                for city_id, city in civcom.player_cities.items():
+                    city_tile = city.get('tile')
+                    if city_tile is not None:
+                        city_tiles.add(city_tile)
+                # Also check enemy cities
+                for city in getattr(civcom, 'other_cities', {}).values():
+                    city_tile = city.get('tile')
+                    if city_tile is not None:
+                        city_tiles.add(city_tile)
+            
+            for direction in directions:
+                target_x, target_y, target_index = get_target_tile(direction)
+                
+                is_valid = True
+                reason = None
+                
+                # Check terrain accessibility if we have civcom data
+                if civcom and target_index is not None:
+                    tile = civcom.tiles.get(target_index)
+                    if tile:
+                        terrain_id = tile.get('terrain')
+                        terrain_class = civcom.get_terrain_class(terrain_id) if terrain_id is not None else TC_LAND
+                        
+                        # Get unit class info for terrain checking
+                        unit_type_data = civcom.unit_types.get(unit_type_id, {})
+                        unit_class_id = unit_type_data.get('unit_class')
+                        
+                        # Check if target tile has a city (cities allow entry for most unit types)
+                        tile_has_city = target_index in city_tiles
+                        
+                        # Use proper native_to checking if available, fall back to class name check
+                        if unit_class_id is not None and terrain_id is not None:
+                            is_native = civcom.is_unit_class_native_to_terrain(unit_class_id, terrain_id)
+                            if not is_native and not tile_has_city:
+                                # Not native terrain and no city - check if can embark on transport
+                                if terrain_class == TC_OCEAN:
+                                    if not can_do_action(ACTION_TRANSPORT_EMBARK):
+                                        is_valid = False
+                                        reason = "Cannot enter ocean (non-naval unit, no transport available)"
+                                else:
+                                    is_valid = False
+                                    reason = "Cannot enter non-native terrain"
+                        else:
+                            # Fallback: simple land/sea check by class name
+                            unit_class = civcom.unit_classes.get(unit_class_id, {}) if unit_class_id else {}
+                            class_name = unit_class.get('name', '').lower()
+                            
+                            if terrain_class == TC_OCEAN and not tile_has_city:
+                                # Check if unit class can enter ocean
+                                # Sea, Trireme, Air, Helicopter can enter ocean
+                                if class_name not in ('sea', 'trireme', 'air', 'helicopter', 'missile'):
+                                    if not can_do_action(ACTION_TRANSPORT_EMBARK):
+                                        is_valid = False
+                                        reason = "Cannot enter ocean (land unit, no transport)"
+                            elif terrain_class == TC_LAND and not tile_has_city:
+                                # Sea and Trireme classes cannot enter land (except through cities)
+                                if class_name in ('sea', 'trireme'):
+                                    is_valid = False
+                                    reason = "Cannot enter land (naval unit)"
+                
+                add_action('move', {'direction': direction, 'target': {'x': target_x, 'y': target_y}}, 
+                          is_valid, reason)
+        
+        # === CITY FOUNDING ACTIONS ===
+        if can_do_action(ACTION_FOUND_CITY):
+            is_valid = True
+            reason = None
+            
+            # Check citymindist constraint
+            if civcom and tile_index is not None:
+                can_found, found_reason = civcom.can_city_be_founded_at(tile_index)
+                if not can_found:
+                    is_valid = False
+                    reason = found_reason
+            
+            # Check if on ocean
+            if civcom and tile_index is not None:
+                tile = civcom.tiles.get(tile_index)
+                if tile:
+                    terrain_id = tile.get('terrain')
+                    if terrain_id is not None and civcom.get_terrain_class(terrain_id) == TC_OCEAN:
+                        is_valid = False
+                        reason = "Cannot found city on ocean"
+            
+            # Check if already has a city here
+            if civcom:
+                for city_id, city in civcom.player_cities.items():
+                    if city.get('tile') == tile_index:
+                        is_valid = False
+                        reason = "Tile already has a city"
+                        break
+            
+            add_action('build_city', {}, is_valid, reason, ACTION_FOUND_CITY)
+        
+        # === JOIN CITY ACTION ===
+        if can_do_action(ACTION_JOIN_CITY):
+            # Check if unit is in a city
+            in_city = False
+            city_name = None
+            if civcom:
+                for city_id, city in civcom.player_cities.items():
+                    if city.get('tile') == tile_index:
+                        in_city = True
+                        city_name = city.get('name')
+                        break
+            
+            add_action('join_city', {'city': city_name} if city_name else {}, 
+                      in_city, None if in_city else "Not in a city", ACTION_JOIN_CITY)
+        
+        # === FORTIFY ACTION ===
+        if can_do_action(ACTION_FORTIFY):
+            is_valid = activity not in ('fortified', 'fortifying')
+            add_action('fortify', {}, is_valid, 
+                      "Already fortified" if not is_valid else None, ACTION_FORTIFY)
+        
+        # === TERRAIN IMPROVEMENT ACTIONS ===
+        terrain_actions = [
+            (ACTION_ROAD, 'build_road', 'road'),
+            (ACTION_IRRIGATE, 'build_irrigation', 'irrigation'),
+            (ACTION_MINE, 'build_mine', 'mine'),
+            (ACTION_BASE, 'build_base', 'base'),
+            (ACTION_TRANSFORM_TERRAIN, 'transform', None),
+            (ACTION_CULTIVATE, 'cultivate', None),
+            (ACTION_PLANT, 'plant', None),
+        ]
+        
+        for action_id, action_name, improvement in terrain_actions:
+            if can_do_action(action_id):
+                params = {'improvement': improvement} if improvement else {}
+                add_action(action_name, params, True, None, action_id)
+        
+        # === PILLAGE ACTION ===
+        if can_do_action(ACTION_PILLAGE):
+            add_action('pillage', {}, True, None, ACTION_PILLAGE)
+        
+        # === CLEAN ACTION ===
+        if can_do_action(ACTION_CLEAN):
+            add_action('clean', {}, True, None, ACTION_CLEAN)
+        
+        # === COMBAT ACTIONS ===
+        combat_actions = [
+            (ACTION_ATTACK, 'attack'),
+            (ACTION_SUICIDE_ATTACK, 'suicide_attack'),
+            (ACTION_BOMBARD, 'bombard'),
+            (ACTION_CAPTURE_UNITS, 'capture'),
+            (ACTION_CONQUER_CITY, 'conquer_city'),
+        ]
+        
+        for action_id, action_name in combat_actions:
+            if can_do_action(action_id):
+                # Add attack actions for each direction
+                for direction in directions:
+                    target_x, target_y, _ = get_target_tile(direction)
+                    add_action(action_name, {
+                        'direction': direction, 
+                        'target': {'x': target_x, 'y': target_y}
+                    }, True, None, action_id)
+        
+        # === NUCLEAR ACTIONS ===
+        nuke_actions = [
+            (ACTION_NUKE, 'nuke'),
+            (ACTION_NUKE_CITY, 'nuke_city'),
+            (ACTION_NUKE_UNITS, 'nuke_units'),
+        ]
+        
+        for action_id, action_name in nuke_actions:
+            if can_do_action(action_id):
+                add_action(action_name, {}, True, None, action_id)
+        
+        # === TRADE ACTIONS ===
+        trade_actions = [
+            (ACTION_TRADE_ROUTE, 'trade_route'),
+            (ACTION_MARKETPLACE, 'marketplace'),
+            (ACTION_HELP_WONDER, 'help_wonder'),
+        ]
+        
+        for action_id, action_name in trade_actions:
+            if can_do_action(action_id):
+                add_action(action_name, {}, True, None, action_id)
+        
+        # === ESPIONAGE ACTIONS ===
+        spy_actions = [
+            (ACTION_ESTABLISH_EMBASSY, 'establish_embassy'),
+            (ACTION_SPY_INVESTIGATE_CITY, 'investigate_city'),
+            (ACTION_SPY_POISON, 'poison'),
+            (ACTION_SPY_SABOTAGE_CITY, 'sabotage_city'),
+            (ACTION_SPY_STEAL_TECH, 'steal_tech'),
+            (ACTION_SPY_INCITE_CITY, 'incite_city'),
+            (ACTION_SPY_BRIBE_UNIT, 'bribe_unit'),
+            (ACTION_SPY_SABOTAGE_UNIT, 'sabotage_unit'),
+            (ACTION_SPY_ATTACK, 'spy_attack'),
+        ]
+        
+        for action_id, action_name in spy_actions:
+            if can_do_action(action_id):
+                add_action(action_name, {}, True, None, action_id)
+        
+        # === TRANSPORT ACTIONS ===
+        # Only offer disembark/deboard if unit is actually on a transport
+        # Only offer embark/board if unit is NOT on a transport
+        if is_transported:
+            # Unit is on a transport - can disembark
+            disembark_actions = [
+                (ACTION_TRANSPORT_DEBOARD, 'deboard'),
+                (ACTION_TRANSPORT_DISEMBARK1, 'disembark'),
+                (ACTION_TRANSPORT_UNLOAD, 'unload'),
+            ]
+            for action_id, action_name in disembark_actions:
+                if can_do_action(action_id):
+                    add_action(action_name, {}, True, None, action_id)
+        else:
+            # Unit is NOT on a transport - can embark
+            embark_actions = [
+                (ACTION_TRANSPORT_BOARD, 'board'),
+                (ACTION_TRANSPORT_EMBARK, 'embark'),
+                (ACTION_TRANSPORT_LOAD, 'load'),
+            ]
+            for action_id, action_name in embark_actions:
+                if can_do_action(action_id):
+                    add_action(action_name, {}, True, None, action_id)
+        
+        # === UNIT MANAGEMENT ACTIONS ===
+        if can_do_action(ACTION_DISBAND_UNIT):
+            add_action('disband', {}, True, None, ACTION_DISBAND_UNIT)
+        
+        if can_do_action(ACTION_HOME_CITY):
+            add_action('home_city', {}, True, None, ACTION_HOME_CITY)
+        
+        if can_do_action(ACTION_UPGRADE_UNIT):
+            add_action('upgrade', {}, True, None, ACTION_UPGRADE_UNIT)
+        
+        if can_do_action(ACTION_CONVERT):
+            add_action('convert', {}, True, None, ACTION_CONVERT)
+        
+        if can_do_action(ACTION_HEAL_UNIT):
+            add_action('heal', {}, True, None, ACTION_HEAL_UNIT)
+        
+        # === SPECIAL MOVEMENT ACTIONS ===
+        if can_do_action(ACTION_AIRLIFT):
+            add_action('airlift', {}, True, None, ACTION_AIRLIFT)
+        
+        if can_do_action(ACTION_PARADROP):
+            add_action('paradrop', {}, True, None, ACTION_PARADROP)
+        
+        # === SKIP/SENTRY ACTIONS (always available) ===
+        add_action('skip', {}, True)
+        add_action('sentry', {}, activity != 'sentry', 
+                  "Already on sentry" if activity == 'sentry' else None)
+        
+        return actions
+    
+    def _fallback_can_do_action(self, unit_type_name: str, action_id: int) -> bool:
+        """Fallback action detection using unit type name heuristics.
+        
+        Used when ruleset data is not available. This is less accurate than
+        using the actual utype_actions bitfield from the server.
+        
+        Args:
+            unit_type_name: Lowercase unit type name
+            action_id: FreeCiv action ID
+            
+        Returns:
+            True if the unit type likely can perform the action
+        """
+        from civcom import (
+            ACTION_FOUND_CITY, ACTION_JOIN_CITY, ACTION_ATTACK, ACTION_FORTIFY,
+            ACTION_ROAD, ACTION_IRRIGATE, ACTION_MINE, ACTION_BASE, ACTION_PILLAGE,
+            ACTION_TRANSFORM_TERRAIN, ACTION_CULTIVATE, ACTION_PLANT,
+            ACTION_TRADE_ROUTE, ACTION_MARKETPLACE, ACTION_HELP_WONDER,
+            ACTION_ESTABLISH_EMBASSY, ACTION_SPY_INVESTIGATE_CITY, ACTION_SPY_POISON,
+            ACTION_SPY_SABOTAGE_CITY, ACTION_SPY_STEAL_TECH, ACTION_SPY_INCITE_CITY,
+            ACTION_SPY_BRIBE_UNIT, ACTION_SPY_SABOTAGE_UNIT,
+            ACTION_PARADROP, ACTION_NUKE,
+        )
+        
+        # Settler actions
+        settler_types = ('settler', 'settlers', 'colonist')
+        if action_id in (ACTION_FOUND_CITY, ACTION_JOIN_CITY):
+            return any(s in unit_type_name for s in settler_types)
+        
+        # Worker/Engineer actions
+        worker_types = ('worker', 'workers', 'engineer', 'engineers', 'settler', 'settlers')
+        if action_id in (ACTION_ROAD, ACTION_IRRIGATE, ACTION_MINE, ACTION_BASE,
+                        ACTION_CULTIVATE, ACTION_PLANT, ACTION_TRANSFORM_TERRAIN):
+            return any(w in unit_type_name for w in worker_types)
+        
+        # Caravan/Freight actions
+        trade_types = ('caravan', 'freight')
+        if action_id in (ACTION_TRADE_ROUTE, ACTION_MARKETPLACE, ACTION_HELP_WONDER):
+            return any(t in unit_type_name for t in trade_types)
+        
+        # Diplomat/Spy actions
+        spy_types = ('diplomat', 'spy')
+        if action_id in (ACTION_ESTABLISH_EMBASSY, ACTION_SPY_INVESTIGATE_CITY,
+                        ACTION_SPY_POISON, ACTION_SPY_SABOTAGE_CITY,
+                        ACTION_SPY_STEAL_TECH, ACTION_SPY_INCITE_CITY,
+                        ACTION_SPY_BRIBE_UNIT, ACTION_SPY_SABOTAGE_UNIT):
+            return any(s in unit_type_name for s in spy_types)
+        
+        # Paradrop action
+        if action_id == ACTION_PARADROP:
+            return 'paratrooper' in unit_type_name or 'paratroop' in unit_type_name
+        
+        # Nuclear action
+        if action_id == ACTION_NUKE:
+            return 'nuclear' in unit_type_name or 'nuke' in unit_type_name
+        
+        # Fortify - most land units can fortify
+        if action_id == ACTION_FORTIFY:
+            naval_types = ('trireme', 'caravel', 'galleon', 'frigate', 'ironclad',
+                          'destroyer', 'cruiser', 'battleship', 'submarine', 'carrier', 'transport')
+            return not any(n in unit_type_name for n in naval_types)
+        
+        # Pillage - most military units can pillage
+        if action_id == ACTION_PILLAGE:
+            civilian_types = ('settler', 'worker', 'engineer', 'caravan', 'freight', 'diplomat', 'spy', 'explorer')
+            return not any(c in unit_type_name for c in civilian_types)
+        
+        # Attack - units with combat capability
+        if action_id == ACTION_ATTACK:
+            civilian_types = ('settler', 'worker', 'engineer', 'caravan', 'freight', 'explorer')
+            return not any(c in unit_type_name for c in civilian_types)
+        
+        return False
+    
+    def _generate_city_actions(self, city: Dict[str, Any], state: Dict[str, Any], player_id: int) -> List[Dict[str, Any]]:
+        """Generate available actions for a city based on its state"""
+        actions = []
+        
+        # Production change
+        productions = city.get('can_build', [])
+        if not productions:
+            # Default buildable units/buildings
+            productions = ['Warrior', 'Settler', 'Worker', 'Barracks', 'Granary']
+        
+        for prod in productions:
+            actions.append({
+                'action': 'change_production',
+                'params': {'to': prod},
+                'is_valid': True
+            })
+        
+        # Buy current production
+        buy_cost = city.get('buy_cost', 0)
+        treasury = state.get('player', {}).get('gold', 0)
+        actions.append({
+            'action': 'buy',
+            'params': {},
+            'is_valid': treasury >= buy_cost if buy_cost > 0 else False
+        })
+        
+        # Sell improvements
+        improvements = city.get('improvements', [])
+        for imp in improvements:
+            imp_name = imp if isinstance(imp, str) else imp.get('name', 'Unknown')
+            actions.append({
+                'action': 'sell_improvement',
+                'params': {'improvement': imp_name},
+                'is_valid': True
+            })
+        
+        # Specialist management
+        for specialist in ['scientist', 'taxman', 'entertainer']:
+            actions.append({
+                'action': 'add_specialist',
+                'params': {'type': specialist},
+                'is_valid': True
+            })
+        
+        return actions
 
     def _extract_delta_state(self, game_id: str, player_id: int, since_turn: int, civcom: CivCom) -> Dict[str, Any]:
         """Extract changes since specified turn"""
@@ -1135,7 +1777,10 @@ class StateExtractor:
 
     def _generate_legal_actions_from_state(self, state: Dict[str, Any], player_id: int) -> List[Dict[str, Any]]:
         """Generate legal actions based on actual game state from civcom"""
+        from civcom import TC_LAND, TC_OCEAN
+        
         actions = []
+        civcom = None
 
         try:
             # Get civcom instance for this game
@@ -1156,26 +1801,63 @@ class StateExtractor:
         # Get player's units and cities
         units = [u for u in self._dict_to_list(state.get('units', {})) if u.get('owner') == player_id]
         cities = [c for c in self._dict_to_list(state.get('cities', {})) if c.get('owner') == player_id]
+        
+        # Get map info for coordinate validation
+        map_info = state.get('map', {})
+        map_width = map_info.get('width', 80)
+        map_height = map_info.get('height', 50)
 
         # Generate realistic unit movement actions (only if unit hasn't finished moving)
         # Use done_moving flag instead of moves_left to handle Turn 1 correctly
         for unit in units:
             if not unit.get('done_moving', False):
-                unit_type = unit.get('type', 'unknown')
+                unit_type = unit.get('type', 'unknown').lower()
+                unit_x, unit_y = unit.get('x', 0), unit.get('y', 0)
+                
+                # Determine if unit is a naval/air unit (can traverse water)
+                is_naval = unit_type in ('trireme', 'caravel', 'galleon', 'frigate', 'ironclad', 
+                                          'destroyer', 'cruiser', 'battleship', 'submarine', 'carrier',
+                                          'transport', 'boat')
+                is_air = unit_type in ('fighter', 'bomber', 'helicopter', 'stealth fighter', 
+                                        'stealth bomber', 'cruise missile', 'nuclear')
+                can_enter_water = is_naval or is_air
+                
                 # Check adjacent tiles for valid moves
                 for dx, dy in [(0, 1), (1, 0), (0, -1), (-1, 0), (1, 1), (-1, -1), (1, -1), (-1, 1)]:
-                    target_x, target_y = unit['x'] + dx, unit['y'] + dy
+                    target_x, target_y = unit_x + dx, unit_y + dy
 
-                    # Basic validity check (positive coordinates)
-                    if target_x >= 0 and target_y >= 0:
+                    # Basic validity check (within map bounds)
+                    if target_x < 0 or target_y < 0 or target_x >= map_width or target_y >= map_height:
+                        continue
+                    
+                    # Check terrain if we have civcom data
+                    is_valid = True
+                    if civcom:
+                        target_index = target_x + target_y * map_width
+                        tile = civcom.tiles.get(target_index)
+                        if tile:
+                            terrain_id = tile.get('terrain')
+                            terrain_class = civcom.get_terrain_class(terrain_id) if terrain_id is not None else TC_LAND
+                            
+                            # Check if there's a city at the target (cities allow most entries)
+                            tile_has_city = any(c.get('tile') == target_index 
+                                              for c in civcom.player_cities.values())
+                            
+                            if terrain_class == TC_OCEAN and not can_enter_water and not tile_has_city:
+                                is_valid = False
+                            elif terrain_class == TC_LAND and is_naval and not tile_has_city:
+                                is_valid = False
+                    
+                    if is_valid:
                         actions.append({
                             'type': 'unit_move',
                             'unit_id': unit['id'],
-                            'source': {'x': unit['x'], 'y': unit['y']},
+                            'source': {'x': unit_x, 'y': unit_y},
                             'target': {'x': target_x, 'y': target_y},
                             'cost': 1,
                             'unit_type': unit_type,
-                            'priority': 5 + (2 if unit_type == 'settler' else 1 if unit_type == 'explorer' else 0)
+                            'is_valid': True,
+                            'priority': 5 + (2 if unit_type in ('settler', 'settlers') else 1 if unit_type == 'explorer' else 0)
                         })
 
                 # Add non-movement unit actions
@@ -1184,6 +1866,7 @@ class StateExtractor:
                     actions.append({
                         'type': 'unit_fortify',
                         'unit_id': unit['id'],
+                        'is_valid': True,
                         'priority': 4
                     })
 
@@ -1192,7 +1875,8 @@ class StateExtractor:
                     actions.append({
                         'type': 'unit_build_city',
                         'unit_id': unit['id'],
-                        'location': {'x': unit['x'], 'y': unit['y']},
+                        'location': {'x': unit_x, 'y': unit_y},
+                        'is_valid': True,
                         'priority': 8
                     })
 
@@ -1202,21 +1886,24 @@ class StateExtractor:
                     actions.append({
                         'type': 'unit_build_road',
                         'unit_id': unit['id'],
-                        'location': {'x': unit['x'], 'y': unit['y']},
+                        'location': {'x': unit_x, 'y': unit_y},
+                        'is_valid': True,
                         'priority': 6
                     })
                     # Build irrigation
                     actions.append({
                         'type': 'unit_build_irrigation',
                         'unit_id': unit['id'],
-                        'location': {'x': unit['x'], 'y': unit['y']},
+                        'location': {'x': unit_x, 'y': unit_y},
+                        'is_valid': True,
                         'priority': 5
                     })
                     # Build mine
                     actions.append({
                         'type': 'unit_build_mine',
                         'unit_id': unit['id'],
-                        'location': {'x': unit['x'], 'y': unit['y']},
+                        'location': {'x': unit_x, 'y': unit_y},
+                        'is_valid': True,
                         'priority': 5
                     })
 
@@ -1224,6 +1911,7 @@ class StateExtractor:
                 actions.append({
                     'type': 'unit_sentry',
                     'unit_id': unit['id'],
+                    'is_valid': True,
                     'priority': 3
                 })
 

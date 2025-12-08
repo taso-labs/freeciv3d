@@ -87,16 +87,32 @@ MAP_SIZE_DIMENSIONS = {
 # Default coordinate limits (when map size is unknown)
 DEFAULT_MAX_COORDINATE = 9999
 
-# Error codes
-ERROR_CODE_INTERNAL = "E500"
-ERROR_CODE_RATE_LIMIT = "E429"
-ERROR_CODE_UNAUTHORIZED = "E403"
-ERROR_CODE_NOT_FOUND = "E404"
-ERROR_CODE_VALIDATION = "E400"
-ERROR_CODE_NOT_AUTHENTICATED = "E120"  # Not authenticated / session expired
-ERROR_CODE_STATE_QUERY_FAILED = "E121"  # State query failed
-ERROR_CODE_CONNECTION_LOST = "E123"  # Connection to game server lost
-ERROR_CODE_UNKNOWN = "E999"  # Unknown error (with context)
+# Error codes - LLM WebSocket Protocol v2.0.1
+# System & Connection Errors (E1xx)
+ERROR_CODE_MISSING_FIELD = "E101"        # Missing required field
+ERROR_CODE_INVALID_TOKEN = "E102"        # Invalid API token
+ERROR_CODE_UNKNOWN_TYPE = "E103"         # Unknown message type
+ERROR_CODE_NOT_AUTHENTICATED = "E120"    # Not authenticated / session expired
+ERROR_CODE_STATE_QUERY_FAILED = "E121"   # State query failed
+ERROR_CODE_CONNECTION_LOST = "E123"      # Connection to game server lost
+ERROR_CODE_ACTION_VALIDATION = "E130"    # Action validation failed
+ERROR_CODE_ACTION_EXECUTION = "E131"     # Action execution failed
+
+# Input Validation Errors (E22x)
+ERROR_CODE_INPUT_MISSING = "E220"        # Missing required field (action-specific)
+ERROR_CODE_INPUT_TYPE = "E221"           # Invalid field type
+ERROR_CODE_INPUT_RANGE = "E222"          # Value out of range
+ERROR_CODE_INPUT_CHARS = "E223"          # Invalid characters (SQL injection, XSS)
+ERROR_CODE_INPUT_LENGTH = "E224"         # String too long
+
+# Server Errors (E4xx, E5xx)
+ERROR_CODE_RATE_LIMIT = "E429"           # Rate limit exceeded
+ERROR_CODE_INTERNAL = "E500"             # Internal server error
+ERROR_CODE_TIMEOUT = "E503"              # Query timeout
+ERROR_CODE_UNKNOWN = "E999"              # Unknown error
+
+# Legacy aliases for backwards compatibility during migration
+ERROR_CODE_VALIDATION = ERROR_CODE_ACTION_VALIDATION  # Alias
 
 # HTTP status codes
 HTTP_OK = 200

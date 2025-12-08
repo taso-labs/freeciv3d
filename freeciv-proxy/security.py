@@ -222,6 +222,26 @@ class InputSanitizer:
             if 'player_id' in action:
                 sanitized['player_id'] = cls.sanitize_player_id(action['player_id'])
 
+        # Generic handler for all other unit_* actions (unit_build_road, unit_fortify, etc.)
+        elif action_type.startswith('unit_'):
+            if 'unit_id' in action:
+                sanitized['unit_id'] = cls.sanitize_unit_id(action['unit_id'])
+            if 'player_id' in action:
+                sanitized['player_id'] = cls.sanitize_player_id(action['player_id'])
+            # Copy target for actions that need it (movement, attack, etc.)
+            if 'target' in action and isinstance(action['target'], dict):
+                sanitized['target'] = {}
+                if 'x' in action['target']:
+                    sanitized['target']['x'] = int(action['target']['x'])
+                if 'y' in action['target']:
+                    sanitized['target']['y'] = int(action['target']['y'])
+                if 'direction' in action['target']:
+                    sanitized['target']['direction'] = str(action['target']['direction'])
+            if 'dest_x' in action:
+                sanitized['dest_x'] = int(action['dest_x'])
+            if 'dest_y' in action:
+                sanitized['dest_y'] = int(action['dest_y'])
+
         # Copy other safe fields
         safe_fields = ['timestamp', 'priority']
         for field in safe_fields:

@@ -21,23 +21,11 @@
         "strict": true,
         "log_failures": true,
         "rate_limit": {
-            "requests_per_second": 10,
-            "burst_capacity": 100
+            "requests_per_second": 100,
+            "burst_capacity": 300,
+            "window_seconds": 60,
+            "reset_on_turn_end": true
         }
-    },
-    "capabilities": {
-        "default": [
-            "unit_move",
-            "unit_build_city",
-            "unit_explore",
-            "city_production",
-            "tech_research"
-        ],
-        "restricted": [
-            "city_buy",
-            "trade_route",
-            "declare_war"
-        ]
     },
     "authentication": {
         "require_api_token": true,

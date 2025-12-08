@@ -34,7 +34,6 @@ except ImportError:
         WEBSOCKET_PING_INTERVAL, WEBSOCKET_PING_TIMEOUT, WEBSOCKET_CLOSE_TIMEOUT
     )
 
-
 # Gateway will be injected by main.py to avoid circular imports
 gateway = None
 
@@ -499,8 +498,8 @@ class AgentWebSocketHandler:
 
         # Filter fields based on proxy's schema for each message type
         if msg_type == "llm_connect":
-            # Proxy expects: type, agent_id, api_token, capabilities (optional), port (optional), nation (optional), leader_name (optional), game_id (optional)
-            allowed_fields = {"type", "agent_id", "api_token", "capabilities", "port", "nation", "leader_name", "game_id"}
+            # Proxy expects: type, agent_id, api_token, port (optional), nation (optional), leader_name (optional), game_id (optional), auto_ready (optional, defaults to True)
+            allowed_fields = {"type", "agent_id", "api_token", "port", "nation", "leader_name", "game_id", "auto_ready"}
             transformed = {k: v for k, v in transformed.items() if k in allowed_fields}
         elif msg_type == "state_query":
             # Proxy expects: type, format (opt), include_actions (opt), player_id (opt)
@@ -559,6 +558,23 @@ class AgentWebSocketHandler:
             # Preserve optional timestamp
             if "timestamp" in message:
                 transformed["timestamp"] = message["timestamp"]
+        elif msg_type == "chat":
+            # Proxy expects: {type: "chat", message: "...", correlation_id (opt)}
+            # Gateway format: {type: "chat", data: {message: "..."}, ...}
+            chat_message = None
+            if "data" in message and isinstance(message["data"], dict):
+                chat_message = message["data"].get("message")
+            if chat_message is None:
+                chat_message = message.get("message")
+            
+            transformed = {
+                "type": "chat",
+                "message": chat_message
+            }
+            
+            # Preserve optional fields
+            if "correlation_id" in message:
+                transformed["correlation_id"] = message["correlation_id"]
         # For other types, pass through as-is
 
         return transformed
