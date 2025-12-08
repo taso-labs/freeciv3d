@@ -71,127 +71,124 @@ class MessageValidator:
     # Message schemas
     SCHEMAS = {
         MessageType.LLM_CONNECT: {
-            'required_fields': ['type', 'agent_id', 'api_token'],
-            'optional_fields': ['port', 'nation', 'leader_name', 'game_id'],
-            'field_types': {
-                'type': str,
-                'agent_id': str,
-                'api_token': str,
-                'port': int,
-                'nation': str,
-                'leader_name': str,
-                'game_id': str
+            "required_fields": ["type", "agent_id", "api_token"],
+            "optional_fields": [
+                "port",
+                "nation",
+                "leader_name",
+                "game_id",
+                "auto_ready",
+            ],
+            "field_types": {
+                "type": str,
+                "agent_id": str,
+                "api_token": str,
+                "port": int,
+                "nation": str,
+                "leader_name": str,
+                "game_id": str,
             },
-            'field_constraints': {
-                'agent_id': {'max_length': 50, 'pattern': r'^[a-zA-Z0-9_-]+$'},
-                'api_token': {'min_length': 10, 'max_length': 100},
-                'port': {'min_value': 1000, 'max_value': 65535},
-                'game_id': {'max_length': 64, 'pattern': r'^[a-zA-Z0-9_-]+$'},
-                'nation': {'max_length': 50},
-                'leader_name': {'max_length': 100}
-            }
+            "field_constraints": {
+                "agent_id": {"max_length": 50, "pattern": r"^[a-zA-Z0-9_-]+$"},
+                "api_token": {"min_length": 10, "max_length": 100},
+                "port": {"min_value": 1000, "max_value": 65535},
+                "game_id": {"max_length": 64, "pattern": r"^[a-zA-Z0-9_-]+$"},
+                "nation": {"max_length": 50},
+                "leader_name": {"max_length": 100},
+            },
         },
         MessageType.STATE_QUERY: {
-            'required_fields': ['type'],
-            'optional_fields': ['format', 'include_actions', 'player_id'],
-            'field_types': {
-                'type': str,
-                'format': str,
-                'include_actions': bool,
-                'player_id': int
+            "required_fields": ["type"],
+            "optional_fields": ["format", "include_actions", "player_id"],
+            "field_types": {
+                "type": str,
+                "format": str,
+                "include_actions": bool,
+                "player_id": int,
             },
-            'field_constraints': {
-                'format': {'allowed_values': ['full', 'delta', 'llm_optimized']},
-                'player_id': {'min_value': 1, 'max_value': 8}
-            }
+            "field_constraints": {
+                "format": {"allowed_values": ["full", "delta", "llm_optimized"]},
+                "player_id": {"min_value": 1, "max_value": 8},
+            },
         },
         MessageType.ACTION: {
-            'required_fields': ['type', 'action'],
-            'optional_fields': ['timestamp'],
-            'field_types': {
-                'type': str,
-                'action': dict,
-                'timestamp': (int, float)
-            },
-            'field_constraints': {
-                'action': {'max_keys': 20}
-            }
+            "required_fields": ["type", "action"],
+            "optional_fields": ["timestamp"],
+            "field_types": {"type": str, "action": dict, "timestamp": (int, float)},
+            "field_constraints": {"action": {"max_keys": 20}},
         },
         MessageType.PING: {
-            'required_fields': ['type'],
-            'optional_fields': ['timestamp'],
-            'field_types': {
-                'type': str,
-                'timestamp': (int, float)
-            }
+            "required_fields": ["type"],
+            "optional_fields": ["timestamp"],
+            "field_types": {"type": str, "timestamp": (int, float)},
         },
         MessageType.PLAYER_READY: {
-            'required_fields': ['type'],
-            'optional_fields': [],
-            'field_types': {
-                'type': str
-            }
+            "required_fields": ["type"],
+            "optional_fields": [],
+            "field_types": {"type": str},
         },
         MessageType.CONN_PING: {
-            'required_fields': ['type'],
-            'optional_fields': [],
-            'field_types': {
-                'type': str
-            }
+            "required_fields": ["type"],
+            "optional_fields": [],
+            "field_types": {"type": str},
         },
         MessageType.CONN_PONG: {
-            'required_fields': ['type'],
-            'optional_fields': [],
-            'field_types': {
-                'type': str
-            }
+            "required_fields": ["type"],
+            "optional_fields": [],
+            "field_types": {"type": str},
         },
         MessageType.UNIT_ACTIONS_QUERY: {
-            'required_fields': ['type', 'data'],
-            'optional_fields': ['agent_id', 'timestamp', 'correlation_id'],
-            'field_types': {
-                'type': str,
-                'data': dict,
-                'agent_id': str,
-                'timestamp': (int, float),
-                'correlation_id': str
+            "required_fields": ["type", "data"],
+            "optional_fields": ["agent_id", "timestamp", "correlation_id"],
+            "field_types": {
+                "type": str,
+                "data": dict,
+                "agent_id": str,
+                "timestamp": (int, float),
+                "correlation_id": str,
             },
-            'field_constraints': {
-                'correlation_id': {'max_length': 64, 'pattern': r'^[a-zA-Z0-9_-]+$'},
-                'data': {'required_keys': ['unit_ids']}
-            }
+            "field_constraints": {
+                "correlation_id": {"max_length": 64, "pattern": r"^[a-zA-Z0-9_-]+$"},
+                "data": {"required_keys": ["unit_ids"]},
+            },
         },
         MessageType.CITY_ACTIONS_QUERY: {
-            'required_fields': ['type', 'data'],
-            'optional_fields': ['agent_id', 'timestamp', 'correlation_id'],
-            'field_types': {
-                'type': str,
-                'data': dict,
-                'agent_id': str,
-                'timestamp': (int, float),
-                'correlation_id': str
+            "required_fields": ["type", "data"],
+            "optional_fields": ["agent_id", "timestamp", "correlation_id"],
+            "field_types": {
+                "type": str,
+                "data": dict,
+                "agent_id": str,
+                "timestamp": (int, float),
+                "correlation_id": str,
             },
-            'field_constraints': {
-                'correlation_id': {'max_length': 64, 'pattern': r'^[a-zA-Z0-9_-]+$'},
-                'data': {'required_keys': ['city_ids']}
-            }
+            "field_constraints": {
+                "correlation_id": {"max_length": 64, "pattern": r"^[a-zA-Z0-9_-]+$"},
+                "data": {"required_keys": ["city_ids"]},
+            },
         },
         MessageType.CHAT: {
-            'required_fields': ['type'],
-            'optional_fields': ['message', 'data', 'agent_id', 'timestamp', 'correlation_id'],
-            'field_types': {
-                'type': str,
-                'message': str,
-                'data': dict,
-                'agent_id': str,
-                'timestamp': (int, float),
-                'correlation_id': str
+            "required_fields": ["type"],
+            "optional_fields": [
+                "message",
+                "data",
+                "agent_id",
+                "timestamp",
+                "correlation_id",
+            ],
+            "field_types": {
+                "type": str,
+                "message": str,
+                "data": dict,
+                "agent_id": str,
+                "timestamp": (int, float),
+                "correlation_id": str,
             },
-            'field_constraints': {
-                'message': {'max_length': 500},
-                'correlation_id': {'max_length': 64, 'pattern': r'^[a-zA-Z0-9_-]+$'}
-            }
-        }
+            "field_constraints": {
+                "message": {"max_length": 500},
+                "correlation_id": {"max_length": 64, "pattern": r"^[a-zA-Z0-9_-]+$"},
+            },
+        },
     }
 
     def __init__(self, max_message_size: int = None):
