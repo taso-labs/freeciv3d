@@ -44,11 +44,6 @@ if [ "$5" = "longturn" ]; then
       addArgs --file "${lastsave%.*}"
     fi
   fi
-elif [ "$5" = "multiplayer" ]; then
-  # Multiplayer games with LLM agents should NOT use --quitidle
-  # LLM agents connect via /take and are treated as AI, not human players
-  # Using --quitidle would cause the server to quit after 20 seconds
-  echo "Multiplayer mode: skipping --quitidle for LLM agent games"
 else
   addArgs --quitidle 20
 fi
