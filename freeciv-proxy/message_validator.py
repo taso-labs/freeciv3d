@@ -138,12 +138,13 @@ class MessageValidator:
             "field_types": {"type": str},
         },
         MessageType.UNIT_ACTIONS_QUERY: {
-            "required_fields": ["type", "data"],
-            "optional_fields": ["agent_id", "timestamp", "correlation_id"],
+            "required_fields": ["type", "agent_id"],
+            "optional_fields": ["timestamp", "correlation_id", "data", "unit_ids"],
             "field_types": {
                 "type": str,
-                "data": dict,
                 "agent_id": str,
+                "data": dict,
+                "unit_ids": list,
                 "timestamp": (int, float),
                 "correlation_id": str,
             },
@@ -237,7 +238,7 @@ class MessageValidator:
             self.validation_stats['errors_by_type'][error_type] = (
                 self.validation_stats['errors_by_type'].get(error_type, 0) + 1
             )
-            logger.warning(f"Message validation failed: {e.error_code} - {e.message}")
+            logger.warning(f"Message validation failed: {e.error_code} - {e.message}, {raw_message}")
             raise
 
     def _validate_message_size(self, message: str):
@@ -345,6 +346,21 @@ class MessageValidator:
         msg_type = MessageType(message['type'])
         schema = self.SCHEMAS[msg_type]
         constraints = schema.get('field_constraints', {})
+
+        # Special handling for unit_actions_query: accept unit_ids in either location
+        if msg_type == MessageType.UNIT_ACTIONS_QUERY:
+            # If unit_ids is at top level, move it to data for handler compatibility
+            if 'unit_ids' in message and 'data' not in message:
+                message['data'] = {'unit_ids': message.pop('unit_ids')}
+            elif 'unit_ids' in message and 'data' in message:
+                # If both exist, prefer data but ensure unit_ids is there
+                if 'unit_ids' not in message['data']:
+                    message['data']['unit_ids'] = message['unit_ids']
+                message.pop('unit_ids', None)  # Remove top-level duplicate
+            
+            # Verify unit_ids exists in data now
+            if 'data' not in message or 'unit_ids' not in message.get('data', {}):
+                raise ValidationError("Missing required field: unit_ids in data", ErrorCodes.INPUT_MISSING_FIELD)
 
         for field, field_constraints in constraints.items():
             if field not in message:

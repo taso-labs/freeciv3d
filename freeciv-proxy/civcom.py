@@ -16,6 +16,7 @@
 import socket
 from struct import *
 from threading import Thread
+from typing import Dict, Any, Optional
 import logging
 import time
 import json
@@ -382,29 +383,27 @@ class CivCom(Thread):
             
         unit_type = self.unit_types.get(unit_type_id)
         if not unit_type:
-            # Unit type not found - ruleset data may not be loaded yet
-            # Log this so we can debug why PACKET_RULESET_UNIT wasn't received
-            logger.warning(
+            # Unit type not found - ruleset data not loaded (invalid state)
+            logger.error(
                 f"utype_can_do_action: unit_type_id={unit_type_id} not found in unit_types "
                 f"(have {len(self.unit_types)} unit types). "
-                f"PACKET_RULESET_UNIT may not have been received. Allowing action {action_id}."
+                f"PACKET_RULESET_UNIT not received - invalid state. Blocking action {action_id}."
             )
-            return True  # Allow action as defensive fallback
+            return False  # Block action when ruleset data missing
             
         # The utype_actions is a byte array (list of bytes, not 32-bit integers)
         # Each byte contains 8 bits of action capability flags
         # This is populated from PACKET_WEB_RULESET_UNIT_ADDITION (pid=260)
         utype_actions = unit_type.get('utype_actions', [])
         if not utype_actions:
-            # Defensive fallback: if utype_actions not yet received, allow action
-            # This prevents blocking valid actions during ruleset loading race conditions
+            # Missing utype_actions indicates ruleset not fully loaded (invalid state)
             unit_name = unit_type.get('name', f'unit_type_{unit_type_id}')
-            logger.warning(
+            logger.error(
                 f"utype_actions not populated for unit type {unit_name} (id={unit_type_id}). "
-                f"PACKET_WEB_RULESET_UNIT_ADDITION may not have been received yet. "
-                f"Allowing action {action_id} as fallback."
+                f"PACKET_WEB_RULESET_UNIT_ADDITION not received - invalid state. "
+                f"Blocking action {action_id}."
             )
-            return True
+            return False
             
         # Calculate which byte in the array and which bit within that byte
         # utype_actions is a byte array where each byte contains 8 action bits
@@ -416,6 +415,41 @@ class CivCom(Thread):
             
         # Check if the bit is set (bit order within byte: LSB first)
         return bool(utype_actions[byte_index] & (1 << bit_index))
+    
+    def city_has_improvement(self, city: Dict[str, Any], improvement_name: str) -> bool:
+        """Check if a city has a specific improvement/building.
+        
+        Args:
+            city: City data dict from PACKET_CITY_INFO
+            improvement_name: Name of the improvement (e.g., 'Airport', 'Barracks')
+            
+        Returns:
+            True if city has the improvement, False otherwise
+        """
+        improvements_bitvector = city.get('improvements')
+        if not improvements_bitvector:
+            return False
+            
+        # Find improvement ID by name
+        improvement_id = None
+        for imp_id, imp_data in self.improvements.items():
+            if imp_data.get('name', '').lower() == improvement_name.lower():
+                improvement_id = imp_id
+                break
+        
+        if improvement_id is None:
+            logger.warning(f"Improvement '{improvement_name}' not found in ruleset")
+            return False
+        
+        # Check if the bit is set in the bitvector
+        # improvements_bitvector is a list of bytes
+        byte_index = improvement_id // 8
+        bit_index = improvement_id % 8
+        
+        if byte_index >= len(improvements_bitvector):
+            return False
+            
+        return bool(improvements_bitvector[byte_index] & (1 << bit_index))
     
     def get_unit_type_actions(self, unit_type_id: int) -> list:
         """Get all actions a unit type can perform.
