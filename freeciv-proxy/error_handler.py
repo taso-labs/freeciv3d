@@ -35,31 +35,78 @@ class ErrorCategory(Enum):
     CONFIGURATION = "configuration"
 
 class ErrorCode:
-    """Standardized error codes"""
-    # Authentication errors (E100-E119)
-    AUTH_INVALID_TOKEN = "E110"
-    AUTH_FAILED = "E111"
-    AUTH_SESSION_CAPACITY = "E112"
-    AUTH_SESSION_EXPIRED = "E102"
-
-    # Rate limiting errors (E120-E139)
-    RATE_LIMIT_EXCEEDED = "E101"
-
-    # Validation errors (E140-E179)
-    VALIDATION_FAILED = "E116"
-    VALIDATION_MESSAGE_SIZE = "V001"
-    VALIDATION_JSON_INVALID = "V002"
-    VALIDATION_JSON_STRUCTURE = "V003"
-
-    # System errors (E180-E199)
-    SYSTEM_CAPACITY = "E100"
-    SYSTEM_INTERNAL = "E199"
-    SYSTEM_CIVSERVER_CONNECTION = "E140"
-
-    # Security errors (E200-E219)
-    SECURITY_VIOLATION = "E200"
-    SECURITY_INJECTION_ATTEMPT = "E201"
-    SECURITY_CACHE_POISONING = "E202"
+    """
+    Standardized error codes per LLM WebSocket Protocol v2.0.1
+    
+    Code ranges:
+    - E1xx: System & Connection errors
+    - E22x: Input validation errors
+    - E23x: Unit validation errors
+    - E24x: City validation errors
+    - E25x: Target validation errors
+    - E26x: Diplomacy errors
+    - E4xx: Client errors (rate limiting)
+    - E5xx: Server errors
+    """
+    
+    # System & Connection Errors (E1xx)
+    MISSING_REQUIRED_FIELD = "E101"      # Missing required field in message
+    INVALID_API_TOKEN = "E102"           # Invalid or expired API token
+    UNKNOWN_MESSAGE_TYPE = "E103"        # Unrecognized message type
+    NOT_AUTHENTICATED = "E120"           # Session expired or not authenticated
+    STATE_QUERY_FAILED = "E121"          # Failed to retrieve game state
+    CONNECTION_LOST = "E123"             # Connection to game server lost
+    ACTION_VALIDATION_FAILED = "E130"    # Action failed game rule validation
+    ACTION_EXECUTION_FAILED = "E131"     # Action was valid but execution failed
+    
+    # Input Validation Errors (E22x)
+    INPUT_MISSING_FIELD = "E220"         # Action-specific required field missing
+    INPUT_INVALID_TYPE = "E221"          # Wrong data type (e.g., string instead of int)
+    INPUT_OUT_OF_RANGE = "E222"          # Numeric value outside valid range
+    INPUT_INVALID_CHARS = "E223"         # Dangerous characters (SQL injection, XSS)
+    INPUT_STRING_TOO_LONG = "E224"       # String exceeds maximum length
+    
+    # Unit Validation Errors (E23x)
+    UNIT_NOT_FOUND = "E230"              # Specified unit does not exist
+    UNIT_NOT_OWNED = "E231"              # Unit exists but not owned by player
+    UNIT_BUSY = "E232"                   # Unit is busy or has no moves remaining
+    UNIT_NO_MOVES = "E233"               # Insufficient movement points
+    UNIT_MISSING_CAPABILITY = "E234"     # Unit lacks capability for action
+    
+    # City Validation Errors (E24x)
+    CITY_NOT_FOUND = "E240"              # Specified city does not exist
+    CITY_NOT_OWNED = "E241"              # City exists but not owned by player
+    CITY_AT_CAPACITY = "E242"            # City at maximum capacity
+    
+    # Target Validation Errors (E25x)
+    INSUFFICIENT_RESOURCES = "E250"      # Not enough gold or resources
+    INVALID_COORDINATES = "E251"         # Coordinates malformed or out of range
+    TARGET_OUT_OF_RANGE = "E252"         # Target too far from actor
+    TARGET_NOT_VISIBLE = "E253"          # Target in fog of war
+    TERRAIN_INCOMPATIBLE = "E254"        # Terrain doesn't support action
+    
+    # Diplomacy Errors (E26x)
+    PLAYER_NOT_FOUND = "E260"            # Target player does not exist
+    DIPLOMATIC_ACTION_INVALID = "E261"   # Action not allowed (e.g., already at war)
+    TREATY_EXISTS = "E262"               # Treaty already exists
+    NO_PENDING_TREATY = "E263"           # No treaty proposal to accept/reject
+    INVALID_DIPLOMATIC_STATE = "E264"    # Current state doesn't allow action
+    
+    # Server Errors (E4xx, E5xx)
+    RATE_LIMIT_EXCEEDED = "E429"         # Too many requests
+    INTERNAL_ERROR = "E500"              # Unexpected server error
+    QUERY_TIMEOUT = "E503"               # Server didn't respond in time
+    UNKNOWN_ERROR = "E999"               # Unclassified error
+    
+    # Retryable error codes
+    _RETRYABLE = {
+        "E120", "E121", "E123", "E429", "E500", "E503"
+    }
+    
+    @classmethod
+    def is_retryable(cls, code: str) -> bool:
+        """Check if an error code indicates a retryable condition"""
+        return code in cls._RETRYABLE
 
 class ErrorResponse:
     """Standardized error response structure"""
@@ -112,12 +159,14 @@ class ErrorHandler:
             agent_id, False, session_id=session_id, details=reason
         )
 
-        if "token" in reason.lower():
-            code = ErrorCode.AUTH_INVALID_TOKEN
-        elif "session" in reason.lower():
-            code = ErrorCode.AUTH_SESSION_EXPIRED
+        # Determine specific error code based on reason
+        reason_lower = reason.lower()
+        if "token" in reason_lower or "invalid" in reason_lower:
+            code = ErrorCode.INVALID_API_TOKEN
+        elif "session" in reason_lower or "expired" in reason_lower:
+            code = ErrorCode.NOT_AUTHENTICATED
         else:
-            code = ErrorCode.AUTH_FAILED
+            code = ErrorCode.INVALID_API_TOKEN
 
         return ErrorResponse(
             code=code,
@@ -139,76 +188,134 @@ class ErrorHandler:
             retry_after=retry_after
         )
 
-    def handle_validation_error(self, agent_id: str, validation_code: str,
+    def handle_validation_error(self, agent_id: str, error_code: str,
                               message: str, session_id: str = None,
-                              input_data: str = None) -> ErrorResponse:
+                              input_data: str = None, details: Dict[str, Any] = None) -> ErrorResponse:
         """Handle input validation errors"""
         SecurityLogger.log_validation_error(
-            agent_id, validation_code, message,
+            agent_id, error_code, message,
             session_id=session_id, input_data=input_data
         )
 
-        severity = ErrorSeverity.HIGH if validation_code.startswith('V00') else ErrorSeverity.MEDIUM
+        # High severity for security-related validation errors
+        severity = ErrorSeverity.HIGH if error_code == ErrorCode.INPUT_INVALID_CHARS else ErrorSeverity.MEDIUM
 
         return ErrorResponse(
-            code=validation_code,
-            message=f"Validation failed: {message}",
+            code=error_code,
+            message=message,
             category=ErrorCategory.VALIDATION,
-            severity=severity
+            severity=severity,
+            details=details
+        )
+
+    def handle_entity_error(self, agent_id: str, error_code: str,
+                          message: str, details: Dict[str, Any] = None) -> ErrorResponse:
+        """Handle unit/city entity validation errors (E23x, E24x)"""
+        return ErrorResponse(
+            code=error_code,
+            message=message,
+            category=ErrorCategory.VALIDATION,
+            severity=ErrorSeverity.MEDIUM,
+            details=details
+        )
+
+    def handle_target_error(self, agent_id: str, error_code: str,
+                          message: str, details: Dict[str, Any] = None) -> ErrorResponse:
+        """Handle target validation errors (E25x)"""
+        return ErrorResponse(
+            code=error_code,
+            message=message,
+            category=ErrorCategory.VALIDATION,
+            severity=ErrorSeverity.MEDIUM,
+            details=details
+        )
+
+    def handle_diplomacy_error(self, agent_id: str, error_code: str,
+                             message: str, details: Dict[str, Any] = None) -> ErrorResponse:
+        """Handle diplomacy errors (E26x)"""
+        return ErrorResponse(
+            code=error_code,
+            message=message,
+            category=ErrorCategory.VALIDATION,
+            severity=ErrorSeverity.MEDIUM,
+            details=details
         )
 
     def handle_security_violation(self, agent_id: str, violation_type: str,
                                 details: str, session_id: str = None) -> ErrorResponse:
-        """Handle security violations"""
+        """Handle security violations (SQL injection, XSS, etc.)"""
         SecurityLogger.log_security_violation(
             agent_id, violation_type, details,
             severity='high', session_id=session_id
         )
 
         return ErrorResponse(
-            code=ErrorCode.SECURITY_VIOLATION,
-            message="Security violation detected",
+            code=ErrorCode.INPUT_INVALID_CHARS,
+            message="Invalid characters in input",
             category=ErrorCategory.SECURITY,
             severity=ErrorSeverity.CRITICAL,
             details={'violation_type': violation_type}
         )
 
-    def handle_system_error(self, operation: str, error: Exception,
-                          agent_id: str = None, session_id: str = None) -> ErrorResponse:
-        """Handle system-level errors with appropriate logging"""
-        error_msg = str(error)
-        error_type = type(error).__name__
+    def handle_system_error(self, agent_id: str = None, error_code: str = None,
+                          message: str = None, details: Dict[str, Any] = None,
+                          operation: str = None, error: Exception = None,
+                          session_id: str = None) -> ErrorResponse:
+        """
+        Handle system-level errors with appropriate logging.
+        
+        Can be called in two ways:
+        1. With error_code, message, details for known errors
+        2. With operation, error for exception handling
+        """
+        if error is not None:
+            # Exception handling mode
+            error_msg = str(error)
+            error_type = type(error).__name__
 
-        # Log detailed error for debugging
-        logger.error(f"System error in {operation}: {error_type}: {error_msg}")
-        logger.debug(f"Stack trace: {traceback.format_exc()}")
+            # Log detailed error for debugging
+            logger.error(f"System error in {operation}: {error_type}: {error_msg}")
+            logger.debug(f"Stack trace: {traceback.format_exc()}")
 
-        # Track error frequency
-        self._track_error(operation, error_type)
+            # Track error frequency
+            self._track_error(operation or "unknown", error_type)
 
-        # Determine appropriate response based on error type
-        if "connection" in error_msg.lower() or "socket" in error_msg.lower():
-            code = ErrorCode.SYSTEM_CIVSERVER_CONNECTION
-            message = "Game server connection error"
-            severity = ErrorSeverity.HIGH
+            # Determine appropriate response based on error type
+            if "connection" in error_msg.lower() or "socket" in error_msg.lower():
+                code = ErrorCode.CONNECTION_LOST
+                msg = "Game server connection error"
+                severity = ErrorSeverity.HIGH
+            elif "timeout" in error_msg.lower():
+                code = ErrorCode.QUERY_TIMEOUT
+                msg = "Query timeout - server did not respond in time"
+                severity = ErrorSeverity.MEDIUM
+            else:
+                code = ErrorCode.INTERNAL_ERROR
+                msg = "Internal server error"
+                severity = ErrorSeverity.CRITICAL
+
+            return ErrorResponse(
+                code=code,
+                message=msg,
+                category=ErrorCategory.SYSTEM,
+                severity=severity,
+                details={'operation': operation} if operation else None
+            )
         else:
-            code = ErrorCode.SYSTEM_INTERNAL
-            message = "Internal server error"
-            severity = ErrorSeverity.CRITICAL
-
-        return ErrorResponse(
-            code=code,
-            message=message,
-            category=ErrorCategory.SYSTEM,
-            severity=severity,
-            details={'operation': operation}
-        )
+            # Direct error code mode
+            return ErrorResponse(
+                code=error_code or ErrorCode.INTERNAL_ERROR,
+                message=message or "Internal server error",
+                category=ErrorCategory.SYSTEM,
+                severity=ErrorSeverity.HIGH,
+                details=details
+            )
 
     def handle_capacity_error(self, resource_type: str, current: int,
                             maximum: int) -> ErrorResponse:
         """Handle capacity/resource limit errors"""
         return ErrorResponse(
-            code=ErrorCode.SYSTEM_CAPACITY,
+            code=ErrorCode.INTERNAL_ERROR,
             message=f"Server capacity exceeded: {current}/{maximum} {resource_type}",
             category=ErrorCategory.SYSTEM,
             severity=ErrorSeverity.HIGH,
@@ -299,7 +406,7 @@ class ErrorHandler:
         """Handle state extraction errors"""
         logger.error(f"State extraction failed for game {game_id}, player {player_id}: {error}")
         return ErrorResponse(
-            code=ErrorCode.SYSTEM_INTERNAL,
+            code=ErrorCode.STATE_QUERY_FAILED,
             message=f"Failed to extract game state: {error}",
             category=ErrorCategory.SYSTEM,
             severity=ErrorSeverity.HIGH,
@@ -314,7 +421,7 @@ class ErrorHandler:
         """Handle legal action extraction errors"""
         logger.error(f"Action extraction failed for game {game_id}, player {player_id}: {error}")
         return ErrorResponse(
-            code=ErrorCode.SYSTEM_INTERNAL,
+            code=ErrorCode.STATE_QUERY_FAILED,
             message=f"Failed to extract legal actions: {error}",
             category=ErrorCategory.SYSTEM,
             severity=ErrorSeverity.HIGH,

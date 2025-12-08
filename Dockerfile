@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 # Freeciv-web docker file with LLM gateway support
 
 FROM ubuntu:noble AS docker-base
@@ -115,6 +116,18 @@ WORKDIR /docker/scripts/
 
 ENV SKIP_FREECIV_BUILD=true
 
+# Cache Maven dependencies separately for better layer reuse
+RUN --mount=type=cache,uid=1001,gid=1001,target=/home/docker/.m2 \
+    --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    <<EOF
+set -e
+sudo apt-get update --yes --quiet
+sudo apt-get install --yes --no-install-recommends maven
+cd /docker/freeciv-web
+mvn dependency:resolve || true
+EOF
+
 # Install dependencies and build
 # Using Ubuntu's stable tomcat10 package (10.1.16-1) instead of latest Apache version
 RUN --mount=type=cache,uid=1001,gid=1001,target=/home/docker/.m2 \
@@ -135,14 +148,15 @@ COPY --from=tomcat-builder --chown=docker:docker /docker/config /docker/config
 COPY --from=tomcat-builder --chown=docker:docker /docker/freeciv-proxy /docker/freeciv-proxy
 COPY --from=tomcat-builder --chown=docker:docker /docker/freeciv-web/*.sh /docker/freeciv-web/
 COPY --from=tomcat-builder --chown=docker:docker /docker/LICENSE.md /docker/LICENSE.md
-COPY --from=tomcat-builder --chown=docker:docker /docker/llm-gateway /docker/llm-gateway
 COPY --from=tomcat-builder --chown=docker:docker /docker/publite2 /docker/publite2
 COPY --from=tomcat-builder --chown=docker:docker /docker/scripts /docker/scripts
 
-# Install Python dependencies for freeciv-proxy and LLM Gateway
+# Copy requirements.txt first for better caching
+COPY --from=tomcat-builder --chown=docker:docker /docker/llm-gateway/requirements.txt /docker/llm-gateway/requirements.txt
+
+# Install system dependencies
 WORKDIR /docker/llm-gateway
-RUN --mount=type=cache,uid=1001,gid=1001,target=/root/.cache/pip \
-    --mount=type=cache,target=/var/cache/apt,sharing=locked \
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
     <<EOF
 set -e
@@ -160,10 +174,16 @@ apt-get install -y --no-install-recommends \
 ## Give server access to savegames / scenarios directory.
 ## TODO: Figure out more targeted solution.
 usermod -a -G tomcat docker
-pip install --break-system-packages -r requirements.txt
 # Remove documentation, saves 1691975 bytes
 rm -rf /usr/share/doc/* /usr/share/man/* /usr/share/locale/*
 EOF
+
+# Install Python dependencies in separate layer for better caching
+RUN --mount=type=cache,uid=1001,gid=1001,target=/root/.cache/pip \
+    pip install --break-system-packages -r requirements.txt
+
+# Copy remaining llm-gateway files
+COPY --from=tomcat-builder --chown=docker:docker /docker/llm-gateway /docker/llm-gateway
 
 COPY --from=tomcat-builder --chown=docker:docker /home/docker /home/docker
 COPY --from=tomcat-builder --chown=tomcat:tomcat /usr/share/tomcat10 /usr/share/tomcat10

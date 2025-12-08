@@ -28,9 +28,6 @@ class LLMConfig:
             "strict": True,
             "log_failures": True
         },
-        "capabilities": {
-            "default": ["unit_move", "city_production", "tech_research"]
-        },
         "authentication": {
             "require_api_token": True,
             "token_min_length": 10
@@ -166,14 +163,6 @@ class LLMConfig:
     def is_strict_validation(self) -> bool:
         """Check if strict validation is enabled"""
         return self.get('validation.strict', True)
-
-    def get_default_capabilities(self) -> List[str]:
-        """Get default capabilities for LLM agents"""
-        return self.get('capabilities.default', [])
-
-    def get_restricted_capabilities(self) -> List[str]:
-        """Get restricted capabilities that require special permissions"""
-        return self.get('capabilities.restricted', [])
 
     def is_token_required(self) -> bool:
         """Check if API token is required for authentication"""

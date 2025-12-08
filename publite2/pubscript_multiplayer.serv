@@ -21,7 +21,7 @@ set victories spacerace
 set landm 50
 set minplayers 2
 set maxplayers 3
-set aifill 0
+set aifill 2
 set generator ISLAND
 set landmass 30
 set separatepoles ENABLED
@@ -38,9 +38,8 @@ set topology ""
 set wrap=
 set steepness 12
 
-# LLM agents take control of AI players via /take command
-# aifill 2 creates AI*1 and AI*2 for the two LLM agents to control
-# This ensures exactly 2 player slots exist for agents to /take
+# LLM agents automatically replace AI players when connecting
+# aifill 2 creates AI*1 and AI*2 that will be replaced by connecting agents
 
 metaconnection persistent
 metamessage New Freeciv-web Multiplayer Game

@@ -7,6 +7,7 @@ Tests input validation, authentication security, rate limiting, and cache integr
 """
 
 import unittest
+import secrets
 import json
 import time
 import hmac
@@ -19,6 +20,10 @@ from security import InputSanitizer, SecurityError, SecurityLogger
 from rate_limiter import DistributedRateLimiter, InMemoryRateLimiter
 from session_manager import SessionManager, SessionState
 from state_cache import StateCache
+
+# Make sure a secure cache HMAC secret exists for tests that directly construct StateCache
+import os
+os.environ.setdefault('CACHE_HMAC_SECRET', secrets.token_hex(32))
 from error_handler import ErrorHandler, ErrorSeverity, ErrorCategory
 
 
@@ -286,13 +291,11 @@ class TestSessionManagement(unittest.TestCase):
         """Test secure session creation and validation"""
         agent_id = "test-agent"
         api_token = "test-token-123"
-        capabilities = {'unit_move', 'city_production'}
 
         # Create session
-        session = self.session_manager.create_session(agent_id, api_token, capabilities)
+        session = self.session_manager.create_session(agent_id, api_token)
         self.assertIsNotNone(session)
         self.assertEqual(session.agent_id, agent_id)
-        self.assertEqual(session.capabilities, capabilities)
 
         # Validate session
         validated_session = self.session_manager.validate_session(session.session_id, api_token)

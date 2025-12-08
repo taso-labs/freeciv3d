@@ -101,3 +101,4 @@ freeciv-web/flyway.properties
 # Generated JavaScript packet handlers (auto-generated from packets.def)
 freeciv-web/src/main/webapp/javascript/packets.js
 freeciv-web/src/main/webapp/javascript/packhand_gen.js
+.cache/

@@ -11,6 +11,7 @@ import time
 import json
 import sys
 import os
+import secrets
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -23,6 +24,8 @@ class TestPerformanceRequirements(unittest.TestCase):
 
     def setUp(self):
         """Set up performance test fixtures"""
+        # Ensure a valid cache HMAC secret exists for these tests
+        os.environ.setdefault('CACHE_HMAC_SECRET', secrets.token_hex(32))
         self.cache = StateCache(ttl=5, max_size_kb=4)
 
     def test_state_cache_performance_50ms(self):

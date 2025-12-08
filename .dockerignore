@@ -9,3 +9,47 @@ README.md
 README-One-Turn-Per-Day.md
 TODO
 Vagrantfile
+
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Test directories
+tests/
+test/
+
+# Logs
+logs/
+*.log
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Docker files
+docker-compose*.yml
+
+# Build artifacts
+compile_commands.json
+target/
+*.war
+
+# Temporary files
+*.tmp
+*.bak
+*.orig
+temp.sh
+monitor_build.sh
