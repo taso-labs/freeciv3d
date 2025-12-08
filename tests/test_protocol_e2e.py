@@ -51,8 +51,7 @@ def is_service_available(host: str, port: int) -> bool:
 
 def is_websocket_available() -> bool:
     """Check if WebSocket endpoint is actually available by attempting connection"""
-    import asyncio
-    
+
     async def try_connect():
         try:
             async with asyncio.timeout(3):

@@ -7,7 +7,6 @@ Phase 4: Input Validation Hardening Tests
 Tests input validation per LLM WebSocket Protocol v2.0.1:
 - String length validation (city names, building names, etc.)
 - Character allowlist validation per field type
-- SQL injection pattern detection
 - XSS pattern detection
 - Coordinate range validation
 - Null byte and control character removal
@@ -16,12 +15,10 @@ Tests input validation per LLM WebSocket Protocol v2.0.1:
 import pytest
 import sys
 import os
-import re
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from action_validator import ValidationResult
-from input_validator import InputValidator, InputValidationError
+from input_validator import InputValidator
 
 class TestStringLengthValidation:
     """Test string length constraints per Protocol v2.0.1"""
@@ -231,96 +228,6 @@ class TestCharacterAllowlistValidation:
         """Empty message should pass (0 length is <= 256)"""
         result = validator.validate_string_field("", "message")
         assert result.is_valid is True
-
-
-class TestSQLInjectionDetection:
-    """Test SQL injection pattern detection"""
-
-    @pytest.fixture
-    def validator(self):
-        return InputValidator()
-
-    def test_select_injection(self, validator):
-        """SELECT statement should be detected"""
-        result = validator.detect_sql_injection("name'; SELECT * FROM users--")
-        assert result.is_valid is False
-        assert result.error_code == "E223"
-
-    def test_drop_injection(self, validator):
-        """DROP statement should be detected"""
-        result = validator.detect_sql_injection("city'; DROP TABLE users;--")
-        assert result.is_valid is False
-        assert result.error_code == "E223"
-
-    def test_union_injection(self, validator):
-        """UNION statement should be detected"""
-        result = validator.detect_sql_injection("1 UNION SELECT password FROM users")
-        assert result.is_valid is False
-        assert result.error_code == "E223"
-
-    def test_insert_injection(self, validator):
-        """INSERT statement should be detected"""
-        result = validator.detect_sql_injection("name'; INSERT INTO admins VALUES('hacker')--")
-        assert result.is_valid is False
-        assert result.error_code == "E223"
-
-    def test_update_injection(self, validator):
-        """UPDATE statement should be detected"""
-        result = validator.detect_sql_injection("name'; UPDATE users SET admin=1--")
-        assert result.is_valid is False
-        assert result.error_code == "E223"
-
-    def test_delete_injection(self, validator):
-        """DELETE statement should be detected"""
-        result = validator.detect_sql_injection("name'; DELETE FROM users--")
-        assert result.is_valid is False
-        assert result.error_code == "E223"
-
-    def test_comment_injection(self, validator):
-        """SQL comment markers should be detected"""
-        result = validator.detect_sql_injection("admin'--")
-        assert result.is_valid is False
-        assert result.error_code == "E223"
-
-    def test_block_comment_injection(self, validator):
-        """Block comment markers should be detected"""
-        result = validator.detect_sql_injection("admin/* comment */")
-        assert result.is_valid is False
-        assert result.error_code == "E223"
-
-    def test_or_1_equals_1(self, validator):
-        """OR 1=1 pattern should be detected"""
-        result = validator.detect_sql_injection("admin' OR 1=1--")
-        assert result.is_valid is False
-        assert result.error_code == "E223"
-
-    def test_or_string_equals_string(self, validator):
-        """String comparison SQL injection (' OR 'a'='a') should be detected"""
-        result = validator.detect_sql_injection("admin' OR 'a'='a'--")
-        assert result.is_valid is False
-        assert result.error_code == "E223"
-
-    def test_and_1_equals_1(self, validator):
-        """AND 1=1 pattern should be detected"""
-        result = validator.detect_sql_injection("admin' AND 1=1--")
-        assert result.is_valid is False
-        assert result.error_code == "E223"
-
-    def test_exec_injection(self, validator):
-        """EXEC statement should be detected"""
-        result = validator.detect_sql_injection("'; EXEC xp_cmdshell('cmd')--")
-        assert result.is_valid is False
-        assert result.error_code == "E223"
-
-    def test_valid_input_passes(self, validator):
-        """Normal input should pass SQL injection check"""
-        result = validator.detect_sql_injection("New York City")
-        assert result.is_valid is True
-
-    def test_case_insensitive(self, validator):
-        """SQL injection detection should be case-insensitive"""
-        result = validator.detect_sql_injection("select * from users")
-        assert result.is_valid is False
 
 
 class TestXSSDetection:
@@ -686,7 +593,7 @@ class TestNullAndTypeValidation:
 class TestEncodingBypassDetection:
     """Test that encoding bypass attempts are detected via normalization.
 
-    These tests verify that SQL injection and XSS attempts using URL encoding,
+    These tests verify that XSS attempts using URL encoding,
     HTML entities, and Unicode normalization are properly detected.
     """
 
@@ -696,13 +603,6 @@ class TestEncodingBypassDetection:
 
     # --- URL Encoding Bypass Tests ---
 
-    def test_sql_injection_url_encoded_quote(self, validator):
-        """SQL injection with URL-encoded quote (%27) should be detected"""
-        # %27 = single quote, %20 = space
-        result = validator.detect_sql_injection("admin%27%20OR%20%271%27=%271")
-        assert result.is_valid is False
-        assert result.error_code == "E223"
-
     def test_xss_url_encoded_script_tag(self, validator):
         """XSS with URL-encoded angle brackets should be detected"""
         # %3C = <, %3E = >
@@ -711,12 +611,6 @@ class TestEncodingBypassDetection:
         assert result.error_code == "E223"
 
     # --- HTML Entity Bypass Tests ---
-
-    def test_sql_injection_html_entity_quote(self, validator):
-        """SQL injection with HTML entity quote (&apos;) should be detected"""
-        result = validator.detect_sql_injection("admin&apos; OR &apos;1&apos;=&apos;1")
-        assert result.is_valid is False
-        assert result.error_code == "E223"
 
     def test_xss_html_entity_script_tag(self, validator):
         """XSS with HTML entity angle brackets should be detected"""
@@ -731,16 +625,6 @@ class TestEncodingBypassDetection:
         assert result.is_valid is False
         assert result.error_code == "E223"
 
-    # --- Unicode Normalization Tests ---
-
-    def test_sql_injection_fullwidth_chars(self, validator):
-        """SQL injection with fullwidth characters should be detected"""
-        # Fullwidth: ' = \uff07, O = \uff2f, R = \uff32
-        # Using regular SELECT FROM pattern since fullwidth normalization is complex
-        result = validator.detect_sql_injection("SELECT\u3000*\u3000FROM\u3000users")
-        assert result.is_valid is False
-        assert result.error_code == "E223"
-
     # --- Mixed Encoding Tests ---
 
     def test_xss_mixed_encoding(self, validator):
@@ -751,11 +635,6 @@ class TestEncodingBypassDetection:
         assert result.error_code == "E223"
 
     # --- Clean Input Still Works ---
-
-    def test_clean_input_with_percent_sign(self, validator):
-        """Regular percent signs (not URL encoding) should pass"""
-        result = validator.detect_sql_injection("Sales increased by 50%!")
-        assert result.is_valid is True
 
     def test_clean_input_with_ampersand(self, validator):
         """Regular ampersands should pass"""

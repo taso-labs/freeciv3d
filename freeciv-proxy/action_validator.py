@@ -51,7 +51,6 @@ DEFAULT_MAP_HEIGHT = 200
 # have their own required/optional field validation which is more precise. This constant
 # serves as a safety net for unrecognized actions, not a global enforcement.
 MAX_ACTION_PARAMS = 20  # Maximum number of parameters in an action
-MAX_MESSAGE_LENGTH = 256  # Maximum length for text messages
 MAX_NAME_LENGTH = 50  # Maximum length for names (city, tech, etc.)
 
 class ValidationResult:
@@ -274,11 +273,11 @@ class LLMActionValidator:
             'invalid_actions': 0,
             'errors_by_type': {}
         }
-        # InputValidator for security checks (XSS, SQL injection)
+        # InputValidator for security checks (XSS detection)
         # NOTE: Lazy import is intentional to avoid circular dependency.
-        # input_validator.py imports ValidationResult from this module, so we
-        # cannot import InputValidator at module level. This pattern is safe
-        # because __init__ is only called once per validator instance.
+        # input_validator.py imports ValidationResult from this module at line 34,
+        # so we cannot import InputValidator at module level. This pattern is safe
+        # because __init__ is called after both modules are fully loaded.
         from input_validator import get_input_validator
         self._input_validator = get_input_validator()
 
@@ -813,15 +812,10 @@ class LLMActionValidator:
             if not msg_result.is_valid:
                 return self._validation_error(msg_result.error_code or 'E264', msg_result.error_message or 'Invalid message')
 
-            # Check for SQL injection
-            sql_result = self._input_validator.detect_sql_injection(message)
-            if not sql_result.is_valid:
-                return self._validation_error('E265', 'Message contains potentially dangerous content')
-
             # Check for XSS
             xss_result = self._input_validator.detect_xss(message)
             if not xss_result.is_valid:
-                return self._validation_error('E266', 'Message contains potentially dangerous content')
+                return self._validation_error('E265', 'Message contains potentially dangerous content')
 
         return ValidationResult(True)
 

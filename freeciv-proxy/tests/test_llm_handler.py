@@ -12,7 +12,6 @@ import json
 import time
 import os
 import sys
-from unittest.mock import Mock, AsyncMock, patch, MagicMock
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -21,7 +20,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # Use a proper high-entropy secret for testing
 os.environ['CACHE_HMAC_SECRET'] = '8dc50280f151af309d728c951584576f205688dc82d7d295174f2ef1b3e32181'
 
-from state_cache import StateCache, CacheEntry
+from state_cache import StateCache
 from action_validator import LLMActionValidator, ActionType, ValidationResult
 from message_validator import MessageValidator, ValidationError
 from config_loader import llm_config

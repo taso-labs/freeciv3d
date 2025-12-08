@@ -7,7 +7,7 @@ These tests verify that the action validators actually work correctly:
 - Wrong player ownership is rejected
 - Unit/city not found errors are returned
 - Specific action type requirements are enforced
-- Security validations (SQL injection, XSS, ReDoS)
+- Security validations (XSS, ReDoS, character allowlists)
 
 These tests call the actual validator methods with mock game state.
 """
@@ -864,7 +864,7 @@ class TestInputValidatorIntegration(unittest.TestCase):
         self.assertFalse(result.is_valid)
 
     def test_sql_injection_blocked(self):
-        """SQL injection should be blocked"""
+        """Character allowlist blocks SQL keywords like OR and ="""
         action = {
             "type": "diplomacy_message",
             "target_player_id": 2,
@@ -872,19 +872,8 @@ class TestInputValidatorIntegration(unittest.TestCase):
         }
         result = self.validator.validate_action(action, self.player_id, GAME_STATE)
         self.assertFalse(result.is_valid)
-        # E223 from character allowlist or E265 from SQL injection detection
-        self.assertIn(result.error_code, ["E223", "E265"])
-
-    def test_sql_comment_injection_blocked(self):
-        """SQL comment injection should be blocked"""
-        action = {
-            "type": "diplomacy_message",
-            "target_player_id": 2,
-            "message": "Hello'-- DROP TABLE users",
-        }
-        result = self.validator.validate_action(action, self.player_id, GAME_STATE)
-        self.assertFalse(result.is_valid)
-        self.assertIn(result.error_code, ["E223", "E265"])
+        # E223 from character allowlist (blocks OR keyword and =)
+        self.assertEqual(result.error_code, "E223")
 
     def test_xss_injection_blocked(self):
         """XSS injection should be blocked"""

@@ -784,6 +784,7 @@ class StateExtractor:
         moves_left = unit.get('moves_left', unit.get('moves', 0))
         activity = unit.get('activity', 'idle')
         tile_index = unit.get('tile')
+        # Variables x, y are captured by get_target_tile() closure below (line ~829)
         x = unit.get('x', 0)
         y = unit.get('y', 0)
         is_transported = unit.get('transported', False)

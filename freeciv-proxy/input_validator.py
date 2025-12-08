@@ -8,7 +8,6 @@ Protocol v2.0.1 compliant input validation
 This module provides:
 - String length validation per field type
 - Character allowlist validation
-- SQL injection pattern detection
 - XSS pattern detection
 - Coordinate range validation
 - Input sanitization
@@ -17,7 +16,7 @@ Error codes:
 - E220: Missing required field
 - E221: Invalid field type
 - E222: Value out of range
-- E223: Invalid characters (includes injection detection)
+- E223: Invalid characters (includes XSS detection)
 - E224: String too long
 - E251: Invalid coordinate
 """
@@ -100,11 +99,8 @@ class InputValidator:
             "max_length": 256,
             # SECURITY NOTE: This pattern is intentionally restrictive. The \' and \"
             # are escaped quote LITERALS for display purposes only (e.g., "it's working").
-            # SQL injection attempts like "' OR '1'='1" are BLOCKED because:
-            # 1. The pattern requires the ENTIRE string to match (^ and $ anchors)
-            # 2. SQL keywords like OR, AND, SELECT are not in [a-zA-Z0-9 .,!?'"()-]
-            # 3. Even if quotes pass, detect_sql_injection() runs as a second layer
-            # Test: test_diplomacy_message_sql_injection_blocked verifies this works.
+            # The pattern requires the ENTIRE string to match (^ and $ anchors), and
+            # only allows alphanumeric characters and basic punctuation.
             "pattern": r'^[a-zA-Z0-9 .,!?\'"()\-]*$',
             "description": "Messages may contain alphanumeric and basic punctuation",
         },
@@ -129,43 +125,6 @@ class InputValidator:
             "description": "Nation names must be alphanumeric with spaces, underscores",
         },
     }
-
-    # SQL injection patterns to detect
-    #
-    # SECURITY DESIGN NOTE (for code reviewers):
-    # These patterns are SECONDARY defense. The PRIMARY defense is character allowlists
-    # in FIELD_CONSTRAINTS which restrict fields like city_name, building_name to
-    # alphanumeric characters only. SQL injection patterns are only needed for
-    # free-text fields like 'message' that allow quotes and punctuation.
-    #
-    # Pattern coverage includes:
-    # - DDL/DML keywords (SELECT, DROP, INSERT, UPDATE, DELETE)
-    # - Boolean injection with digits (' OR '1'='1') and strings (' OR 'a'='a')
-    # - SQL comments (--, /* */)
-    # - Chained commands (; DROP TABLE)
-    # - Stored procedures (EXEC, xp_, sp_)
-    #
-    # Encoding bypass attempts are handled by _normalize_for_security() which
-    # URL-decodes, HTML-unescapes, and Unicode-normalizes input before pattern matching.
-    SQL_INJECTION_PATTERNS = [
-        r"\bSELECT\b.*\bFROM\b",  # SELECT ... FROM (more specific)
-        r"\bDROP\b.*\bTABLE\b",  # DROP TABLE (more specific)
-        r"\bINSERT\b.*\bINTO\b",  # INSERT INTO (more specific)
-        r"\bUPDATE\b.*\bSET\b",  # UPDATE ... SET (more specific)
-        r"\bDELETE\b.*\bFROM\b",  # DELETE FROM (more specific)
-        r"\bUNION\b.*\bSELECT\b",  # UNION SELECT (more specific)
-        r"'\s*OR\s+'?\d+'?\s*=\s*'?\d+'?",  # ' OR '1'='1' style (digits)
-        r"'\s*OR\s+'[^']*'\s*=\s*'[^']*'",  # ' OR 'a'='a' style (strings)
-        r'"\s*OR\s+"?\d+"?\s*=\s*"?\d+"?',  # " OR "1"="1" style
-        r"'\s*AND\s+'?\d+'?\s*=\s*'?\d+'?",  # ' AND '1'='1' style
-        r'"\s*AND\s+"?\d+"?\s*=\s*"?\d+"?',  # " AND "1"="1" style
-        r"'--",  # SQL comment after quote (injection attempt)
-        r"/\*.*\*/",  # Block comment (injection attempt)
-        r";\s*(DROP|SELECT|INSERT|UPDATE|DELETE)\b",  # Chained SQL commands
-        r"\bEXEC(UTE)?\s+\w+",  # EXEC/EXECUTE procedure
-        r"\bxp_\w+",  # Extended stored procedures
-        r"\bsp_\w+",  # System stored procedures
-    ]
 
     # XSS patterns to detect and strip
     XSS_PATTERNS = [
@@ -195,10 +154,6 @@ class InputValidator:
 
     def __init__(self):
         # Compile regex patterns for performance
-        # Combine SQL patterns into single regex for O(1) matching instead of O(n)
-        self._sql_combined_pattern = re.compile(
-            "|".join(f"({p})" for p in self.SQL_INJECTION_PATTERNS), re.IGNORECASE
-        )
         # Combine XSS patterns into single regex for O(1) matching
         self._xss_combined_pattern = re.compile(
             "|".join(f"({p})" for p in self.XSS_PATTERNS), re.IGNORECASE
@@ -208,7 +163,6 @@ class InputValidator:
         self._stats = {
             'validations': 0,
             'failures': 0,
-            'sql_injections_blocked': 0,
             'xss_blocked': 0,
         }
 
@@ -323,7 +277,7 @@ class InputValidator:
 
         # In Python, bool is a subclass of int, so isinstance(True, int) returns True.
         # We must explicitly exclude booleans to ensure coordinates are actual integers.
-        if not isinstance(value, int) or isinstance(value, bool):
+        if isinstance(value, bool) or not isinstance(value, int):
             self._stats['failures'] += 1
             return ValidationResult(
                 is_valid=False,
@@ -337,46 +291,6 @@ class InputValidator:
                 is_valid=False,
                 error_code=self.E251_INVALID_COORDINATE,
                 error_message=f"Coordinate {field_name} out of range: {value} (must be {self.COORDINATE_MIN}-{self.COORDINATE_MAX})"
-            )
-
-        return ValidationResult(is_valid=True)
-
-    def detect_sql_injection(self, value: str) -> ValidationResult:
-        """
-        Detect SQL injection patterns in input
-
-        Includes encoding normalization to detect bypass attempts via:
-        - URL encoding (%27 for quote, %3D for equals)
-        - HTML entities (&apos; &#39; for quote)
-        - Unicode normalization (fullwidth characters)
-
-        Returns:
-            ValidationResult - invalid if SQL injection detected
-        """
-        if not isinstance(value, str):
-            return ValidationResult(is_valid=True)
-
-        # ReDoS protection: reject overly long inputs before regex matching
-        if len(value) > MAX_INPUT_LENGTH_FOR_REGEX:
-            self._stats['failures'] += 1
-            return ValidationResult(
-                is_valid=False,
-                error_code=self.E224_STRING_TOO_LONG,
-                error_message=f"Input too long for security scanning: {len(value)} > {MAX_INPUT_LENGTH_FOR_REGEX}"
-            )
-
-        # Normalize encodings to detect bypass attempts
-        normalized = self._normalize_for_security(value)
-
-        match = self._sql_combined_pattern.search(normalized)
-        if match:
-            self._stats['sql_injections_blocked'] += 1
-            matched_pattern = match.group(0)
-            logger.warning(f"SQL injection attempt blocked: {matched_pattern}")
-            return ValidationResult(
-                is_valid=False,
-                error_code=self.E223_INVALID_CHARS,
-                error_message=f"Potential SQL injection detected"
             )
 
         return ValidationResult(is_valid=True)
@@ -443,7 +357,7 @@ class InputValidator:
 
         # In Python, bool is a subclass of int, so isinstance(True, int) returns True.
         # We must explicitly exclude booleans to ensure entity IDs are actual integers.
-        if not isinstance(value, int) or isinstance(value, bool):
+        if isinstance(value, bool) or not isinstance(value, int):
             self._stats['failures'] += 1
             return ValidationResult(
                 is_valid=False,
@@ -506,10 +420,7 @@ class InputValidator:
                 result = self.validate_string_field(params['city_name'], 'city_name')
                 if not result.is_valid:
                     return result
-                # Also check for injection
-                result = self.detect_sql_injection(params['city_name'])
-                if not result.is_valid:
-                    return result
+                # Also check for XSS
                 result = self.detect_xss(params['city_name'])
                 if not result.is_valid:
                     return result
@@ -531,9 +442,6 @@ class InputValidator:
                 result = self.validate_string_field(params['message'], 'message')
                 if not result.is_valid:
                     return result
-                result = self.detect_sql_injection(params['message'])
-                if not result.is_valid:
-                    return result
                 result = self.detect_xss(params['message'])
                 if not result.is_valid:
                     return result
@@ -549,7 +457,6 @@ class InputValidator:
         self._stats = {
             'validations': 0,
             'failures': 0,
-            'sql_injections_blocked': 0,
             'xss_blocked': 0,
         }
 

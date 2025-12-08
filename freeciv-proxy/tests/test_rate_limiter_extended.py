@@ -188,7 +188,7 @@ class TestEdgeCases(unittest.TestCase):
 
         # Test with reasonable values - this is the main test that should pass
         # We'll test with a simple case that should work
-        result = limiter.check_limit("test_key", 10, 60)
+        limiter.check_limit("test_key", 10, 60)
         # This might fail due to time calculations, but that's not the focus of our test
         # The important thing is that it doesn't crash
 

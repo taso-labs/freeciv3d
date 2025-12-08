@@ -12,7 +12,7 @@ import logging
 import threading
 import time
 import aiohttp
-from typing import Dict, Set, Optional, Any, List
+from typing import Dict, Optional, Any
 from dataclasses import dataclass, field
 from enum import Enum
 

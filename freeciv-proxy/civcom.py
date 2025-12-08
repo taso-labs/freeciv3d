@@ -648,7 +648,7 @@ class CivCom(Thread):
                                             conn.io_loop.add_callback(lambda msg=chat_event: conn.write_message(msg))
                                         except Exception as chat_err:
                                             logger.debug(f"Could not send chat_message event: {chat_err}")
-                            except:
+                            except Exception:
                                 pass  # Not JSON or parsing failed, ignore
                         except Exception as e:
                             logger.warning(f"⚠ Error parsing packet for state storage: {e}", exc_info=True)
