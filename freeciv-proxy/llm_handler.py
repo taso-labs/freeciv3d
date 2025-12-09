@@ -1908,7 +1908,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 legal_actions = self._get_legal_actions_optimized(full_state)
                 # Log action counts - legal_actions is now dict keyed by actor_id
                 total_actions = sum(len(actions) for actions in legal_actions.values())
-                unit_count = len([k for k in legal_actions.keys() if k != 'player'])
+                unit_count = sum(1 for k in legal_actions.keys() if k != 'player')
                 logger.info(
                     f"✓ Generated {total_actions} legal actions for agent {self.agent_id}\n"
                     f"   Units with actions: {unit_count}\n"
@@ -2199,10 +2199,13 @@ class LLMWSHandler(websocket.WebSocketHandler):
 
         # Generate actions for each unit using state_extractor
         units = game_state.get('units', {})
+        # Pre-filter units by owner (performance: avoid unnecessary API calls for enemy units)
+        player_units = {uid: unit for uid, unit in units.items()
+                        if unit.get('owner') == self.player_id}
 
         if state_extractor:
             # Use the comprehensive action generation from state_extractor
-            for unit_id_str, unit in units.items():
+            for unit_id_str, unit in player_units.items():
                 try:
                     unit_id = int(unit_id_str)
                     result = state_extractor.get_unit_actions(unit_id, self.player_id)
@@ -2265,16 +2268,32 @@ class LLMWSHandler(websocket.WebSocketHandler):
         if game_state:
             cities = game_state.get('cities', {})
             for city_id_str, city in cities.items():
+                # Skip cities not owned by this player
+                if city.get('owner') != self.player_id:
+                    continue
                 try:
                     city_id = int(city_id_str)
-                    # Add basic production options
-                    for production in ['Warriors', 'Granary']:
-                        actions.append({
-                            'action_type': 'city_change_production',
-                            'actor_id': city_id,
-                            'target': {'production_type': production},
-                            'is_valid': True
-                        })
+                    # Use per-city buildable options if available
+                    can_build = city.get('can_build', [])
+                    if can_build:
+                        # Limit to first 5 production options
+                        for production in can_build[:5]:
+                            prod_name = production.get('name', production) if isinstance(production, dict) else production
+                            actions.append({
+                                'action_type': 'city_change_production',
+                                'actor_id': city_id,
+                                'target': {'production_type': prod_name},
+                                'is_valid': True
+                            })
+                    else:
+                        # Fallback to common early-game options
+                        for production in ['Warriors', 'Granary']:
+                            actions.append({
+                                'action_type': 'city_change_production',
+                                'actor_id': city_id,
+                                'target': {'production_type': production},
+                                'is_valid': True
+                            })
                 except (ValueError, TypeError):
                     continue
 
@@ -2299,6 +2318,9 @@ class LLMWSHandler(websocket.WebSocketHandler):
         }
 
         for unit_id_str, unit in units.items():
+            # Skip units not owned by this player
+            if unit.get('owner') != self.player_id:
+                continue
             unit_actions = []
             try:
                 unit_id = int(unit_id_str)
