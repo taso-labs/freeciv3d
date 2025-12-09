@@ -572,7 +572,7 @@ class StateExtractor:
             player_id: Player ID
 
         Returns:
-            List of up to 20 legal actions sorted by priority
+            List of up to 20 legal actions sorted by priority, in packet-converter format
         """
         try:
             civcom = self._get_civcom_for_game(game_id)
@@ -584,8 +584,16 @@ class StateExtractor:
             state = civcom.get_full_state(player_id)
             all_actions = self._generate_legal_actions_from_state(state, player_id)
 
+            # Normalize actions to packet-converter format (with 'type' field)
+            # Filter out None results (invalid actions)
+            normalized_actions = [
+                normalized for normalized in
+                [self._normalize_action_format(action) for action in all_actions]
+                if normalized is not None
+            ]
+            
             # Sort by priority (highest first)
-            sorted_actions = sorted(all_actions, key=lambda x: x.get('priority', 0), reverse=True)
+            sorted_actions = sorted(normalized_actions, key=lambda x: x.get('priority', 0), reverse=True)
             return sorted_actions
 
         except (CivComNotFoundError, StateExtractionError) as e:
@@ -605,6 +613,105 @@ class StateExtractor:
                 player_id=player_id,
                 cause=e
             )
+
+    def _normalize_action_format(self, action: Dict[str, Any]) -> Dict[str, Any]:
+        """Convert internal action format to packet-converter format.
+        
+        Internal format (from _generate_unit_actions):
+            {
+                'action': 'move',
+                'params': {'direction': 'n', 'target': {'x': ..., 'y': ...}},
+                'is_valid': bool,
+                'reason': str (optional),
+                'action_id': int (optional)
+            }
+        
+        Packet-converter format:
+            {
+                'type': 'unit_move',
+                'unit_id': int,
+                'dest_x': int,
+                'dest_y': int
+            }
+        """
+        action_type = action.get('action', '')
+        params = action.get('params', {})
+        
+        # Skip invalid actions
+        if not action.get('is_valid', True):
+            # Return a minimal valid action or skip
+            logger.debug(f"Skipping invalid action: {action.get('reason', 'no reason')}")
+            return None
+        
+        # Build normalized action based on type
+        if action_type == 'move':
+            # Extract coordinates from nested target format
+            target = params.get('target', {})
+            return {
+                'type': 'unit_move',
+                'unit_id': action.get('unit_id', 0),  # Will be filled by caller if available
+                'dest_x': int(target.get('x', 0)),
+                'dest_y': int(target.get('y', 0)),
+                'is_valid': True,
+                'priority': action.get('priority', 5)
+            }
+        
+        elif action_type == 'build_city':
+            return {
+                'type': 'unit_build_city',
+                'unit_id': action.get('unit_id', 0),
+                'is_valid': True,
+                'priority': action.get('priority', 5)
+            }
+        
+        elif action_type == 'fortify':
+            return {
+                'type': 'unit_fortify',
+                'unit_id': action.get('unit_id', 0),
+                'is_valid': True,
+                'priority': action.get('priority', 3)
+            }
+        
+        elif action_type == 'skip' or action_type == 'sentry':
+            return {
+                'type': 'unit_' + action_type,
+                'unit_id': action.get('unit_id', 0),
+                'is_valid': True,
+                'priority': action.get('priority', 1)
+            }
+        
+        elif action_type in ['change_production', 'city_production']:
+            production = params.get('to', params.get('production', ''))
+            return {
+                'type': 'city_production',
+                'city_id': action.get('city_id', 0),
+                'production_type': production,
+                'is_valid': True,
+                'priority': action.get('priority', 4)
+            }
+        
+        elif action_type == 'research_tech' or action_type == 'tech_research':
+            return {
+                'type': 'tech_research',
+                'tech': action.get('tech', params.get('to', '')),
+                'tech_id': action.get('tech_id'),
+                'is_valid': True,
+                'priority': action.get('priority', 3)
+            }
+        
+        elif action_type == 'end_turn':
+            return {
+                'type': 'end_turn',
+                'is_valid': True,
+                'priority': 10
+            }
+        
+        else:
+            # Return as-is for unknown types, with type field added if needed
+            normalized = dict(action)
+            if 'type' not in normalized and 'action' in normalized:
+                normalized['type'] = normalized.pop('action')
+            return normalized
 
     def get_unit_actions(self, unit_id: int, player_id: int) -> Dict[str, Any]:
         """
@@ -823,7 +930,8 @@ class StateExtractor:
             action = {
                 'action': action_type,
                 'params': params or {},
-                'is_valid': is_valid
+                'is_valid': is_valid,
+                'unit_id': unit_id  # Include unit_id so action normalization can use it
             }
             if reason:
                 action['reason'] = reason
@@ -1424,6 +1532,7 @@ class StateExtractor:
     def _generate_city_actions(self, city: Dict[str, Any], state: Dict[str, Any], player_id: int) -> List[Dict[str, Any]]:
         """Generate available actions for a city based on its state"""
         actions = []
+        city_id = city.get('id')
         
         # Production change
         productions = city.get('can_build', [])
@@ -1435,7 +1544,8 @@ class StateExtractor:
             actions.append({
                 'action': 'change_production',
                 'params': {'to': prod},
-                'is_valid': True
+                'is_valid': True,
+                'city_id': city_id
             })
         
         # Buy current production
@@ -1444,7 +1554,8 @@ class StateExtractor:
         actions.append({
             'action': 'buy',
             'params': {},
-            'is_valid': treasury >= buy_cost if buy_cost > 0 else False
+            'is_valid': treasury >= buy_cost if buy_cost > 0 else False,
+            'city_id': city_id
         })
         
         # Sell improvements
@@ -1454,7 +1565,8 @@ class StateExtractor:
             actions.append({
                 'action': 'sell_improvement',
                 'params': {'improvement': imp_name},
-                'is_valid': True
+                'is_valid': True,
+                'city_id': city_id
             })
         
         # Specialist management
@@ -1462,7 +1574,8 @@ class StateExtractor:
             actions.append({
                 'action': 'add_specialist',
                 'params': {'type': specialist},
-                'is_valid': True
+                'is_valid': True,
+                'city_id': city_id
             })
         
         return actions

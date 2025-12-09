@@ -1905,8 +1905,15 @@ class LLMWSHandler(websocket.WebSocketHandler):
             state['opportunities'] = self._identify_opportunities()
 
             if include_actions:
-                legal_actions = self._get_legal_actions_optimized(full_state)
-                logger.info(f"✓ Generated {len(legal_actions)} legal actions for agent {self.agent_id}")
+                try:
+                    # Use StateExtractor's proper legal action generation
+                    legal_actions = self.state_extractor.get_legal_actions(self.game_id, self.player_id)
+                    logger.info(f"✓ Generated {len(legal_actions)} legal actions for agent {self.agent_id} via StateExtractor")
+                except Exception as e:
+                    logger.warning(f"Failed to get legal actions from StateExtractor: {e}, using fallback")
+                    legal_actions = self._get_legal_actions_optimized(full_state)
+                    logger.info(f"✓ Generated {len(legal_actions)} legal actions for agent {self.agent_id} via fallback")
+                
                 state['legal_actions'] = legal_actions
 
         # For delta format, add change tracking
