@@ -563,19 +563,20 @@ class StateExtractor:
                 cause=e
             )
 
-    def get_legal_actions(self, game_id: str, player_id: int) -> List[Dict[str, Any]]:
+    def get_legal_actions(self, game_id: str, player_id: int, agent_id: Optional[str] = None) -> List[Dict[str, Any]]:
         """
         Get top 20 legal actions for player, sorted by strategic priority
 
         Args:
             game_id: Unique game identifier
             player_id: Player ID
+            agent_id: Agent identifier (required for proper CivCom registry lookup)
 
         Returns:
             List of up to 20 legal actions sorted by priority, in packet-converter format
         """
         try:
-            civcom = self._get_civcom_for_game(game_id)
+            civcom = self._get_civcom_for_game(game_id, agent_id)
             if not civcom:
                 raise CivComNotFoundError(game_id)
 

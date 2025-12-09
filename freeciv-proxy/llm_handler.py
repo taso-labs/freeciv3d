@@ -1907,7 +1907,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
             if include_actions:
                 try:
                     # Use StateExtractor's proper legal action generation
-                    legal_actions = self.state_extractor.get_legal_actions(self.game_id, self.player_id)
+                    legal_actions = self.state_extractor.get_legal_actions(self.game_id, self.player_id, self.agent_id)
                     logger.info(f"✓ Generated {len(legal_actions)} legal actions for agent {self.agent_id} via StateExtractor")
                 except Exception as e:
                     logger.warning(f"Failed to get legal actions from StateExtractor: {e}, using fallback")
