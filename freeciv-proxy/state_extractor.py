@@ -2178,12 +2178,10 @@ class StateExtractor:
         
         # Generate unit-based actions
         for unit in units:
-            unit_type = unit.get('type', 'unknown').lower()
             actions.extend(self._generate_unit_actions(unit, state, player_id))
         
         # Generate city actions
         for city in cities:
-            city_id = city.get('id')
             actions.extend(self._generate_city_actions(city, state, player_id))
         
         # Generate research actions using ruleset data

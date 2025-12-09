@@ -16,7 +16,7 @@
 import socket
 from struct import *
 from threading import Thread
-from typing import Dict, Any, Optional, List, Union
+from typing import Dict, Any, List
 import logging
 import time
 import json
@@ -1614,9 +1614,6 @@ class CivCom(Thread):
             return self._action_cache[cache_key]
         
         actions = []
-        
-        # Initialize RulesetMapper for production name→ID conversion
-        mapper = RulesetMapper(self)
         
         # Handle both dict and list formats for player_cities
         cities = self.player_cities

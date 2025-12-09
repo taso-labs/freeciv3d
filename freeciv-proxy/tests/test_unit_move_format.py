@@ -6,8 +6,7 @@ and that packet_converter can handle both formats transparently.
 """
 
 import unittest
-import json
-from unittest.mock import Mock, MagicMock, patch
+from unittest.mock import Mock
 import secrets
 
 import sys

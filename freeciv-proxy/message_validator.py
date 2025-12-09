@@ -238,7 +238,7 @@ class MessageValidator:
             self.validation_stats['errors_by_type'][error_type] = (
                 self.validation_stats['errors_by_type'].get(error_type, 0) + 1
             )
-            logger.warning(f"Message validation failed: {e.error_code} - {e.message}, {raw_message}")
+            logger.warning(f"Message validation failed: {e.error_code} - {e.message}, message_size={len(raw_message)} bytes")
             raise
 
     def _validate_message_size(self, message: str):

@@ -13,12 +13,13 @@ import sys
 import os
 from unittest.mock import Mock
 import logging
+import secrets
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# Set required environment variable for cache
-os.environ['CACHE_HMAC_SECRET'] = 'test_secret_for_testing_only_not_production'
+# Set required environment variable for cache - must be 64+ characters with good entropy
+os.environ['CACHE_HMAC_SECRET'] = secrets.token_hex(32)  # 64 character hex string
 
 # Suppress logging during tests
 logging.disable(logging.CRITICAL)

@@ -1,7 +1,7 @@
 """Test legal action generation based on pre-conditions for tech research and city production"""
 
 import pytest
-from unittest.mock import Mock, MagicMock, patch
+from unittest.mock import Mock, patch
 from civcom import CivCom, A_UNSET, VUT_UTYPE, VUT_IMPROVEMENT
 
 

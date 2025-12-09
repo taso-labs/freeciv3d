@@ -1,7 +1,6 @@
 """Tests for technology research action generation using ruleset data"""
 
-import pytest
-from unittest.mock import Mock, MagicMock
+from unittest.mock import Mock
 from civcom import CivCom
 
 
