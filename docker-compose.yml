@@ -30,6 +30,7 @@ services:
       - REDIS_PORT=6379
     volumes:
       - ./freeciv-web:/docker/freeciv-web-shared
+      - ./freeciv-proxy:/docker/freeciv-proxy
       - ./logs:/docker/logs
     depends_on:
       flyway:

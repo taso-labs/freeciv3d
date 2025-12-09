@@ -741,7 +741,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 f"   Units: {len(state_data.get('units', []))}\n"
                 f"   Cities: {len(state_data.get('cities', []))}\n"
                 f"   Players: {len(state_data.get('players', []))}\n"
-                f"   Legal actions: {len(state_data.get('legal_actions', []))}\n"
+                f"   Legal actions: {sum(len(v) for v in state_data.get('legal_actions', {}).values()) if isinstance(state_data.get('legal_actions'), dict) else len(state_data.get('legal_actions', []))}\n"
                 f"   State keys: {list(state_data.keys())}"
             )
 
@@ -1906,7 +1906,14 @@ class LLMWSHandler(websocket.WebSocketHandler):
 
             if include_actions:
                 legal_actions = self._get_legal_actions_optimized(full_state)
-                logger.info(f"✓ Generated {len(legal_actions)} legal actions for agent {self.agent_id}")
+                # Log action counts - legal_actions is now dict keyed by actor_id
+                total_actions = sum(len(actions) for actions in legal_actions.values())
+                unit_count = len([k for k in legal_actions.keys() if k != 'player'])
+                logger.info(
+                    f"✓ Generated {total_actions} legal actions for agent {self.agent_id}\n"
+                    f"   Units with actions: {unit_count}\n"
+                    f"   State keys: {list(state.keys())}"
+                )
                 state['legal_actions'] = legal_actions
 
         # For delta format, add change tracking
@@ -2160,131 +2167,169 @@ class LLMWSHandler(websocket.WebSocketHandler):
 
         return opportunities
 
-    def _get_legal_actions_optimized(self, game_state: Dict[str, Any] = None) -> List[Dict[str, Any]]:
-        """Get top legal actions for LLM (limited to ~20 most important)"""
-        actions = []
+    def _get_legal_actions_optimized(self, game_state: Dict[str, Any] = None) -> Dict[str, List[Dict[str, Any]]]:
+        """Get legal actions keyed by actor_id for O(1) lookup.
 
+        Returns dict structure:
+        {
+            "<unit_id>": [list of actions for that unit],
+            "player": [player-level actions like end_turn, tech_research]
+        }
+
+        Uses state_extractor._generate_unit_actions() which properly validates
+        actions against ruleset data and terrain.
+        """
+        actions_by_actor: Dict[str, List[Dict[str, Any]]] = {}
+
+        # Get game state if not provided
         if not game_state and self.civcom and hasattr(self.civcom, 'get_full_state'):
             try:
                 game_state = self.civcom.get_full_state(self.player_id)
             except Exception as e:
-                logger.warning(f"Failed to get legal actions from civcom: {e}")
+                logger.warning(f"Failed to get game state from civcom: {e}")
                 game_state = {}
 
+        if not game_state:
+            # Return fallback with just player actions
+            actions_by_actor['player'] = self._get_player_level_actions({})
+            return actions_by_actor
+
+        # Get state extractor for proper action generation
+        state_extractor = self._get_state_extractor()
+
+        # Generate actions for each unit using state_extractor
+        units = game_state.get('units', {})
+
+        if state_extractor:
+            # Use the comprehensive action generation from state_extractor
+            for unit_id_str, unit in units.items():
+                try:
+                    unit_id = int(unit_id_str)
+                    result = state_extractor.get_unit_actions(unit_id, self.player_id)
+
+                    if result.get('error'):
+                        error_code = result.get('error_code', '')
+                        # E500 = internal error (warning), others like E230 = expected (debug)
+                        if error_code.startswith('E5'):
+                            logger.warning(f"Error getting actions for unit {unit_id}: {result.get('error')}")
+                        else:
+                            logger.debug(f"Skipping unit {unit_id}: {result.get('error')}")
+                        continue
+
+                    # Format actions for protocol
+                    formatted_actions = self._format_unit_actions_for_response(unit_id, result)
+                    if formatted_actions:
+                        actions_by_actor[unit_id_str] = formatted_actions
+
+                except (ValueError, TypeError) as e:
+                    logger.warning(f"Invalid unit_id '{unit_id_str}': {e}")
+                    continue
+        else:
+            # Fallback: generate basic actions without state_extractor
+            logger.warning("StateExtractor unavailable, using fallback action generation")
+            actions_by_actor = self._get_fallback_unit_actions(game_state)
+
+        # Add player-level actions (tech_research, end_turn, city production)
+        actions_by_actor['player'] = self._get_player_level_actions(game_state)
+
+        # Log action counts for debugging
+        total_actions = sum(len(actions) for actions in actions_by_actor.values())
+        unit_count = len([k for k in actions_by_actor.keys() if k != 'player'])
+        logger.debug(f"Generated {total_actions} legal actions for {unit_count} units + player")
+
+        return actions_by_actor
+
+    def _get_player_level_actions(self, game_state: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Get player-level actions (tech_research, end_turn, city production)."""
+        actions = []
+
+        # Tech research action
         if game_state:
-            units_raw = game_state.get('units', {})
-            cities_raw = game_state.get('cities', {})
             techs = game_state.get('techs', [])
+            researched_techs = set(techs) if isinstance(techs, list) else set()
 
-            # Convert dicts to lists for iteration
-            units = list(units_raw.values()) if isinstance(units_raw, dict) else units_raw
-            cities = list(cities_raw.values()) if isinstance(cities_raw, dict) else cities_raw
-
-            # Get our units that can move
-            our_units = [u for u in units if u.get('owner') == self.player_id and u.get('moves_left', 0) > 0]
-
-            # Add unit movement actions
-            for unit in our_units[:10]:  # Limit to 10 units
-                # Handle unit type - can be int (type ID) or string (type name)
-                unit_type_raw = unit.get('type', '')
-                if isinstance(unit_type_raw, str):
-                    unit_type = unit_type_raw.lower()
-                else:
-                    # Type is an integer ID - use generic name
-                    unit_type = f"unit_{unit_type_raw}"
-
-                current_x, current_y = unit.get('x', 0), unit.get('y', 0)
-
-                # Check if unit can build cities (type 0 is usually Settlers in FreeCiv)
-                if unit_type in ['settlers', 'engineer'] or unit_type_raw == 0:
-                    # Settlement/construction actions
-                    actions.append({
-                        'type': 'unit_build_city',
-                        'unit_id': unit.get('id'),
-                        'priority': 'high',
-                        'description': f"Build city with {unit_type}"
-                    })
-
-                # Movement actions (explore nearby)
-                for dx, dy in [(0, 1), (1, 0), (0, -1), (-1, 0)]:  # Adjacent tiles
-                    actions.append({
-                        'type': 'unit_move',
-                        'unit_id': unit.get('id'),
-                        'dest_x': current_x + dx,
-                        'dest_y': current_y + dy,
-                        'priority': 'medium',
-                        'description': f"Move {unit_type} to explore"
-                    })
-
-            # Add city production actions
-            our_cities = [c for c in cities if c.get('owner') == self.player_id]
-            for city in our_cities[:5]:  # Limit to 5 cities
-                city_id = city.get('id')
-
-                # Basic production options
-                productions = ['Warriors', 'Granary', 'Barracks']
-                if 'Bronze Working' in techs:
-                    productions.append('Spearmen')
-                if 'Pottery' in techs:
-                    productions.append('Granary')
-
-                for production in productions[:3]:  # Limit options
-                    actions.append({
-                        'type': 'city_production',
-                        'city_id': city_id,
-                        'production_type': production,
-                        'priority': 'medium',
-                        'description': f"Produce {production} in {city.get('name', 'city')}"
-                    })
-
-            # Add research actions
+            # Get available techs from civcom if possible
             available_techs = ['Alphabet', 'Bronze Working', 'Pottery', 'Animal Husbandry', 'Agriculture']
-            researched_techs = set(techs)
 
             for tech in available_techs:
                 if tech not in researched_techs:
                     actions.append({
-                        'type': 'tech_research',
-                        'tech_name': tech,
-                        'priority': 'medium',
-                        'description': f"Research {tech} technology"
+                        'action_type': 'tech_research',
+                        'actor_id': self.player_id or 0,
+                        'target': {'tech_name': tech},
+                        'is_valid': True
                     })
                     break  # Only suggest one tech at a time
 
-        # Fallback actions if no game state
-        if not actions:
-            actions = [
-                {
-                    'type': 'unit_move',
-                    'unit_id': 1,
-                    'dest_x': 10,
-                    'dest_y': 20,
-                    'priority': 'medium',
-                    'description': 'Explore nearby area'
-                },
-                {
-                    'type': 'city_production',
-                    'city_id': 1,
-                    'production_type': 'Warriors',
-                    'priority': 'medium',
-                    'description': 'Build military unit'
-                }
-            ]
+        # City production actions
+        if game_state:
+            cities = game_state.get('cities', {})
+            for city_id_str, city in cities.items():
+                try:
+                    city_id = int(city_id_str)
+                    # Add basic production options
+                    for production in ['Warriors', 'Granary']:
+                        actions.append({
+                            'action_type': 'city_change_production',
+                            'actor_id': city_id,
+                            'target': {'production_type': production},
+                            'is_valid': True
+                        })
+                except (ValueError, TypeError):
+                    continue
 
-        # ALWAYS add end_turn action so agents can signal turn completion
-        # This is critical for game progression - without it, agents can't end their turn
-        # and the game will be stuck on the current turn until timeout
+        # ALWAYS add end_turn action - critical for game progression
         actions.append({
-            'type': 'end_turn',
-            'priority': 'high',
-            'description': 'End turn and advance game'
+            'action_type': 'end_turn',
+            'actor_id': self.player_id or 0,
+            'is_valid': True
         })
 
-        # Sort by priority
-        priority_order = {'high': 3, 'medium': 2, 'low': 1}
-        actions.sort(key=lambda x: priority_order.get(x.get('priority', 'low'), 1), reverse=True)
-
         return actions
+
+    def _get_fallback_unit_actions(self, game_state: Dict[str, Any]) -> Dict[str, List[Dict[str, Any]]]:
+        """Fallback action generation when state_extractor is unavailable."""
+        actions_by_actor: Dict[str, List[Dict[str, Any]]] = {}
+
+        units = game_state.get('units', {})
+        directions = ['n', 'ne', 'e', 'se', 's', 'sw', 'w', 'nw']
+        direction_offsets = {
+            'n': (0, -1), 'ne': (1, -1), 'e': (1, 0), 'se': (1, 1),
+            's': (0, 1), 'sw': (-1, 1), 'w': (-1, 0), 'nw': (-1, -1)
+        }
+
+        for unit_id_str, unit in units.items():
+            unit_actions = []
+            try:
+                unit_id = int(unit_id_str)
+            except (ValueError, TypeError):
+                logger.warning(f"Invalid unit_id in fallback: '{unit_id_str}'")
+                continue
+            x, y = unit.get('x', 0), unit.get('y', 0)
+            moves_left = unit.get('moves_left', 0)
+
+            if moves_left > 0:
+                # Add movement actions for all 8 directions
+                for direction in directions:
+                    dx, dy = direction_offsets[direction]
+                    unit_actions.append({
+                        'action_type': 'unit_move',
+                        'actor_id': unit_id,
+                        'target': {'x': x + dx, 'y': y + dy, 'direction': direction},
+                        'is_valid': True
+                    })
+
+                # Add fortify action
+                unit_actions.append({
+                    'action_type': 'unit_fortify',
+                    'actor_id': unit_id,
+                    'is_valid': True
+                })
+
+            if unit_actions:
+                actions_by_actor[unit_id_str] = unit_actions
+
+        return actions_by_actor
 
     def _get_current_game_state(self) -> Optional[Dict[str, Any]]:
         """Get current game state for validation"""
