@@ -1655,8 +1655,8 @@ class CivCom(Thread):
                     
                     actions.append(action_copy)
             except Exception as e:
-                # Log and skip units that cause errors
-                logger.debug(f"Failed to get actions for unit {unit_id}: {e}")
+                # Log at warning level so errors are visible, but continue processing other units
+                logger.warning(f"Failed to get actions for unit {unit_id}: {e}")
                 continue
         
         return actions
