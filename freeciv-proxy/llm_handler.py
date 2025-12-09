@@ -2246,26 +2246,20 @@ class LLMWSHandler(websocket.WebSocketHandler):
         """Get player-level actions (tech_research, end_turn, city production)."""
         actions = []
 
-        # Tech research action
         if game_state:
-            techs = game_state.get('techs', [])
-            researched_techs = set(techs) if isinstance(techs, list) else set()
+            # Tech research action - use inventions from PACKET_RESEARCH_INFO
+            available_techs = self._get_available_techs_from_inventions()
+            if available_techs:
+                # Only suggest one tech at a time
+                tech = available_techs[0]
+                actions.append({
+                    'action_type': 'tech_research',
+                    'actor_id': self.player_id or 0,
+                    'target': {'tech_name': tech},
+                    'is_valid': True
+                })
 
-            # Get available techs from civcom if possible
-            available_techs = ['Alphabet', 'Bronze Working', 'Pottery', 'Animal Husbandry', 'Agriculture']
-
-            for tech in available_techs:
-                if tech not in researched_techs:
-                    actions.append({
-                        'action_type': 'tech_research',
-                        'actor_id': self.player_id or 0,
-                        'target': {'tech_name': tech},
-                        'is_valid': True
-                    })
-                    break  # Only suggest one tech at a time
-
-        # City production actions
-        if game_state:
+            # City production actions
             cities = game_state.get('cities', {})
             for city_id_str, city in cities.items():
                 # Skip cities not owned by this player
@@ -2305,6 +2299,53 @@ class LLMWSHandler(websocket.WebSocketHandler):
         })
 
         return actions
+
+    def _get_available_techs_from_inventions(self) -> List[str]:
+        """Get available techs using inventions array from PACKET_RESEARCH_INFO.
+
+        Returns techs where prerequisites are met (TECH_PREREQS_KNOWN=1) but
+        not yet researched (TECH_KNOWN=2).
+
+        Returns:
+            List of tech names that can be researched, or fallback list if
+            research data is unavailable.
+        """
+        TECH_PREREQS_KNOWN = 1  # Prerequisites met, can research
+        TECH_KNOWN = 2          # Already researched
+
+        if not self.civcom:
+            return ['Alphabet', 'Bronze Working', 'Pottery']  # Fallback
+
+        # Get research data for this player
+        research_data = getattr(self.civcom, 'research_data', {})
+        player_research = research_data.get(self.player_id, {})
+        inventions = player_research.get('inventions', [])
+
+        if not inventions:
+            return ['Alphabet', 'Bronze Working', 'Pottery']  # Fallback
+
+        # Get tech names dictionary from civcom
+        techs_dict = getattr(self.civcom, 'techs', {})
+
+        available = []
+        for tech_id, status in enumerate(inventions):
+            if status == TECH_PREREQS_KNOWN:  # Prerequisites met, not yet known
+                tech_info = techs_dict.get(tech_id)
+                if tech_info and tech_info.get('name'):
+                    available.append(tech_info['name'])
+
+        # If no techs available via inventions, use fallback
+        if not available:
+            # Check for any unknown techs as fallback
+            for tech_id, status in enumerate(inventions):
+                if status != TECH_KNOWN:
+                    tech_info = techs_dict.get(tech_id)
+                    if tech_info and tech_info.get('name'):
+                        available.append(tech_info['name'])
+                        if len(available) >= 3:
+                            break
+
+        return available or ['Alphabet', 'Bronze Working', 'Pottery']
 
     def _get_fallback_unit_actions(self, game_state: Dict[str, Any]) -> Dict[str, List[Dict[str, Any]]]:
         """Fallback action generation when state_extractor is unavailable."""
