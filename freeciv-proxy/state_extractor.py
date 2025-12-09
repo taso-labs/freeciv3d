@@ -2038,112 +2038,12 @@ class StateExtractor:
         # Generate unit-based actions
         for unit in units:
             unit_type = unit.get('type', 'unknown').lower()
-            unit_id = unit.get('id')
-            
-            # Movement actions for units that can move
-            if not unit.get('done_moving', False):
-                unit_x, unit_y = unit.get('x', 0), unit.get('y', 0)
-                
-                # Add movement actions for each direction
-                for direction, (dx, dy) in [('north', (0, -1)), ('south', (0, 1)), ('east', (1, 0)), ('west', (-1, 0))]:
-                    dest_x, dest_y = unit_x + dx, unit_y + dy
-                    actions.append({
-                        'type': 'unit_move',
-                        'unit_id': unit_id,
-                        'direction': direction,
-                        'dest_x': dest_x,
-                        'dest_y': dest_y,
-                        'cost': 1,
-                        'priority': 5,
-                        'is_valid': True
-                    })
-            
-            # Unit-specific actions
-            if unit_type in ['settler', 'settlers']:
-                actions.append({
-                    'type': 'unit_build_city',
-                    'unit_id': unit_id,
-                    'priority': 8,
-                    'is_valid': True
-                })
-            
-            if unit_type in ['worker', 'workers', 'engineer', 'engineers']:
-                actions.extend([
-                    {
-                        'type': 'unit_build_road',
-                        'unit_id': unit_id,
-                        'priority': 6,
-                        'is_valid': True
-                    },
-                    {
-                        'type': 'unit_build_irrigation',
-                        'unit_id': unit_id,
-                        'priority': 5,
-                        'is_valid': True
-                    },
-                    {
-                        'type': 'unit_build_mine',
-                        'unit_id': unit_id,
-                        'priority': 5,
-                        'is_valid': True
-                    }
-                ])
-            
-            # Fortify for military units
-            if unit_type in ['warrior', 'archer', 'legion', 'musketeer', 'riflemen']:
-                actions.append({
-                    'type': 'unit_fortify',
-                    'unit_id': unit_id,
-                    'priority': 4,
-                    'is_valid': True
-                })
-            
-            # Sentry for all units
-            actions.append({
-                'type': 'unit_sentry',
-                'unit_id': unit_id,
-                'priority': 3,
-                'is_valid': True
-            })
+            actions.extend(self._generate_unit_actions(unit, state, player_id))
         
         # Generate city actions
         for city in cities:
             city_id = city.get('id')
-            city_size = city.get('population', 1)
-            
-            # City production actions
-            possible_units = ['warrior']
-            if city_size >= 2:
-                possible_units.extend(['settler', 'worker'])
-            if city_size >= 3:
-                possible_units.append('archer')
-            
-            for unit_type in possible_units:
-                actions.append({
-                    'type': 'city_build_unit',
-                    'city_id': city_id,
-                    'target': unit_type,
-                    'cost': {'shields': 10 if unit_type == 'warrior' else 30},
-                    'priority': 6 if unit_type in ['settler', 'warrior'] else 4,
-                    'is_valid': True
-                })
-            
-            # City improvements
-            possible_buildings = ['granary']
-            if city_size >= 2:
-                possible_buildings.append('barracks')
-            if city_size >= 3:
-                possible_buildings.extend(['library', 'marketplace'])
-            
-            for building in possible_buildings:
-                actions.append({
-                    'type': 'city_build_improvement',
-                    'city_id': city_id,
-                    'target': building,
-                    'cost': {'shields': 20 if building == 'granary' else 40},
-                    'priority': 5,
-                    'is_valid': True
-                })
+            actions.extend(self._generate_city_actions(city, state, player_id))
         
         # Generate research actions
         current_techs = state.get('technologies', [])
