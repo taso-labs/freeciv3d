@@ -2131,14 +2131,38 @@ class StateExtractor:
         return previous_state
 
     def _generate_legal_actions_from_state(self, state: Dict[str, Any], player_id: int) -> List[Dict[str, Any]]:
-        """Generate legal actions based on actual game state from civcom"""
-        actions = []
+        """Generate legal actions based on actual game state from civcom
         
+        Uses civcom._get_legal_actions_optimized() which provides:
+        - Ruleset-driven action generation (not hardcoded)
+        - Smart caching (per-turn for cities/tech, always fresh for units)
+        - Semantic filtering (only show actions when decisions needed)
+        - Per-category limits (5 units, 3 cities)
+        """
         # Get civcom instance for ruleset-based action generation
         civcom = self._get_civcom_for_player(player_id)
         
-        # Fallback: Generate basic actions based on available game entities
+        if civcom and hasattr(civcom, '_get_legal_actions_optimized'):
+            # Use the new optimized action generator with smart caching
+            logger.debug("Using civcom._get_legal_actions_optimized() for action generation")
+            try:
+                actions = civcom._get_legal_actions_optimized(player_id)
+                logger.info(f"Generated {len(actions)} actions via civcom._get_legal_actions_optimized()")
+                
+                # Add priority field if not present (for sorting)
+                for action in actions:
+                    if 'priority' not in action:
+                        action['priority'] = self._get_default_priority(action.get('type'))
+                    if 'is_valid' not in action:
+                        action['is_valid'] = True
+                
+                return actions
+            except Exception as e:
+                logger.warning(f"Failed to use _get_legal_actions_optimized: {e}, falling back to legacy generator")
+        
+        # Fallback: Use legacy action generation if new method not available
         logger.debug("Using fallback action generation")
+        actions = []
 
         # Get player's units and cities
         units = [u for u in self._dict_to_list(state.get('units', {})) if u.get('owner') == player_id]
@@ -2182,6 +2206,17 @@ class StateExtractor:
             logger.debug("No civcom available for tech action generation")
         
         return actions
+    
+    def _get_default_priority(self, action_type: str) -> int:
+        """Get default priority for action types from civcom._get_legal_actions_optimized()"""
+        priority_map = {
+            'end_turn': 10,
+            'tech_research': 7,
+            'city_production': 5,
+            'unit_action': 3,
+            'unit_move': 2
+        }
+        return priority_map.get(action_type, 1)
 
 
 class StateExtractorHandler(web.RequestHandler):

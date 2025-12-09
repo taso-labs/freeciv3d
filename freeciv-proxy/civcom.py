@@ -49,6 +49,15 @@ from packet_constants import (
     get_packet_name
 )
 
+# Import RulesetMapper for production name to ID conversion
+from ruleset_mapper import RulesetMapper, VUT_IMPROVEMENT, VUT_UTYPE
+
+# Tech research constants (from freeciv/common/tech.h and fc_types.js)
+# A_UNSET indicates that no tech is selected (for research)
+MAX_NUM_ADVANCES = 250
+A_LAST = MAX_NUM_ADVANCES + 1  # 251
+A_UNSET = A_LAST + 2  # 253
+
 # FreeCiv Action IDs - from freeciv/freeciv-web/src/main/webapp/javascript/fc_types.js
 # These define the action types that units can perform
 ACTION_ESTABLISH_EMBASSY = 0
@@ -329,6 +338,11 @@ class CivCom(Thread):
         self.terrains = {}        # {terrain_id: PACKET_RULESET_TERRAIN data}
         self.extras = {}          # {extra_id: PACKET_RULESET_EXTRA data}
         self.unit_classes = {}    # {unit_class_id: PACKET_RULESET_UNIT_CLASS data}
+
+        # Per-turn action cache - stores generated city production and tech research actions
+        # Cache keys: "{turn}_{player_id}_city_actions" and "{turn}_{player_id}_tech_actions"
+        # Unit actions are NOT cached because every unit move affects other units' possibilities
+        self._action_cache = {}  # {cache_key: list of action dicts}
         
         # Game settings from PACKET_GAME_INFO
         self.citymindist = DEFAULT_CITYMINDIST  # Minimum distance between cities
@@ -1471,50 +1485,292 @@ class CivCom(Thread):
             'total_trade': getattr(self, 'total_trade', 0)
         }
 
-    def _get_legal_actions_optimized(self, player_id):
-        """Pre-compute and cache top legal actions for LLM"""
-        # Simplified legal actions (would normally compute from game state)
+    def _is_city_producing_coinage(self, city):
+        """Check if a city is producing Coinage (infinite gold generation)
+        
+        Args:
+            city: City packet dict with production_kind and production_value
+            
+        Returns:
+            bool: True if city is producing Coinage, False otherwise
+        """
+        production_kind = city.get('production_kind')
+        production_value = city.get('production_value')
+        
+        # Check if producing an improvement (VUT_IMPROVEMENT = 3)
+        if production_kind != VUT_IMPROVEMENT:
+            return False
+        
+        # Look up the improvement by ID
+        improvement = self.improvements.get(production_value)
+        if not improvement:
+            return False
+        
+        # Check if improvement name is "Coinage"
+        return improvement.get('name') == 'Coinage'
+
+    def _get_unit_actions(self, player_id, max_units=5):
+        """Get per-unit legal actions (NOT CACHED - regenerated every call).
+        
+        Unit actions are not cached because every unit move affects what other units can do.
+        
+        Uses StateExtractor.get_unit_actions() to ensure consistency with
+        unit_actions_query endpoint - same logic, same results.
+        
+        Returns complete action format from StateExtractor with all validation fields:
+        - 'action': action name (e.g., 'move', 'build_city', 'fortify')
+        - 'params': dict of action parameters (e.g., {'direction': 'n'} for move)
+        - 'is_valid': boolean indicating if action can be executed
+        - 'reason': optional string explaining why action is invalid
+        - 'action_id': FreeCiv action constant ID
+        - 'unit_id': unit ID this action applies to
+        - 'type': added field for LLM categorization ('unit_move' or 'unit_action')
+        
+        Args:
+            player_id: The player ID
+            max_units: Maximum number of units to generate actions for
+            
+        Returns:
+            list: List of complete unit action dicts with full validation info
+        """
         actions = []
+        
+        # Import StateExtractor to reuse unit action generation logic
+        from state_extractor import StateExtractor
+        
+        # Handle both dict and list formats for player_units
+        units = self.player_units
+        if isinstance(units, list):
+            units = {str(u.get('id', i)): u for i, u in enumerate(units) if isinstance(u, dict)}
+        elif not isinstance(units, dict):
+            return actions  # Return empty if invalid format
+        
+        # Create StateExtractor instance for action generation
+        extractor = StateExtractor()
+        
+        unit_count = 0
+        for unit_id, unit in units.items():
+            if unit_count >= max_units:
+                break
+            
+            # Only include units with moves remaining
+            if unit.get('moves_left', 0) <= 0:
+                continue
+            
+            unit_count += 1
+            
+            # Use StateExtractor's get_unit_actions which calls _generate_unit_actions
+            # This ensures consistency with unit_actions_query
+            try:
+                result = extractor.get_unit_actions(int(unit_id), player_id)
+                if result.get('error'):
+                    # Skip units with errors
+                    continue
+                
+                # Keep all actions with full detail from StateExtractor
+                # Format: {'action': 'move', 'params': {...}, 'is_valid': True, 'unit_id': ...}
+                # We need to preserve ALL fields for validation
+                for action in result.get('actions', []):
+                    # Skip low-value generic actions
+                    if action.get('action') in ('skip', 'sentry', 'continue_work'):
+                        continue
+                    
+                    # Add type field for LLM categorization while preserving all other fields
+                    action_copy = action.copy()
+                    action_name = action_copy.get('action')
+                    
+                    if action_name == 'move':
+                        action_copy['type'] = 'unit_move'
+                    else:
+                        action_copy['type'] = 'unit_action'
+                    
+                    actions.append(action_copy)
+            except Exception as e:
+                # Log and skip units that cause errors
+                logger.debug(f"Failed to get actions for unit {unit_id}: {e}")
+                continue
+        
+        return actions
 
-        # Unit movement actions (most common)
-        units = getattr(self, 'player_units', [])
-        for unit in units[:5]:  # Limit to 5 units for size
-            if isinstance(unit, dict) and unit.get('moves_left', 0) > 0:
-                unit_id = unit.get('id')
-                x, y = unit.get('x', 0), unit.get('y', 0)
-
-                # Add movement options
-                for dx, dy in [(0, 1), (1, 0), (0, -1), (-1, 0)]:
+    def _get_city_production_actions(self, player_id, max_cities=3):
+        """Get per-city production change actions (CACHED per turn).
+        
+        Only returns production actions if:
+        - shield_stock == 0 (production just finished, need new selection)
+        - OR production is Coinage (infinite production, can always change)
+        
+        Args:
+            player_id: The player ID
+            max_cities: Maximum number of cities to generate actions for
+            
+        Returns:
+            list: List of city production action dicts
+        """
+        turn = self.game_turn
+        cache_key = f"{turn}_{player_id}_city_actions"
+        
+        # Check cache first
+        if cache_key in self._action_cache:
+            return self._action_cache[cache_key]
+        
+        actions = []
+        
+        # Initialize RulesetMapper for production name→ID conversion
+        mapper = RulesetMapper(self)
+        
+        # Handle both dict and list formats for player_cities
+        cities = self.player_cities
+        if isinstance(cities, list):
+            cities = {str(c.get('id', i)): c for i, c in enumerate(cities) if isinstance(c, dict)}
+        elif not isinstance(cities, dict):
+            self._action_cache[cache_key] = actions
+            return actions  # Return empty if invalid format
+        
+        city_count = 0
+        for city_id, city in cities.items():
+            if city_count >= max_cities:
+                break
+            
+            # Check if city owner matches player
+            if city.get('owner') != player_id:
+                continue
+            
+            # Only include cities that need production selection:
+            # 1. Production just finished (shield_stock == 0)
+            # 2. OR producing Coinage (infinite, can always change)
+            shield_stock = city.get('shield_stock', 0)
+            is_coinage = self._is_city_producing_coinage(city)
+            
+            if shield_stock != 0 and not is_coinage:
+                continue  # Skip cities that are mid-production
+            
+            city_count += 1
+            
+            # Generate production options from unit_types and improvements
+            # Units
+            for unit_type_id, unit_type in self.unit_types.items():
+                unit_name = unit_type.get('name', '')
+                if unit_name:
                     actions.append({
-                        'type': 'unit_move',
-                        'unit_id': unit_id,
-                        'dest_x': x + dx,
-                        'dest_y': y + dy,
-                        'priority': 'medium'
+                        'type': 'city_production',
+                        'city_id': city_id,
+                        'city_name': city.get('name', ''),
+                        'production_name': unit_name,
+                        'production_kind': VUT_UTYPE,
+                        'production_value': unit_type_id,
+                        'reason': 'finished' if shield_stock == 0 else 'coinage'
                     })
+            
+            # Buildings (improvements)
+            for building_id, building in self.improvements.items():
+                building_name = building.get('name', '')
+                if building_name:
+                    actions.append({
+                        'type': 'city_production',
+                        'city_id': city_id,
+                        'city_name': city.get('name', ''),
+                        'production_name': building_name,
+                        'production_kind': VUT_IMPROVEMENT,
+                        'production_value': building_id,
+                        'reason': 'finished' if shield_stock == 0 else 'coinage'
+                    })
+        
+        # Cache for this turn
+        self._action_cache[cache_key] = actions
+        
+        return actions
 
-        # City production actions
-        cities = getattr(self, 'player_cities', [])
-        for city in cities[:3]:  # Limit to 3 cities
-            if isinstance(city, dict):
-                city_id = city.get('id')
-                actions.append({
-                    'type': 'city_production',
-                    'city_id': city_id,
-                    'production_type': 'warrior',
-                    'priority': 'high'
-                })
-
-        # Research actions
-        if not getattr(self, 'current_research', None):
+    def _get_tech_research_actions(self, player_id):
+        """Get tech research selection actions (CACHED per turn).
+        
+        Only returns tech research actions if:
+        - researching field == A_UNSET (no tech selected, need new selection)
+        
+        This mirrors the city production semantics where we only offer choices
+        when the previous item finished.
+        
+        Args:
+            player_id: The player ID
+            
+        Returns:
+            list: List of tech research action dicts, or empty list if no selection needed
+        """
+        turn = self.game_turn
+        cache_key = f"{turn}_{player_id}_tech_actions"
+        
+        # Check cache first
+        if cache_key in self._action_cache:
+            return self._action_cache[cache_key]
+        
+        actions = []
+        
+        # Check if player needs to select new tech
+        research = self.research_info.get(player_id)
+        if not research:
+            # No research info yet, return empty
+            self._action_cache[cache_key] = actions
+            return actions
+        
+        researching = research.get('researching')
+        
+        # Only generate actions if researching == A_UNSET (no tech selected)
+        if researching != A_UNSET:
+            # Already researching something, no action needed
+            self._action_cache[cache_key] = actions
+            return actions
+        
+        # Get all researchable techs using existing method
+        researchable_techs = self.get_researchable_techs(player_id)
+        
+        # Convert to action format
+        for tech in researchable_techs:
             actions.append({
                 'type': 'tech_research',
-                'tech_name': 'pottery',
-                'priority': 'high'
+                'tech_id': tech['id'],
+                'tech_name': tech['name'],
+                'tech_cost': tech.get('cost', 0),
+                'reason': 'tech_completed'
             })
+        
+        # Cache for this turn
+        self._action_cache[cache_key] = actions
+        
+        return actions
 
-        # Score and filter actions to top 20
-        return self._score_and_filter_actions(actions, 20)
+    def _get_legal_actions_optimized(self, player_id):
+        """Pre-compute top legal actions for LLM with per-category limits.
+        
+        Generates actions using helper methods with smart caching:
+        - Unit actions: NOT cached (regenerated every call)
+        - City production: Cached per turn, only when shield_stock==0 OR Coinage
+        - Tech research: Cached per turn, only when researching==A_UNSET
+        
+        Per-category limits (not global):
+        - Unit actions: max 5 units
+        - City production: max 3 cities  
+        - Tech research: all researchable techs (when needed)
+        
+        Args:
+            player_id: The player ID
+            
+        Returns:
+            list: Combined list of all legal actions from all categories
+        """
+        all_actions = []
+        
+        # Get unit actions (NOT CACHED - always fresh)
+        unit_actions = self._get_unit_actions(player_id, max_units=5)
+        all_actions.extend(unit_actions)
+        
+        # Get city production actions (CACHED per turn, with smart filtering)
+        city_actions = self._get_city_production_actions(player_id, max_cities=3)
+        all_actions.extend(city_actions)
+        
+        # Get tech research actions (CACHED per turn, only when needed)
+        tech_actions = self._get_tech_research_actions(player_id)
+        all_actions.extend(tech_actions)
+        
+        return all_actions
 
     def _score_and_filter_actions(self, actions, max_actions):
         """Score actions and return top N most important"""
