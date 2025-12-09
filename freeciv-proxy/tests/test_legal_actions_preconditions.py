@@ -701,5 +701,169 @@ class TestActionPreconditionEdgeCases:
             assert len(actions) == 0
 
 
+class TestCityProductionBuildPermissions:
+    """Test that city production filters by server-provided build permissions"""
+
+    def test_city_production_filters_by_can_build_unit(self):
+        """Test that units are filtered by can_build_unit bitvector"""
+        civcom = create_mock_civcom()
+        civcom.game_turn = 10
+
+        # Create bitvector where only unit 0 can be built (bit 0 set = 0x01)
+        # Units 1 and 2 cannot be built
+        can_build_unit_bitvector = [0x01]  # Only unit ID 0 can be built
+
+        civcom.player_cities = {
+            '1': {
+                'id': 1,
+                'name': 'TestCity',
+                'owner': 0,
+                'shield_stock': 0,
+                'can_build_unit': can_build_unit_bitvector,
+                'can_build_improvement': []  # No improvements can be built
+            }
+        }
+        civcom.unit_types = {
+            0: {'id': 0, 'name': 'Warriors'},
+            1: {'id': 1, 'name': 'Settlers'},
+            2: {'id': 2, 'name': 'Archers'}
+        }
+        civcom.improvements = {}
+
+        # Bind the build permission check methods
+        civcom.can_city_build_unit = CivCom.can_city_build_unit.__get__(civcom)
+        civcom.can_city_build_improvement = CivCom.can_city_build_improvement.__get__(civcom)
+
+        actions = civcom._get_city_production_actions(player_id=0, max_cities=3)
+
+        # Should only include Warriors (unit 0)
+        assert len(actions) == 1
+        assert actions[0]['production_name'] == 'Warriors'
+        assert actions[0]['production_kind'] == VUT_UTYPE
+
+    def test_city_production_filters_by_can_build_improvement(self):
+        """Test that improvements are filtered by can_build_improvement bitvector"""
+        civcom = create_mock_civcom()
+        civcom.game_turn = 10
+
+        # Create bitvector where only improvement 1 can be built (bit 1 set = 0x02)
+        can_build_improvement_bitvector = [0x02]  # Only improvement ID 1 can be built
+
+        civcom.player_cities = {
+            '1': {
+                'id': 1,
+                'name': 'TestCity',
+                'owner': 0,
+                'shield_stock': 0,
+                'can_build_unit': [],  # No units can be built
+                'can_build_improvement': can_build_improvement_bitvector
+            }
+        }
+        civcom.unit_types = {}
+        civcom.improvements = {
+            0: {'id': 0, 'name': 'Barracks'},
+            1: {'id': 1, 'name': 'Granary'},
+            2: {'id': 2, 'name': 'Temple'}
+        }
+
+        # Bind the build permission check methods
+        civcom.can_city_build_unit = CivCom.can_city_build_unit.__get__(civcom)
+        civcom.can_city_build_improvement = CivCom.can_city_build_improvement.__get__(civcom)
+
+        actions = civcom._get_city_production_actions(player_id=0, max_cities=3)
+
+        # Should only include Granary (improvement 1)
+        assert len(actions) == 1
+        assert actions[0]['production_name'] == 'Granary'
+        assert actions[0]['production_kind'] == VUT_IMPROVEMENT
+
+    def test_city_production_allows_all_when_no_bitvector(self):
+        """Test that all production is allowed when bitvectors are missing (server hasn't sent them)"""
+        civcom = create_mock_civcom()
+        civcom.game_turn = 10
+
+        # No can_build bitvectors - fallback behavior should allow all
+        civcom.player_cities = {
+            '1': {
+                'id': 1,
+                'name': 'TestCity',
+                'owner': 0,
+                'shield_stock': 0
+                # No can_build_unit or can_build_improvement
+            }
+        }
+        civcom.unit_types = {
+            0: {'id': 0, 'name': 'Warriors'},
+            1: {'id': 1, 'name': 'Settlers'}
+        }
+        civcom.improvements = {
+            0: {'id': 0, 'name': 'Barracks'}
+        }
+
+        # Bind the build permission check methods
+        civcom.can_city_build_unit = CivCom.can_city_build_unit.__get__(civcom)
+        civcom.can_city_build_improvement = CivCom.can_city_build_improvement.__get__(civcom)
+
+        actions = civcom._get_city_production_actions(player_id=0, max_cities=3)
+
+        # Should include all units and improvements (fallback when no bitvector)
+        assert len(actions) == 3  # 2 units + 1 improvement
+
+        unit_actions = [a for a in actions if a['production_kind'] == VUT_UTYPE]
+        improvement_actions = [a for a in actions if a['production_kind'] == VUT_IMPROVEMENT]
+
+        assert len(unit_actions) == 2
+        assert len(improvement_actions) == 1
+
+    def test_city_production_filters_multiple_cities(self):
+        """Test that each city uses its own build permissions"""
+        civcom = create_mock_civcom()
+        civcom.game_turn = 10
+
+        # City 1 can only build Warriors, City 2 can only build Settlers
+        civcom.player_cities = {
+            '1': {
+                'id': 1,
+                'name': 'City1',
+                'owner': 0,
+                'shield_stock': 0,
+                'can_build_unit': [0x01],  # Only unit 0 (Warriors)
+                'can_build_improvement': []
+            },
+            '2': {
+                'id': 2,
+                'name': 'City2',
+                'owner': 0,
+                'shield_stock': 0,
+                'can_build_unit': [0x02],  # Only unit 1 (Settlers)
+                'can_build_improvement': []
+            }
+        }
+        civcom.unit_types = {
+            0: {'id': 0, 'name': 'Warriors'},
+            1: {'id': 1, 'name': 'Settlers'}
+        }
+        civcom.improvements = {}
+
+        # Bind the build permission check methods
+        civcom.can_city_build_unit = CivCom.can_city_build_unit.__get__(civcom)
+        civcom.can_city_build_improvement = CivCom.can_city_build_improvement.__get__(civcom)
+
+        actions = civcom._get_city_production_actions(player_id=0, max_cities=3)
+
+        # Should have 2 actions total - 1 for each city
+        assert len(actions) == 2
+
+        # Verify correct units for each city
+        city1_actions = [a for a in actions if a['city_name'] == 'City1']
+        city2_actions = [a for a in actions if a['city_name'] == 'City2']
+
+        assert len(city1_actions) == 1
+        assert city1_actions[0]['production_name'] == 'Warriors'
+
+        assert len(city2_actions) == 1
+        assert city2_actions[0]['production_name'] == 'Settlers'
+
+
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])

@@ -43,6 +43,7 @@ from packet_constants import (
     PACKET_RULESET_EXTRA,
     PACKET_RULESET_UNIT_CLASS,
     PACKET_WEB_RULESET_UNIT_ADDITION,
+    PACKET_WEB_CITY_INFO_ADDITION,
     PACKET_CONN_PING,
     PACKET_CONN_PONG,
     PACKET_RESEARCH_INFO,
@@ -546,7 +547,61 @@ class CivCom(Thread):
             return False
             
         return bool(improvements_bitvector[byte_index] & (1 << bit_index))
-    
+
+    def can_city_build_unit(self, city: dict, unit_type_id: int) -> bool:
+        """Check if a city can build a specific unit type.
+
+        Uses the server-provided can_build_unit bitvector from PACKET_WEB_CITY_INFO_ADDITION
+        which accounts for tech prerequisites, obsolescence, and other game rules.
+
+        Args:
+            city: City data dict with can_build_unit bitvector
+            unit_type_id: The unit type ID to check
+
+        Returns:
+            True if city can build the unit, False otherwise
+        """
+        can_build_bitvector = city.get('can_build_unit')
+        if not can_build_bitvector:
+            # No bitvector available - fallback to allowing (server hasn't sent build info yet)
+            return True
+
+        # Check if the bit is set in the bitvector
+        byte_index = unit_type_id // 8
+        bit_index = unit_type_id % 8
+
+        if byte_index >= len(can_build_bitvector):
+            return False
+
+        return bool(can_build_bitvector[byte_index] & (1 << bit_index))
+
+    def can_city_build_improvement(self, city: dict, improvement_id: int) -> bool:
+        """Check if a city can build a specific improvement/building.
+
+        Uses the server-provided can_build_improvement bitvector from PACKET_WEB_CITY_INFO_ADDITION
+        which accounts for tech prerequisites, obsolescence, whether already built, and other rules.
+
+        Args:
+            city: City data dict with can_build_improvement bitvector
+            improvement_id: The improvement/building ID to check
+
+        Returns:
+            True if city can build the improvement, False otherwise
+        """
+        can_build_bitvector = city.get('can_build_improvement')
+        if not can_build_bitvector:
+            # No bitvector available - fallback to allowing (server hasn't sent build info yet)
+            return True
+
+        # Check if the bit is set in the bitvector
+        byte_index = improvement_id // 8
+        bit_index = improvement_id % 8
+
+        if byte_index >= len(can_build_bitvector):
+            return False
+
+        return bool(can_build_bitvector[byte_index] & (1 << bit_index))
+
     def get_unit_type_actions(self, unit_type_id: int) -> list:
         """Get all actions a unit type can perform.
         
@@ -1216,6 +1271,20 @@ class CivCom(Thread):
                     self.player_cities[city_id] = city_data
                     logger.info(f"✓ Stored city {city_id} ({city_data['name']}, size={city_data['size']}) for owner {owner}")
 
+            # Web city info addition packet - contains can_build_unit and can_build_improvement bitvectors
+            # These are server-calculated bitvectors indicating which units/buildings can be built
+            # based on tech prerequisites, obsolescence, and other game rules
+            elif packet_type == PACKET_WEB_CITY_INFO_ADDITION:
+                city_id = packet.get('id')
+                if city_id is not None and isinstance(self.player_cities, dict):
+                    if city_id in self.player_cities:
+                        # Merge the build permission bitvectors into the city data
+                        self.player_cities[city_id]['can_build_unit'] = packet.get('can_build_unit', [])
+                        self.player_cities[city_id]['can_build_improvement'] = packet.get('can_build_improvement', [])
+                        logger.debug(f"✓ Updated city {city_id} with build permissions")
+                    else:
+                        logger.debug(f"Received PACKET_WEB_CITY_INFO_ADDITION for unknown city {city_id}")
+
             # Unit removal packet - remove unit when consumed or destroyed
             # This is sent when:
             # - Settlers build a city (unit is consumed)
@@ -1642,35 +1711,51 @@ class CivCom(Thread):
                 continue  # Skip cities that are mid-production
             
             city_count += 1
-            
+
             # Generate production options from unit_types and improvements
-            # Units
+            # Filter by server-provided can_build bitvectors (tech prerequisites, obsolescence, etc.)
+
+            # Units - only include those the city can actually build
             for unit_type_id, unit_type in self.unit_types.items():
                 unit_name = unit_type.get('name', '')
-                if unit_name:
-                    actions.append({
-                        'type': 'city_production',
-                        'city_id': city_id,
-                        'city_name': city.get('name', ''),
-                        'production_name': unit_name,
-                        'production_kind': VUT_UTYPE,
-                        'production_value': unit_type_id,
-                        'reason': 'finished' if shield_stock == 0 else 'coinage'
-                    })
-            
-            # Buildings (improvements)
+                if not unit_name:
+                    continue
+
+                # Check if city can build this unit (tech prereqs, not obsolete, etc.)
+                unit_id_int = int(unit_type_id) if isinstance(unit_type_id, str) else unit_type_id
+                if not self.can_city_build_unit(city, unit_id_int):
+                    continue
+
+                actions.append({
+                    'type': 'city_production',
+                    'city_id': city_id,
+                    'city_name': city.get('name', ''),
+                    'production_name': unit_name,
+                    'production_kind': VUT_UTYPE,
+                    'production_value': unit_type_id,
+                    'reason': 'finished' if shield_stock == 0 else 'coinage'
+                })
+
+            # Buildings (improvements) - only include those the city can actually build
             for building_id, building in self.improvements.items():
                 building_name = building.get('name', '')
-                if building_name:
-                    actions.append({
-                        'type': 'city_production',
-                        'city_id': city_id,
-                        'city_name': city.get('name', ''),
-                        'production_name': building_name,
-                        'production_kind': VUT_IMPROVEMENT,
-                        'production_value': building_id,
-                        'reason': 'finished' if shield_stock == 0 else 'coinage'
-                    })
+                if not building_name:
+                    continue
+
+                # Check if city can build this improvement (tech prereqs, not already built, etc.)
+                building_id_int = int(building_id) if isinstance(building_id, str) else building_id
+                if not self.can_city_build_improvement(city, building_id_int):
+                    continue
+
+                actions.append({
+                    'type': 'city_production',
+                    'city_id': city_id,
+                    'city_name': city.get('name', ''),
+                    'production_name': building_name,
+                    'production_kind': VUT_IMPROVEMENT,
+                    'production_value': building_id,
+                    'reason': 'finished' if shield_stock == 0 else 'coinage'
+                })
         
         # Cache for this turn
         self._action_cache[cache_key] = actions
