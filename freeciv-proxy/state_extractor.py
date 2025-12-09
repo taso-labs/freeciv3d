@@ -2020,6 +2020,9 @@ class StateExtractor:
         """Generate legal actions based on actual game state from civcom"""
         actions = []
         
+        # Get civcom instance for ruleset-based action generation
+        civcom = self._get_civcom_for_player(player_id)
+        
         # Fallback: Generate basic actions based on available game entities
         logger.debug("Using fallback action generation")
 
@@ -2045,28 +2048,24 @@ class StateExtractor:
             city_id = city.get('id')
             actions.extend(self._generate_city_actions(city, state, player_id))
         
-        # Generate research actions
-        current_techs = state.get('technologies', [])
-        available_techs = []
-        
-        # Basic tech tree progression
-        if 'pottery' not in current_techs:
-            available_techs.append('pottery')
-        if 'bronze_working' not in current_techs:
-            available_techs.append('bronze_working')
-        if 'pottery' in current_techs and 'writing' not in current_techs:
-            available_techs.append('writing')
-        if 'bronze_working' in current_techs and 'iron_working' not in current_techs:
-            available_techs.append('iron_working')
-        
-        for tech in available_techs:
-            actions.append({
-                'type': 'research_tech',
-                'tech': tech,
-                'cost': {'beakers': 12},
-                'priority': 7,
-                'is_valid': True
-            })
+        # Generate research actions using ruleset data
+        if civcom:
+            try:
+                researchable_techs = civcom.get_researchable_techs(player_id)
+                for tech in researchable_techs:
+                    actions.append({
+                        'type': 'research_tech',
+                        'tech': tech.get('name', ''),
+                        'tech_id': tech.get('id'),
+                        'cost': {'beakers': tech.get('cost', 0)},
+                        'priority': 7,
+                        'is_valid': True
+                    })
+            except Exception as e:
+                logger.warning(f"Failed to get researchable techs from civcom: {e}")
+                # Fallback: no tech actions generated
+        else:
+            logger.debug("No civcom available for tech action generation")
         
         return actions
 

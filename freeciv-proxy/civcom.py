@@ -16,7 +16,7 @@
 import socket
 from struct import *
 from threading import Thread
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List, Union
 import logging
 import time
 import json
@@ -45,6 +45,7 @@ from packet_constants import (
     PACKET_WEB_RULESET_UNIT_ADDITION,
     PACKET_CONN_PING,
     PACKET_CONN_PONG,
+    PACKET_RESEARCH_INFO,
     get_packet_name
 )
 
@@ -315,6 +316,7 @@ class CivCom(Thread):
         self.game_phase = 'movement'
         self.player_id = None  # Will be set from PACKET_PLAYER_INFO
         self.nations = {}  # Will be populated from PACKET_RULESET_NATION (pid=148)
+        self.research_info = {}  # {player_id: PACKET_RESEARCH_INFO} - tracks tech progress
 
         # RULESET packet storage - mirrors FreeCiv web client architecture
         # These define immutable game rules (unit types, buildings, techs, terrain, etc.)
@@ -362,6 +364,66 @@ class CivCom(Thread):
             # If not found in registry, return generic name
             return f'Nation{nation_id}'
         return 'Unknown'
+
+    def get_tech_state(self, tech_id: int, player_id: int) -> str:
+        """Get the research state of a tech for a player.
+        
+        Returns:
+            'KNOWN' - tech is researched
+            'PREREQS_KNOWN' - prerequisites met, can research
+            'UNKNOWN' - prerequisites not met
+        """
+        research = self.research_info.get(player_id)
+        if not research:
+            return 'UNKNOWN'
+        
+        inventions = research.get('inventions', [])
+        if tech_id < len(inventions):
+            state = inventions[tech_id]
+            # States: 0=UNKNOWN, 1=PREREQS_KNOWN, 2=KNOWN
+            if state == '2':
+                return 'KNOWN'
+            elif state == '1':
+                return 'PREREQS_KNOWN'
+        return 'UNKNOWN'
+    
+    def can_research_tech(self, tech_id: int, player_id: int) -> bool:
+        """Check if a tech can be researched (prerequisites are met).
+        
+        Args:
+            tech_id: Technology ID
+            player_id: Player ID
+            
+        Returns:
+            True if tech can be researched (state is PREREQS_KNOWN)
+        """
+        return self.get_tech_state(tech_id, player_id) == 'PREREQS_KNOWN'
+    
+    def get_researchable_techs(self, player_id: int) -> List[Dict[str, Any]]:
+        """Get all technologies that can currently be researched.
+        
+        Args:
+            player_id: Player ID
+            
+        Returns:
+            List of tech dicts with id, name, and cost
+        """
+        researchable = []
+        research = self.research_info.get(player_id)
+        
+        if not research:
+            return researchable
+        
+        for tech_id, tech_data in self.techs.items():
+            if self.can_research_tech(tech_id, player_id):
+                researchable.append({
+                    'id': tech_id,
+                    'name': tech_data.get('name', ''),
+                    'cost': tech_data.get('cost', 0),
+                    'rule_name': tech_data.get('rule_name', '')
+                })
+        
+        return researchable
 
     def utype_can_do_action(self, unit_type_id: int, action_id: int) -> bool:
         """Check if a unit type can perform a specific action.
@@ -1240,6 +1302,18 @@ class CivCom(Thread):
                     # Store normalized name in packet for easier lookup
                     self.techs[tech_id]['name'] = tech_name
                     logger.debug(f"Registered tech: {tech_name} (id={tech_id})")
+
+            # RESEARCH INFO packet - tracks tech progress and inventions for each player
+            # Contains inventions array showing which techs are KNOWN/PREREQS_KNOWN/UNKNOWN
+            elif packet_type == PACKET_RESEARCH_INFO:
+                research_id = packet.get('id')
+                if research_id is not None:
+                    self.research_info[research_id] = packet
+                    logger.debug(
+                        f"Updated research info for player {research_id}: "
+                        f"researching={packet.get('researching')}, "
+                        f"techs_researched={packet.get('techs_researched')}"
+                    )
 
             # RULESET terrain packet - defines terrain types (Plains, Ocean, Hills, etc.)
             # Used for movement cost calculations and action validity checks
