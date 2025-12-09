@@ -308,6 +308,7 @@ class CivCom(Thread):
         # Game state tracking - populated from parsed packets
         self.map_info = {}
         self.player_units = {}  # Dict keyed by unit_id for efficient updates
+        self.other_units = {}   # Dict keyed by unit_id for non-player units
         self.player_cities = {}  # Dict keyed by city_id for efficient updates
         self.all_players = []
         self.known_techs = []
@@ -334,6 +335,25 @@ class CivCom(Thread):
         
         # Tile data storage for terrain lookups
         self.tiles = {}  # {tile_index: {terrain, extras, ...}}
+
+    def get_unit_tile(self, unit_id: int) -> int:
+        """Return the tile index of a unit by id. Returns -1 if unknown.
+
+        This is used by packet_converter when constructing PACKET_UNIT_ORDERS.
+        """
+        # Prefer our own units (player_units)
+        if isinstance(self.player_units, dict):
+            unit = self.player_units.get(unit_id)
+            if unit and 'tile' in unit:
+                return unit.get('tile', -1)
+
+        # Fall back to other players' units if available
+        if hasattr(self, 'other_units') and isinstance(self.other_units, dict):
+            unit = self.other_units.get(unit_id)
+            if unit and 'tile' in unit:
+                return unit.get('tile', -1)
+
+        return -1
 
     def _get_nation_name(self, nation_id):
         """Convert nation ID to human-readable name using nations registry.
