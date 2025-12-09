@@ -53,6 +53,9 @@ from packet_constants import (
 # Import RulesetMapper for production name to ID conversion
 from ruleset_mapper import RulesetMapper, VUT_IMPROVEMENT, VUT_UTYPE
 
+# Import BitVector for parsing bitvector fields from packets
+from bitvector import BitVector
+
 # Tech research constants (from freeciv/common/tech.h and fc_types.js)
 # A_UNSET indicates that no tech is selected (for research)
 MAX_NUM_ADVANCES = 250
@@ -322,6 +325,7 @@ class CivCom(Thread):
         self.player_cities = {}  # Dict keyed by city_id for efficient updates
         self.all_players = []
         self.known_techs = []
+        self.research_data = {}  # {player_id: {inventions: [], researching: tech_id, ...}}
         self.visible_tiles = []
         self.game_turn = 1
         self.game_phase = 'movement'
@@ -1181,6 +1185,23 @@ class CivCom(Thread):
                         'gold': packet.get('gold', 0)
                     })
 
+            # Research info packet - stores technology research state per player
+            # inventions is an array where index = tech_id, value = research status
+            # (TECH_UNKNOWN=0, TECH_PREREQS_KNOWN=1, TECH_KNOWN=2)
+            elif packet_type == PACKET_RESEARCH_INFO:
+                player_id = packet.get('id')
+                if player_id is not None:
+                    self.research_data[player_id] = {
+                        'inventions': packet.get('inventions', []),
+                        'researching': packet.get('researching'),
+                        'researching_cost': packet.get('researching_cost', 0),
+                        'bulbs_researched': packet.get('bulbs_researched', 0),
+                        'tech_goal': packet.get('tech_goal'),
+                        'total_bulbs_prod': packet.get('total_bulbs_prod', 0)
+                    }
+                    logger.debug(f"Research info for player {player_id}: researching={packet.get('researching')}, "
+                                f"inventions_count={len(packet.get('inventions', []))}")
+
             # Unit info packet - stores units by ID for all players
             elif packet_type == PACKET_UNIT_INFO:
                 unit_id = packet.get('id')
@@ -1271,19 +1292,52 @@ class CivCom(Thread):
                     self.player_cities[city_id] = city_data
                     logger.info(f"✓ Stored city {city_id} ({city_data['name']}, size={city_data['size']}) for owner {owner}")
 
-            # Web city info addition packet - contains can_build_unit and can_build_improvement bitvectors
-            # These are server-calculated bitvectors indicating which units/buildings can be built
-            # based on tech prerequisites, obsolescence, and other game rules
+            # Web city info addition packet - contains buildable units/improvements as bitvectors
+            # This packet follows PACKET_CITY_INFO and provides additional web-specific data
             elif packet_type == PACKET_WEB_CITY_INFO_ADDITION:
                 city_id = packet.get('id')
-                if city_id is not None and isinstance(self.player_cities, dict):
-                    if city_id in self.player_cities:
-                        # Merge the build permission bitvectors into the city data
-                        self.player_cities[city_id]['can_build_unit'] = packet.get('can_build_unit', [])
-                        self.player_cities[city_id]['can_build_improvement'] = packet.get('can_build_improvement', [])
-                        logger.debug(f"✓ Updated city {city_id} with build permissions")
-                    else:
-                        logger.debug(f"Received PACKET_WEB_CITY_INFO_ADDITION for unknown city {city_id}")
+                if city_id is not None and city_id in self.player_cities:
+                    city = self.player_cities[city_id]
+
+                    # Parse bitvectors for buildable options
+                    can_build_unit_raw = packet.get('can_build_unit', [])
+                    can_build_impr_raw = packet.get('can_build_improvement', [])
+
+                    can_build_unit_bv = BitVector(can_build_unit_raw)
+                    can_build_impr_bv = BitVector(can_build_impr_raw)
+
+                    # Resolve bit positions to unit/improvement names using ruleset data
+                    can_build = []
+
+                    # Units - bit position corresponds to unit type ID
+                    for unit_id in can_build_unit_bv.to_list():
+                        utype = self.unit_types.get(unit_id)
+                        if utype:
+                            can_build.append({
+                                'type': 'unit',
+                                'id': unit_id,
+                                'name': utype.get('name', f'Unit{unit_id}')
+                            })
+
+                    # Improvements - bit position corresponds to improvement ID
+                    for impr_id in can_build_impr_bv.to_list():
+                        impr = self.improvements.get(impr_id)
+                        if impr:
+                            can_build.append({
+                                'type': 'improvement',
+                                'id': impr_id,
+                                'name': impr.get('name', f'Building{impr_id}')
+                            })
+
+                    city['can_build'] = can_build
+
+                    # Also store granary info if present
+                    if 'granary_size' in packet:
+                        city['granary_size'] = packet['granary_size']
+                    if 'granary_turns' in packet:
+                        city['granary_turns'] = packet['granary_turns']
+
+                    logger.debug(f"Updated city {city_id} with {len(can_build)} buildable options")
 
             # Unit removal packet - remove unit when consumed or destroyed
             # This is sent when:

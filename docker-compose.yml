@@ -30,6 +30,9 @@ services:
       - REDIS_PORT=6379
     volumes:
       - ./freeciv-web:/docker/freeciv-web-shared
+      # Development only: Enable hot-reload for freeciv-proxy changes
+      # Remove or make read-only (:ro) in production deployments
+      - ./freeciv-proxy:/docker/freeciv-proxy
       - ./logs:/docker/logs
     depends_on:
       flyway:
