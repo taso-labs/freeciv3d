@@ -269,16 +269,19 @@ def _convert_action_to_packet_impl(
         )
 
     elif action_type == "tech_research":
-        # Strict canonical input: expect target: {"tech": "<technology name>"}
+        # Accept both canonical format (target: {"tech": "name"}) and
+        # normalized format (tech_name: "name") from llm_handler normalization
         # A RulesetMapper (via civcom) is required to convert the name to an ID.
-        target = action.get("target")
-        if not isinstance(target, dict) or "tech" not in target:
-            raise ValueError(
-                "tech_research requires 'target' dict with 'tech' name string"
-            )
-        tech_name = target.get("tech")
+        tech_name = action.get("tech_name")
         if not tech_name:
-            raise ValueError("tech_research requires non-empty 'tech' name")
+            # Fall back to canonical format
+            target = action.get("target")
+            if isinstance(target, dict):
+                tech_name = target.get("tech") or target.get("tech_name")
+        if not tech_name:
+            raise ValueError(
+                "tech_research requires 'tech_name' or 'target.tech' with tech name string"
+            )
         if not civcom:
             raise ValueError(
                 "tech_research requires a civcom with ruleset info to map tech names to IDs"
