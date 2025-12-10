@@ -839,9 +839,14 @@ class LLMWSHandler(websocket.WebSocketHandler):
         # Action-specific field mappings
         if action_type == "tech_research":
             # Extract tech name from target field
+            # Supports multiple formats: {"value": "tech"}, {"tech": "tech"}, {"tech_name": "tech"}, or "tech"
             target = action_data.get("target", {})
             if isinstance(target, dict) and "value" in target:
                 tech_name = target["value"]
+            elif isinstance(target, dict) and "tech" in target:
+                tech_name = target["tech"]
+            elif isinstance(target, dict) and "tech_name" in target:
+                tech_name = target["tech_name"]
             elif isinstance(target, str):
                 tech_name = target
             else:
@@ -1816,7 +1821,8 @@ class LLMWSHandler(websocket.WebSocketHandler):
             return None
         try:
             # StateExtractor uses civcom_registry for access
-            return StateExtractor(None, self.player_id)
+            # Note: StateExtractor.__init__(civcom, cache, registry) - use named params for clarity
+            return StateExtractor(civcom=None, cache=None, registry=civcom_registry)
         except Exception as e:
             logger.error(f"Failed to create StateExtractor: {e}")
             return None
@@ -3490,7 +3496,8 @@ class LLMWSHandler(websocket.WebSocketHandler):
             del llm_agents[self.agent_id]
 
         # Invalidate cache for this player
-        if self.player_id:
+        # Note: player_id=0 is valid, so use 'is not None' instead of falsy check
+        if self.player_id is not None:
             state_cache.invalidate(player_id=self.player_id)
 
         SecurityLogger.log_connection_event(self.agent_id, "DISCONNECTED",
