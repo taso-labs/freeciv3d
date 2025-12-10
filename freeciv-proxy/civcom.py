@@ -325,7 +325,6 @@ class CivCom(Thread):
         self.player_cities = {}  # Dict keyed by city_id for efficient updates
         self.all_players = []
         self.known_techs = []
-        self.research_data = {}  # {player_id: {inventions: [], researching: tech_id, ...}}
         self.visible_tiles = []
         self.game_turn = 1
         self.game_phase = 'movement'
@@ -1185,22 +1184,8 @@ class CivCom(Thread):
                         'gold': packet.get('gold', 0)
                     })
 
-            # Research info packet - stores technology research state per player
-            # inventions is an array where index = tech_id, value = research status
-            # (TECH_UNKNOWN=0, TECH_PREREQS_KNOWN=1, TECH_KNOWN=2)
-            elif packet_type == PACKET_RESEARCH_INFO:
-                player_id = packet.get('id')
-                if player_id is not None:
-                    self.research_data[player_id] = {
-                        'inventions': packet.get('inventions', []),
-                        'researching': packet.get('researching'),
-                        'researching_cost': packet.get('researching_cost', 0),
-                        'bulbs_researched': packet.get('bulbs_researched', 0),
-                        'tech_goal': packet.get('tech_goal'),
-                        'total_bulbs_prod': packet.get('total_bulbs_prod', 0)
-                    }
-                    logger.debug(f"Research info for player {player_id}: researching={packet.get('researching')}, "
-                                f"inventions_count={len(packet.get('inventions', []))}")
+            # NOTE: PACKET_RESEARCH_INFO is handled later in the packet processing chain
+            # at line ~1465 where it's stored in self.research_info (the authoritative store)
 
             # Unit info packet - stores units by ID for all players
             elif packet_type == PACKET_UNIT_INFO:
