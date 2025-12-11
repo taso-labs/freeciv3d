@@ -1,0 +1,106 @@
+name: Build Docker Images
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Image tag (e.g., 0.1.0 or latest)'
+        required: true
+        default: 'latest'
+      push_to_production:
+        description: 'Also push to production registry'
+        type: boolean
+        default: false
+
+env:
+  STAGING_PROJECT: clashai-staging
+  PRODUCTION_PROJECT: clashai-production
+  REGION: us-central1
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Authenticate to Google Cloud (Staging)
+        id: auth-staging
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: projects/978279426764/locations/global/workloadIdentityPools/github/providers/github
+          service_account: github-actions-sa@clashai-staging.iam.gserviceaccount.com
+
+      - name: Configure Docker for Artifact Registry (Staging)
+        run: |
+          gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
+
+      - name: Determine image tag
+        id: tag
+        run: |
+          if [ "${{ github.event_name }}" = "release" ]; then
+            echo "tag=${{ github.event.release.tag_name }}" >> $GITHUB_OUTPUT
+            echo "push_production=true" >> $GITHUB_OUTPUT
+          else
+            echo "tag=${{ github.event.inputs.tag }}" >> $GITHUB_OUTPUT
+            echo "push_production=${{ github.event.inputs.push_to_production }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Build and push fciv-net to staging
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: |
+            ${{ env.REGION }}-docker.pkg.dev/${{ env.STAGING_PROJECT }}/${{ env.STAGING_PROJECT }}-registry/fciv-net:${{ steps.tag.outputs.tag }}
+            ${{ env.REGION }}-docker.pkg.dev/${{ env.STAGING_PROJECT }}/${{ env.STAGING_PROJECT }}-registry/fciv-net:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build and push llm-gateway to staging
+        uses: docker/build-push-action@v5
+        with:
+          context: ./llm-gateway
+          file: ./llm-gateway/Dockerfile
+          push: true
+          tags: |
+            ${{ env.REGION }}-docker.pkg.dev/${{ env.STAGING_PROJECT }}/${{ env.STAGING_PROJECT }}-registry/llm-gateway:${{ steps.tag.outputs.tag }}
+            ${{ env.REGION }}-docker.pkg.dev/${{ env.STAGING_PROJECT }}/${{ env.STAGING_PROJECT }}-registry/llm-gateway:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Authenticate to Google Cloud (Production)
+        if: steps.tag.outputs.push_production == 'true'
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: projects/123456789/locations/global/workloadIdentityPools/github/providers/github
+          service_account: github-actions-sa@clashai-production.iam.gserviceaccount.com
+
+      - name: Configure Docker for Artifact Registry (Production)
+        if: steps.tag.outputs.push_production == 'true'
+        run: |
+          gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
+
+      - name: Push fciv-net to production
+        if: steps.tag.outputs.push_production == 'true'
+        run: |
+          docker tag ${{ env.REGION }}-docker.pkg.dev/${{ env.STAGING_PROJECT }}/${{ env.STAGING_PROJECT }}-registry/fciv-net:${{ steps.tag.outputs.tag }} \
+            ${{ env.REGION }}-docker.pkg.dev/${{ env.PRODUCTION_PROJECT }}/${{ env.PRODUCTION_PROJECT }}-registry/fciv-net:${{ steps.tag.outputs.tag }}
+          docker push ${{ env.REGION }}-docker.pkg.dev/${{ env.PRODUCTION_PROJECT }}/${{ env.PRODUCTION_PROJECT }}-registry/fciv-net:${{ steps.tag.outputs.tag }}
+
+      - name: Push llm-gateway to production
+        if: steps.tag.outputs.push_production == 'true'
+        run: |
+          docker tag ${{ env.REGION }}-docker.pkg.dev/${{ env.STAGING_PROJECT }}/${{ env.STAGING_PROJECT }}-registry/llm-gateway:${{ steps.tag.outputs.tag }} \
+            ${{ env.REGION }}-docker.pkg.dev/${{ env.PRODUCTION_PROJECT }}/${{ env.PRODUCTION_PROJECT }}-registry/llm-gateway:${{ steps.tag.outputs.tag }}
+          docker push ${{ env.REGION }}-docker.pkg.dev/${{ env.PRODUCTION_PROJECT }}/${{ env.PRODUCTION_PROJECT }}-registry/llm-gateway:${{ steps.tag.outputs.tag }}

@@ -9,13 +9,12 @@ metadata:
 data:
   # FreeCiv server connection
   freeciv-server-host: "fciv-net.freeciv3d.svc.cluster.local"
-  freeciv-server-port: "5556"
+  freeciv-server-port: "8002"
 
-  # Gateway configuration
-  websocket-port: "8003"
-  grpc-port: "9000"
-  max-concurrent-games: "10"
+  # Redis configuration
+  redis-host: "redis.freeciv3d.svc.cluster.local"
+  redis-port: "6379"
 
-  # Application configuration
-  log-level: "debug"
-  environment: "staging"
+  # WebSocket configuration
+  bind-addr: "0.0.0.0:8003"
+  log-level: "info"

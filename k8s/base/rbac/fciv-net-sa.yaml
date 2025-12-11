@@ -7,7 +7,9 @@ metadata:
     app: fciv-net
     component: game-server
   annotations:
-    iam.gke.io/gcp-service-account: fciv-net-sa@clashai-staging.iam.gserviceaccount.com
+    # Workload Identity - reuses gateway-sa (shared with agent-clash)
+    # The GCP SA email will be patched by Kustomize overlay
+    iam.gke.io/gcp-service-account: gateway-sa@PROJECT_ID.iam.gserviceaccount.com
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
@@ -15,12 +17,12 @@ metadata:
   name: fciv-net-role
   namespace: freeciv3d
 rules:
-- apiGroups: [""]
-  resources: ["configmaps", "secrets"]
-  verbs: ["get", "list", "watch"]
-- apiGroups: [""]
-  resources: ["pods", "services"]
-  verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["configmaps", "secrets"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods", "services"]
+    verbs: ["get", "list"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -32,6 +34,6 @@ roleRef:
   kind: Role
   name: fciv-net-role
 subjects:
-- kind: ServiceAccount
-  name: fciv-net-sa
-  namespace: freeciv3d
+  - kind: ServiceAccount
+    name: fciv-net-sa
+    namespace: freeciv3d

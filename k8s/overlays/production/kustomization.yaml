@@ -1,0 +1,132 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Inherit from base
+resources:
+  - ../../base
+
+# Environment label
+labels:
+  - pairs:
+      environment: production
+
+# Image configuration
+images:
+  - name: fciv-net
+    newName: us-central1-docker.pkg.dev/clashai-production/clashai-production-registry/fciv-net
+    newTag: latest
+  - name: llm-gateway
+    newName: us-central1-docker.pkg.dev/clashai-production/clashai-production-registry/llm-gateway
+    newTag: latest
+
+# Replica configuration for production
+replicas:
+  - name: fciv-net
+    count: 2
+  - name: llm-gateway
+    count: 2
+  - name: redis
+    count: 1
+
+# Patches for environment-specific configuration
+patches:
+  # Patch fciv-net deployment with Cloud SQL instance
+  - target:
+      kind: Deployment
+      name: fciv-net
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/initContainers/0/args/6
+        value: "clashai-production:us-central1:freeciv3d-production-db-SUFFIX"
+
+  # Patch fciv-net ServiceAccount for Workload Identity
+  - target:
+      kind: ServiceAccount
+      name: fciv-net-sa
+    patch: |-
+      - op: replace
+        path: /metadata/annotations/iam.gke.io~1gcp-service-account
+        value: "gateway-sa@clashai-production.iam.gserviceaccount.com"
+
+  # Patch llm-gateway ServiceAccount for Workload Identity
+  - target:
+      kind: ServiceAccount
+      name: llm-gateway-sa
+    patch: |-
+      - op: replace
+        path: /metadata/annotations/iam.gke.io~1gcp-service-account
+        value: "gateway-sa@clashai-production.iam.gserviceaccount.com"
+
+  # Patch External Secret for production DB
+  - target:
+      kind: ExternalSecret
+      name: db-credentials
+    patch: |-
+      - op: replace
+        path: /spec/data/0/remoteRef/key
+        value: "freeciv3d-production-db-connection-string"
+
+  # Patch HPA limits for production
+  - target:
+      kind: HorizontalPodAutoscaler
+      name: fciv-net-hpa
+    patch: |-
+      - op: replace
+        path: /spec/minReplicas
+        value: 2
+      - op: replace
+        path: /spec/maxReplicas
+        value: 5
+
+  - target:
+      kind: HorizontalPodAutoscaler
+      name: llm-gateway-hpa
+    patch: |-
+      - op: replace
+        path: /spec/minReplicas
+        value: 2
+      - op: replace
+        path: /spec/maxReplicas
+        value: 3
+
+  # Production resource limits
+  - target:
+      kind: Deployment
+      name: fciv-net
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/cpu
+        value: "500m"
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/memory
+        value: "1Gi"
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/cpu
+        value: "2000m"
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/memory
+        value: "4Gi"
+
+  - target:
+      kind: Deployment
+      name: llm-gateway
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/cpu
+        value: "200m"
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/memory
+        value: "256Mi"
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/cpu
+        value: "1000m"
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/memory
+        value: "1Gi"
+
+# ConfigMap generator for production-specific config
+configMapGenerator:
+  - name: production-config
+    literals:
+      - ENVIRONMENT=production
+      - LOG_LEVEL=info

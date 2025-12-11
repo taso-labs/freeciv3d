@@ -1,0 +1,102 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: llm-gateway
+  namespace: freeciv3d
+  labels:
+    app: llm-gateway
+    component: game-integration
+    version: v1
+  annotations:
+    description: "LLM Gateway for FreeCiv bot communication"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: llm-gateway
+  template:
+    metadata:
+      labels:
+        app: llm-gateway
+        component: game-integration
+        version: v1
+    spec:
+      serviceAccountName: llm-gateway-sa
+
+      containers:
+        - name: llm-gateway
+          image: llm-gateway
+          imagePullPolicy: Always
+
+          ports:
+            - name: websocket
+              containerPort: 8003
+              protocol: TCP
+
+          env:
+            # FreeCiv server connection
+            - name: FREECIV_SERVER_HOST
+              value: "fciv-net.freeciv3d.svc.cluster.local"
+            - name: FREECIV_SERVER_PORT
+              value: "8002"
+
+            # Redis connection
+            - name: REDIS_HOST
+              value: "redis.freeciv3d.svc.cluster.local"
+            - name: REDIS_PORT
+              value: "6379"
+
+            # Secrets from External Secrets
+            - name: CACHE_HMAC_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: llm-gateway-secrets
+                  key: cache-hmac-secret
+            - name: API_KEY_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: llm-gateway-secrets
+                  key: api-key-secret
+
+            # Application configuration
+            - name: LOG_LEVEL
+              value: "info"
+            - name: BIND_ADDR
+              value: "0.0.0.0:8003"
+
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+
+          livenessProbe:
+            tcpSocket:
+              port: websocket
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+
+          readinessProbe:
+            tcpSocket:
+              port: websocket
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 2
+
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1001
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop:
+                - ALL
+
+      dnsPolicy: ClusterFirst
+      restartPolicy: Always
+      terminationGracePeriodSeconds: 30
