@@ -16,6 +16,7 @@
 import socket
 from struct import *
 from threading import Thread
+from typing import Dict, Any, List
 import logging
 import time
 import json
@@ -42,15 +43,24 @@ from packet_constants import (
     PACKET_RULESET_EXTRA,
     PACKET_RULESET_UNIT_CLASS,
     PACKET_WEB_RULESET_UNIT_ADDITION,
+    PACKET_WEB_CITY_INFO_ADDITION,
     PACKET_CONN_PING,
     PACKET_CONN_PONG,
     PACKET_RESEARCH_INFO,
-    PACKET_WEB_CITY_INFO_ADDITION,
     get_packet_name
 )
 
+# Import RulesetMapper for production name to ID conversion
+from ruleset_mapper import RulesetMapper, VUT_IMPROVEMENT, VUT_UTYPE
+
 # Import BitVector for parsing bitvector fields from packets
 from bitvector import BitVector
+
+# Tech research constants (from freeciv/common/tech.h and fc_types.js)
+# A_UNSET indicates that no tech is selected (for research)
+MAX_NUM_ADVANCES = 250
+A_LAST = MAX_NUM_ADVANCES + 1  # 251
+A_UNSET = A_LAST + 2  # 253
 
 # FreeCiv Action IDs - from freeciv/freeciv-web/src/main/webapp/javascript/fc_types.js
 # These define the action types that units can perform
@@ -311,15 +321,16 @@ class CivCom(Thread):
         # Game state tracking - populated from parsed packets
         self.map_info = {}
         self.player_units = {}  # Dict keyed by unit_id for efficient updates
+        self.other_units = {}   # Dict keyed by unit_id for non-player units
         self.player_cities = {}  # Dict keyed by city_id for efficient updates
         self.all_players = []
         self.known_techs = []
-        self.research_data = {}  # {player_id: {inventions: [], researching: tech_id, ...}}
         self.visible_tiles = []
         self.game_turn = 1
         self.game_phase = 'movement'
         self.player_id = None  # Will be set from PACKET_PLAYER_INFO
         self.nations = {}  # Will be populated from PACKET_RULESET_NATION (pid=148)
+        self.research_info = {}  # {player_id: PACKET_RESEARCH_INFO} - tracks tech progress
 
         # RULESET packet storage - mirrors FreeCiv web client architecture
         # These define immutable game rules (unit types, buildings, techs, terrain, etc.)
@@ -331,12 +342,36 @@ class CivCom(Thread):
         self.terrains = {}        # {terrain_id: PACKET_RULESET_TERRAIN data}
         self.extras = {}          # {extra_id: PACKET_RULESET_EXTRA data}
         self.unit_classes = {}    # {unit_class_id: PACKET_RULESET_UNIT_CLASS data}
+
+        # Per-turn action cache - stores generated city production and tech research actions
+        # Cache keys: "{turn}_{player_id}_city_actions" and "{turn}_{player_id}_tech_actions"
+        # Unit actions are NOT cached because every unit move affects other units' possibilities
+        self._action_cache = {}  # {cache_key: list of action dicts}
         
         # Game settings from PACKET_GAME_INFO
         self.citymindist = DEFAULT_CITYMINDIST  # Minimum distance between cities
         
         # Tile data storage for terrain lookups
         self.tiles = {}  # {tile_index: {terrain, extras, ...}}
+
+    def get_unit_tile(self, unit_id: int) -> int:
+        """Return the tile index of a unit by id. Returns -1 if unknown.
+
+        This is used by packet_converter when constructing PACKET_UNIT_ORDERS.
+        """
+        # Prefer our own units (player_units)
+        if isinstance(self.player_units, dict):
+            unit = self.player_units.get(unit_id)
+            if unit and 'tile' in unit:
+                return unit.get('tile', -1)
+
+        # Fall back to other players' units if available
+        if hasattr(self, 'other_units') and isinstance(self.other_units, dict):
+            unit = self.other_units.get(unit_id)
+            if unit and 'tile' in unit:
+                return unit.get('tile', -1)
+
+        return -1
 
     def _get_nation_name(self, nation_id):
         """Convert nation ID to human-readable name using nations registry.
@@ -368,6 +403,66 @@ class CivCom(Thread):
             return f'Nation{nation_id}'
         return 'Unknown'
 
+    def get_tech_state(self, tech_id: int, player_id: int) -> str:
+        """Get the research state of a tech for a player.
+        
+        Returns:
+            'KNOWN' - tech is researched
+            'PREREQS_KNOWN' - prerequisites met, can research
+            'UNKNOWN' - prerequisites not met
+        """
+        research = self.research_info.get(player_id)
+        if not research:
+            return 'UNKNOWN'
+        
+        inventions = research.get('inventions', [])
+        if tech_id < len(inventions):
+            state = inventions[tech_id]
+            # States: 0=UNKNOWN, 1=PREREQS_KNOWN, 2=KNOWN
+            if state == '2':
+                return 'KNOWN'
+            elif state == '1':
+                return 'PREREQS_KNOWN'
+        return 'UNKNOWN'
+    
+    def can_research_tech(self, tech_id: int, player_id: int) -> bool:
+        """Check if a tech can be researched (prerequisites are met).
+        
+        Args:
+            tech_id: Technology ID
+            player_id: Player ID
+            
+        Returns:
+            True if tech can be researched (state is PREREQS_KNOWN)
+        """
+        return self.get_tech_state(tech_id, player_id) == 'PREREQS_KNOWN'
+    
+    def get_researchable_techs(self, player_id: int) -> List[Dict[str, Any]]:
+        """Get all technologies that can currently be researched.
+        
+        Args:
+            player_id: Player ID
+            
+        Returns:
+            List of tech dicts with id, name, and cost
+        """
+        researchable = []
+        research = self.research_info.get(player_id)
+        
+        if not research:
+            return researchable
+        
+        for tech_id, tech_data in self.techs.items():
+            if self.can_research_tech(tech_id, player_id):
+                researchable.append({
+                    'id': tech_id,
+                    'name': tech_data.get('name', ''),
+                    'cost': tech_data.get('cost', 0),
+                    'rule_name': tech_data.get('rule_name', '')
+                })
+        
+        return researchable
+
     def utype_can_do_action(self, unit_type_id: int, action_id: int) -> bool:
         """Check if a unit type can perform a specific action.
         
@@ -388,29 +483,27 @@ class CivCom(Thread):
             
         unit_type = self.unit_types.get(unit_type_id)
         if not unit_type:
-            # Unit type not found - ruleset data may not be loaded yet
-            # Log this so we can debug why PACKET_RULESET_UNIT wasn't received
-            logger.warning(
+            # Unit type not found - ruleset data not loaded (invalid state)
+            logger.error(
                 f"utype_can_do_action: unit_type_id={unit_type_id} not found in unit_types "
                 f"(have {len(self.unit_types)} unit types). "
-                f"PACKET_RULESET_UNIT may not have been received. Allowing action {action_id}."
+                f"PACKET_RULESET_UNIT not received - invalid state. Blocking action {action_id}."
             )
-            return True  # Allow action as defensive fallback
+            return False  # Block action when ruleset data missing
             
         # The utype_actions is a byte array (list of bytes, not 32-bit integers)
         # Each byte contains 8 bits of action capability flags
         # This is populated from PACKET_WEB_RULESET_UNIT_ADDITION (pid=260)
         utype_actions = unit_type.get('utype_actions', [])
         if not utype_actions:
-            # Defensive fallback: if utype_actions not yet received, allow action
-            # This prevents blocking valid actions during ruleset loading race conditions
+            # Missing utype_actions indicates ruleset not fully loaded (invalid state)
             unit_name = unit_type.get('name', f'unit_type_{unit_type_id}')
-            logger.warning(
+            logger.error(
                 f"utype_actions not populated for unit type {unit_name} (id={unit_type_id}). "
-                f"PACKET_WEB_RULESET_UNIT_ADDITION may not have been received yet. "
-                f"Allowing action {action_id} as fallback."
+                f"PACKET_WEB_RULESET_UNIT_ADDITION not received - invalid state. "
+                f"Blocking action {action_id}."
             )
-            return True
+            return False
             
         # Calculate which byte in the array and which bit within that byte
         # utype_actions is a byte array where each byte contains 8 action bits
@@ -423,6 +516,95 @@ class CivCom(Thread):
         # Check if the bit is set (bit order within byte: LSB first)
         return bool(utype_actions[byte_index] & (1 << bit_index))
     
+    def city_has_improvement(self, city: Dict[str, Any], improvement_name: str) -> bool:
+        """Check if a city has a specific improvement/building.
+        
+        Args:
+            city: City data dict from PACKET_CITY_INFO
+            improvement_name: Name of the improvement (e.g., 'Airport', 'Barracks')
+            
+        Returns:
+            True if city has the improvement, False otherwise
+        """
+        improvements_bitvector = city.get('improvements')
+        if not improvements_bitvector:
+            return False
+            
+        # Find improvement ID by name
+        improvement_id = None
+        for imp_id, imp_data in self.improvements.items():
+            if imp_data.get('name', '').lower() == improvement_name.lower():
+                improvement_id = imp_id
+                break
+        
+        if improvement_id is None:
+            logger.warning(f"Improvement '{improvement_name}' not found in ruleset")
+            return False
+        
+        # Check if the bit is set in the bitvector
+        # improvements_bitvector is a list of bytes
+        byte_index = improvement_id // 8
+        bit_index = improvement_id % 8
+        
+        if byte_index >= len(improvements_bitvector):
+            return False
+            
+        return bool(improvements_bitvector[byte_index] & (1 << bit_index))
+
+    def can_city_build_unit(self, city: dict, unit_type_id: int) -> bool:
+        """Check if a city can build a specific unit type.
+
+        Uses the server-provided can_build_unit bitvector from PACKET_WEB_CITY_INFO_ADDITION
+        which accounts for tech prerequisites, obsolescence, and other game rules.
+
+        Args:
+            city: City data dict with can_build_unit bitvector
+            unit_type_id: The unit type ID to check
+
+        Returns:
+            True if city can build the unit, False otherwise
+        """
+        can_build_bitvector = city.get('can_build_unit')
+        if not can_build_bitvector:
+            # No bitvector available - fallback to allowing (server hasn't sent build info yet)
+            return True
+
+        # Check if the bit is set in the bitvector
+        byte_index = unit_type_id // 8
+        bit_index = unit_type_id % 8
+
+        if byte_index >= len(can_build_bitvector):
+            return False
+
+        return bool(can_build_bitvector[byte_index] & (1 << bit_index))
+
+    def can_city_build_improvement(self, city: dict, improvement_id: int) -> bool:
+        """Check if a city can build a specific improvement/building.
+
+        Uses the server-provided can_build_improvement bitvector from PACKET_WEB_CITY_INFO_ADDITION
+        which accounts for tech prerequisites, obsolescence, whether already built, and other rules.
+
+        Args:
+            city: City data dict with can_build_improvement bitvector
+            improvement_id: The improvement/building ID to check
+
+        Returns:
+            True if city can build the improvement, False otherwise
+        """
+        can_build_bitvector = city.get('can_build_improvement')
+        if not can_build_bitvector:
+            # No bitvector available - fallback to allowing (server hasn't sent build info yet)
+            return True
+
+        # Check if the bit is set in the bitvector
+        byte_index = improvement_id // 8
+        bit_index = improvement_id % 8
+
+        if byte_index >= len(can_build_bitvector):
+            return False
+
+        return bool(can_build_bitvector[byte_index] & (1 << bit_index))
+
     def get_unit_type_actions(self, unit_type_id: int) -> list:
         """Get all actions a unit type can perform.
         
@@ -1002,22 +1184,8 @@ class CivCom(Thread):
                         'gold': packet.get('gold', 0)
                     })
 
-            # Research info packet - stores technology research state per player
-            # inventions is an array where index = tech_id, value = research status
-            # (TECH_UNKNOWN=0, TECH_PREREQS_KNOWN=1, TECH_KNOWN=2)
-            elif packet_type == PACKET_RESEARCH_INFO:
-                player_id = packet.get('id')
-                if player_id is not None:
-                    self.research_data[player_id] = {
-                        'inventions': packet.get('inventions', []),
-                        'researching': packet.get('researching'),
-                        'researching_cost': packet.get('researching_cost', 0),
-                        'bulbs_researched': packet.get('bulbs_researched', 0),
-                        'tech_goal': packet.get('tech_goal'),
-                        'total_bulbs_prod': packet.get('total_bulbs_prod', 0)
-                    }
-                    logger.debug(f"Research info for player {player_id}: researching={packet.get('researching')}, "
-                                f"inventions_count={len(packet.get('inventions', []))}")
+            # NOTE: PACKET_RESEARCH_INFO is handled later in the packet processing chain
+            # at line ~1465 where it's stored in self.research_info (the authoritative store)
 
             # Unit info packet - stores units by ID for all players
             elif packet_type == PACKET_UNIT_INFO:
@@ -1277,6 +1445,18 @@ class CivCom(Thread):
                     self.techs[tech_id]['name'] = tech_name
                     logger.debug(f"Registered tech: {tech_name} (id={tech_id})")
 
+            # RESEARCH INFO packet - tracks tech progress and inventions for each player
+            # Contains inventions array showing which techs are KNOWN/PREREQS_KNOWN/UNKNOWN
+            elif packet_type == PACKET_RESEARCH_INFO:
+                research_id = packet.get('id')
+                if research_id is not None:
+                    self.research_info[research_id] = packet
+                    logger.debug(
+                        f"Updated research info for player {research_id}: "
+                        f"researching={packet.get('researching')}, "
+                        f"techs_researched={packet.get('techs_researched')}"
+                    )
+
             # RULESET terrain packet - defines terrain types (Plains, Ocean, Hills, etc.)
             # Used for movement cost calculations and action validity checks
             elif packet_type == PACKET_RULESET_TERRAIN:
@@ -1413,50 +1593,305 @@ class CivCom(Thread):
             'total_trade': getattr(self, 'total_trade', 0)
         }
 
-    def _get_legal_actions_optimized(self, player_id):
-        """Pre-compute and cache top legal actions for LLM"""
-        # Simplified legal actions (would normally compute from game state)
+    def _is_city_producing_coinage(self, city):
+        """Check if a city is producing Coinage (infinite gold generation)
+        
+        Args:
+            city: City packet dict with production_kind and production_value
+            
+        Returns:
+            bool: True if city is producing Coinage, False otherwise
+        """
+        production_kind = city.get('production_kind')
+        production_value = city.get('production_value')
+        
+        # Check if producing an improvement (VUT_IMPROVEMENT = 3)
+        if production_kind != VUT_IMPROVEMENT:
+            return False
+        
+        # Look up the improvement by ID
+        improvement = self.improvements.get(production_value)
+        if not improvement:
+            return False
+        
+        # Check if improvement name is "Coinage"
+        return improvement.get('name') == 'Coinage'
+
+    def _get_unit_actions(self, player_id, max_units=5):
+        """Get per-unit legal actions (NOT CACHED - regenerated every call).
+        
+        Unit actions are not cached because every unit move affects what other units can do.
+        
+        Uses StateExtractor.get_unit_actions() to ensure consistency with
+        unit_actions_query endpoint - same logic, same results.
+        
+        Returns complete action format from StateExtractor with all validation fields:
+        - 'action': action name (e.g., 'move', 'build_city', 'fortify')
+        - 'params': dict of action parameters (e.g., {'direction': 'n'} for move)
+        - 'is_valid': boolean indicating if action can be executed
+        - 'reason': optional string explaining why action is invalid
+        - 'action_id': FreeCiv action constant ID
+        - 'unit_id': unit ID this action applies to
+        - 'type': added field for LLM categorization ('unit_move' or 'unit_action')
+        
+        Args:
+            player_id: The player ID
+            max_units: Maximum number of units to generate actions for
+            
+        Returns:
+            list: List of complete unit action dicts with full validation info
+        """
         actions = []
+        
+        # Import StateExtractor to reuse unit action generation logic
+        from state_extractor import StateExtractor
+        
+        # Handle both dict and list formats for player_units
+        units = self.player_units
+        if isinstance(units, list):
+            units = {str(u.get('id', i)): u for i, u in enumerate(units) if isinstance(u, dict)}
+        elif not isinstance(units, dict):
+            return actions  # Return empty if invalid format
+        
+        # Create StateExtractor instance for action generation
+        extractor = StateExtractor()
+        
+        unit_count = 0
+        for unit_id, unit in units.items():
+            if unit_count >= max_units:
+                break
+            
+            # Only include units with moves remaining
+            if unit.get('moves_left', 0) <= 0:
+                continue
+            
+            unit_count += 1
+            
+            # Use StateExtractor's get_unit_actions which calls _generate_unit_actions
+            # This ensures consistency with unit_actions_query
+            try:
+                result = extractor.get_unit_actions(int(unit_id), player_id)
+                if result.get('error'):
+                    # Skip units with errors
+                    continue
+                
+                # Keep all actions with full detail from StateExtractor
+                # Format: {'action': 'move', 'params': {...}, 'is_valid': True, 'unit_id': ...}
+                # We need to preserve ALL fields for validation
+                for action in result.get('actions', []):
+                    # Skip low-value generic actions
+                    if action.get('action') in ('skip', 'sentry', 'continue_work'):
+                        continue
+                    
+                    # Add type field for LLM categorization while preserving all other fields
+                    action_copy = action.copy()
+                    action_name = action_copy.get('action')
+                    
+                    if action_name == 'move':
+                        action_copy['type'] = 'unit_move'
+                    else:
+                        action_copy['type'] = 'unit_action'
+                    
+                    actions.append(action_copy)
+            except Exception as e:
+                # Log at warning level so errors are visible, but continue processing other units
+                logger.warning(f"Failed to get actions for unit {unit_id}: {e}")
+                continue
+        
+        return actions
 
-        # Unit movement actions (most common)
-        units = getattr(self, 'player_units', [])
-        for unit in units[:5]:  # Limit to 5 units for size
-            if isinstance(unit, dict) and unit.get('moves_left', 0) > 0:
-                unit_id = unit.get('id')
-                x, y = unit.get('x', 0), unit.get('y', 0)
+    def _get_city_production_actions(self, player_id, max_cities=3):
+        """Get per-city production change actions (CACHED per turn).
+        
+        Only returns production actions if:
+        - shield_stock == 0 (production just finished, need new selection)
+        - OR production is Coinage (infinite production, can always change)
+        
+        Args:
+            player_id: The player ID
+            max_cities: Maximum number of cities to generate actions for
+            
+        Returns:
+            list: List of city production action dicts
+        """
+        turn = self.game_turn
+        cache_key = f"{turn}_{player_id}_city_actions"
+        
+        # Check cache first
+        if cache_key in self._action_cache:
+            return self._action_cache[cache_key]
+        
+        actions = []
+        
+        # Handle both dict and list formats for player_cities
+        cities = self.player_cities
+        if isinstance(cities, list):
+            cities = {str(c.get('id', i)): c for i, c in enumerate(cities) if isinstance(c, dict)}
+        elif not isinstance(cities, dict):
+            self._action_cache[cache_key] = actions
+            return actions  # Return empty if invalid format
+        
+        city_count = 0
+        for city_id, city in cities.items():
+            if city_count >= max_cities:
+                break
+            
+            # Check if city owner matches player
+            if city.get('owner') != player_id:
+                continue
+            
+            # Only include cities that need production selection:
+            # 1. Production just finished (shield_stock == 0)
+            # 2. OR producing Coinage (infinite, can always change)
+            shield_stock = city.get('shield_stock', 0)
+            is_coinage = self._is_city_producing_coinage(city)
+            
+            if shield_stock != 0 and not is_coinage:
+                continue  # Skip cities that are mid-production
+            
+            city_count += 1
 
-                # Add movement options
-                for dx, dy in [(0, 1), (1, 0), (0, -1), (-1, 0)]:
-                    actions.append({
-                        'type': 'unit_move',
-                        'unit_id': unit_id,
-                        'dest_x': x + dx,
-                        'dest_y': y + dy,
-                        'priority': 'medium'
-                    })
+            # Generate production options from unit_types and improvements
+            # Filter by server-provided can_build bitvectors (tech prerequisites, obsolescence, etc.)
 
-        # City production actions
-        cities = getattr(self, 'player_cities', [])
-        for city in cities[:3]:  # Limit to 3 cities
-            if isinstance(city, dict):
-                city_id = city.get('id')
+            # Units - only include those the city can actually build
+            for unit_type_id, unit_type in self.unit_types.items():
+                unit_name = unit_type.get('name', '')
+                if not unit_name:
+                    continue
+
+                # Check if city can build this unit (tech prereqs, not obsolete, etc.)
+                unit_id_int = int(unit_type_id) if isinstance(unit_type_id, str) else unit_type_id
+                if not self.can_city_build_unit(city, unit_id_int):
+                    continue
+
                 actions.append({
                     'type': 'city_production',
                     'city_id': city_id,
-                    'production_type': 'warrior',
-                    'priority': 'high'
+                    'city_name': city.get('name', ''),
+                    'production_name': unit_name,
+                    'production_kind': VUT_UTYPE,
+                    'production_value': unit_type_id,
+                    'reason': 'finished' if shield_stock == 0 else 'coinage'
                 })
 
-        # Research actions
-        if not getattr(self, 'current_research', None):
+            # Buildings (improvements) - only include those the city can actually build
+            for building_id, building in self.improvements.items():
+                building_name = building.get('name', '')
+                if not building_name:
+                    continue
+
+                # Check if city can build this improvement (tech prereqs, not already built, etc.)
+                building_id_int = int(building_id) if isinstance(building_id, str) else building_id
+                if not self.can_city_build_improvement(city, building_id_int):
+                    continue
+
+                actions.append({
+                    'type': 'city_production',
+                    'city_id': city_id,
+                    'city_name': city.get('name', ''),
+                    'production_name': building_name,
+                    'production_kind': VUT_IMPROVEMENT,
+                    'production_value': building_id,
+                    'reason': 'finished' if shield_stock == 0 else 'coinage'
+                })
+        
+        # Cache for this turn
+        self._action_cache[cache_key] = actions
+        
+        return actions
+
+    def _get_tech_research_actions(self, player_id):
+        """Get tech research selection actions (CACHED per turn).
+        
+        Only returns tech research actions if:
+        - researching field == A_UNSET (no tech selected, need new selection)
+        
+        This mirrors the city production semantics where we only offer choices
+        when the previous item finished.
+        
+        Args:
+            player_id: The player ID
+            
+        Returns:
+            list: List of tech research action dicts, or empty list if no selection needed
+        """
+        turn = self.game_turn
+        cache_key = f"{turn}_{player_id}_tech_actions"
+        
+        # Check cache first
+        if cache_key in self._action_cache:
+            return self._action_cache[cache_key]
+        
+        actions = []
+        
+        # Check if player needs to select new tech
+        research = self.research_info.get(player_id)
+        if not research:
+            # No research info yet, return empty
+            self._action_cache[cache_key] = actions
+            return actions
+        
+        researching = research.get('researching')
+        
+        # Only generate actions if researching == A_UNSET (no tech selected)
+        if researching != A_UNSET:
+            # Already researching something, no action needed
+            self._action_cache[cache_key] = actions
+            return actions
+        
+        # Get all researchable techs using existing method
+        researchable_techs = self.get_researchable_techs(player_id)
+        
+        # Convert to action format
+        for tech in researchable_techs:
             actions.append({
                 'type': 'tech_research',
-                'tech_name': 'pottery',
-                'priority': 'high'
+                'tech_id': tech['id'],
+                'tech_name': tech['name'],
+                'tech_cost': tech.get('cost', 0),
+                'reason': 'tech_completed'
             })
+        
+        # Cache for this turn
+        self._action_cache[cache_key] = actions
+        
+        return actions
 
-        # Score and filter actions to top 20
-        return self._score_and_filter_actions(actions, 20)
+    def _get_legal_actions_optimized(self, player_id):
+        """Pre-compute top legal actions for LLM with per-category limits.
+        
+        Generates actions using helper methods with smart caching:
+        - Unit actions: NOT cached (regenerated every call)
+        - City production: Cached per turn, only when shield_stock==0 OR Coinage
+        - Tech research: Cached per turn, only when researching==A_UNSET
+        
+        Per-category limits (not global):
+        - Unit actions: max 5 units
+        - City production: max 3 cities  
+        - Tech research: all researchable techs (when needed)
+        
+        Args:
+            player_id: The player ID
+            
+        Returns:
+            list: Combined list of all legal actions from all categories
+        """
+        all_actions = []
+        
+        # Get unit actions (NOT CACHED - always fresh)
+        unit_actions = self._get_unit_actions(player_id, max_units=5)
+        all_actions.extend(unit_actions)
+        
+        # Get city production actions (CACHED per turn, with smart filtering)
+        city_actions = self._get_city_production_actions(player_id, max_cities=3)
+        all_actions.extend(city_actions)
+        
+        # Get tech research actions (CACHED per turn, only when needed)
+        tech_actions = self._get_tech_research_actions(player_id)
+        all_actions.extend(tech_actions)
+        
+        return all_actions
 
     def _score_and_filter_actions(self, actions, max_actions):
         """Score actions and return top N most important"""

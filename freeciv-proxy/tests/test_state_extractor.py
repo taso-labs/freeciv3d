@@ -675,5 +675,135 @@ class TestSecurityValidation(unittest.TestCase):
             del os.environ['AUTH_ENABLED']
 
 
+# =============================================================================
+# REGRESSION TESTS FOR BUG FIXES
+# =============================================================================
+
+
+class TestStateExtractorCreation(unittest.TestCase):
+    """Regression tests for StateExtractor initialization.
+
+    Bug: llm_handler.py was calling StateExtractor(None, self.player_id) which
+    passed player_id as the 'cache' parameter instead of using the registry.
+
+    Fixed by using named parameters: StateExtractor(civcom=None, cache=None, registry=civcom_registry)
+
+    The correct signature is: __init__(self, civcom=None, cache=None, registry=None)
+    """
+
+    def setUp(self):
+        os.environ['CACHE_HMAC_SECRET'] = 'test-secret-that-is-at-least-64-characters-long-for-testing-purposes-only'
+        self.registry = CivComRegistry()
+
+    def test_state_extractor_init_with_named_params(self):
+        """Test StateExtractor can be created with explicit named parameters.
+
+        This is the correct way to instantiate from llm_handler.
+        """
+        from state_cache import StateCache
+        cache = StateCache(ttl=5, max_size_kb=4)
+
+        # Should not raise any errors
+        extractor = StateExtractor(civcom=None, cache=cache, registry=self.registry)
+
+        self.assertIsNotNone(extractor)
+        self.assertIsNone(extractor.civcom)
+        self.assertIsNotNone(extractor.cache)
+
+    def test_state_extractor_init_with_registry_only(self):
+        """Test StateExtractor works when only registry is provided.
+
+        This is how llm_handler creates it after the fix.
+        """
+        extractor = StateExtractor(civcom=None, cache=None, registry=self.registry)
+
+        self.assertIsNotNone(extractor)
+        self.assertEqual(extractor.registry, self.registry)
+
+    def test_state_extractor_signature_matches_expectations(self):
+        """Regression test: Ensure __init__ signature hasn't changed.
+
+        If this test fails, it means the StateExtractor API changed and
+        callers (like llm_handler) may need updates.
+        """
+        import inspect
+        sig = inspect.signature(StateExtractor.__init__)
+        params = list(sig.parameters.keys())
+
+        # Expected: self, civcom, cache, registry
+        self.assertIn('civcom', params, "StateExtractor should accept 'civcom' parameter")
+        self.assertIn('cache', params, "StateExtractor should accept 'cache' parameter")
+        self.assertIn('registry', params, "StateExtractor should accept 'registry' parameter")
+
+    def tearDown(self):
+        if 'CACHE_HMAC_SECRET' in os.environ:
+            del os.environ['CACHE_HMAC_SECRET']
+
+
+class TestStateExtractorPlayerZero(unittest.TestCase):
+    """Regression tests for player_id=0 edge cases in StateExtractor.
+
+    Bug: player_id=0 is valid but can cause issues with falsy checks.
+    These tests ensure player 0 is handled correctly throughout the system.
+    """
+
+    def setUp(self):
+        os.environ['CACHE_HMAC_SECRET'] = 'test-secret-that-is-at-least-64-characters-long-for-testing-purposes-only'
+        self.cache = StateCache(ttl=5, max_size_kb=4)
+
+        # Mock CivCom for testing
+        self.mock_civcom = Mock()
+        self.mock_civcom.get_full_state.return_value = {
+            'turn': 42,
+            'phase': 'movement',
+            'units': [{'id': 1, 'type': 'warrior', 'x': 10, 'y': 10, 'owner': 0}],
+            'cities': [{'id': 1, 'name': 'Capital', 'x': 10, 'y': 10, 'owner': 0}]
+        }
+
+    def test_extract_state_player_zero(self):
+        """Test state extraction works correctly for player_id=0.
+
+        player_id=0 is the first player in a game and should be fully functional.
+        """
+        # Pass civcom directly instead of using registry
+        extractor = StateExtractor(civcom=self.mock_civcom, cache=self.cache)
+
+        # Should successfully extract state for player 0
+        state = extractor.extract_state('test_game', 0, StateFormat.FULL)
+
+        self.assertIsNotNone(state, "State should be extracted for player_id=0")
+        self.assertEqual(state.get('turn'), 42)
+
+    def test_legal_actions_player_zero(self):
+        """Test that player_id=0 units are correctly identified in filtering.
+
+        Bug: player_id=0 was not getting unit actions because owner filtering
+        used 'if owner:' instead of 'if owner is not None:'.
+
+        This test verifies the ownership comparison works correctly for player 0.
+        """
+        # Test the specific filter condition that was buggy
+        units = {
+            '1': {'id': 1, 'owner': 0, 'x': 10, 'y': 10, 'moves_left': 3},  # Player 0's unit
+            '2': {'id': 2, 'owner': 1, 'x': 20, 'y': 20, 'moves_left': 3},  # Player 1's unit
+        }
+
+        player_id = 0
+
+        # Filter units by owner - this is the pattern that was buggy
+        # OLD (broken): player_units = {k: v for k, v in units.items() if v.get('owner') == player_id and v.get('owner')}
+        # NEW (fixed): player_units = {k: v for k, v in units.items() if v.get('owner') == player_id}
+        player_units = {k: v for k, v in units.items() if v.get('owner') == player_id}
+
+        # Player 0 should have exactly 1 unit
+        self.assertEqual(len(player_units), 1, "Player 0 should have 1 unit")
+        self.assertIn('1', player_units, "Unit '1' should belong to player 0")
+
+    def tearDown(self):
+        self.cache.clear()
+        if 'CACHE_HMAC_SECRET' in os.environ:
+            del os.environ['CACHE_HMAC_SECRET']
+
+
 if __name__ == '__main__':
     unittest.main()

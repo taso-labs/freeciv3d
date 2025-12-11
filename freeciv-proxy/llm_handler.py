@@ -839,9 +839,14 @@ class LLMWSHandler(websocket.WebSocketHandler):
         # Action-specific field mappings
         if action_type == "tech_research":
             # Extract tech name from target field
+            # Supports multiple formats: {"value": "tech"}, {"tech": "tech"}, {"tech_name": "tech"}, or "tech"
             target = action_data.get("target", {})
             if isinstance(target, dict) and "value" in target:
                 tech_name = target["value"]
+            elif isinstance(target, dict) and "tech" in target:
+                tech_name = target["tech"]
+            elif isinstance(target, dict) and "tech_name" in target:
+                tech_name = target["tech_name"]
             elif isinstance(target, str):
                 tech_name = target
             else:
@@ -1816,7 +1821,8 @@ class LLMWSHandler(websocket.WebSocketHandler):
             return None
         try:
             # StateExtractor uses civcom_registry for access
-            return StateExtractor(None, self.player_id)
+            # Note: StateExtractor.__init__(civcom, cache, registry) - use named params for clarity
+            return StateExtractor(civcom=None, cache=None, registry=civcom_registry)
         except Exception as e:
             logger.error(f"Failed to create StateExtractor: {e}")
             return None
@@ -2247,8 +2253,10 @@ class LLMWSHandler(websocket.WebSocketHandler):
         actions = []
 
         if game_state:
-            # Tech research action - use inventions from PACKET_RESEARCH_INFO
-            available_techs = self._get_available_techs_from_inventions()
+            # Tech research action - use civcom's authoritative tech filtering
+            # (civcom.get_researchable_techs properly checks prerequisites via can_research_tech)
+            researchable = self.civcom.get_researchable_techs(self.player_id) if self.civcom else []
+            available_techs = [tech['name'] for tech in researchable]
             if available_techs:
                 # Only suggest one tech at a time
                 tech = available_techs[0]
@@ -2299,53 +2307,6 @@ class LLMWSHandler(websocket.WebSocketHandler):
         })
 
         return actions
-
-    def _get_available_techs_from_inventions(self) -> List[str]:
-        """Get available techs using inventions array from PACKET_RESEARCH_INFO.
-
-        Returns techs where prerequisites are met (TECH_PREREQS_KNOWN=1) but
-        not yet researched (TECH_KNOWN=2).
-
-        Returns:
-            List of tech names that can be researched, or fallback list if
-            research data is unavailable.
-        """
-        TECH_PREREQS_KNOWN = 1  # Prerequisites met, can research
-        TECH_KNOWN = 2          # Already researched
-
-        if not self.civcom:
-            return ['Alphabet', 'Bronze Working', 'Pottery']  # Fallback
-
-        # Get research data for this player
-        research_data = getattr(self.civcom, 'research_data', {})
-        player_research = research_data.get(self.player_id, {})
-        inventions = player_research.get('inventions', [])
-
-        if not inventions:
-            return ['Alphabet', 'Bronze Working', 'Pottery']  # Fallback
-
-        # Get tech names dictionary from civcom
-        techs_dict = getattr(self.civcom, 'techs', {})
-
-        available = []
-        for tech_id, status in enumerate(inventions):
-            if status == TECH_PREREQS_KNOWN:  # Prerequisites met, not yet known
-                tech_info = techs_dict.get(tech_id)
-                if tech_info and tech_info.get('name'):
-                    available.append(tech_info['name'])
-
-        # If no techs available via inventions, use fallback
-        if not available:
-            # Check for any unknown techs as fallback
-            for tech_id, status in enumerate(inventions):
-                if status != TECH_KNOWN:
-                    tech_info = techs_dict.get(tech_id)
-                    if tech_info and tech_info.get('name'):
-                        available.append(tech_info['name'])
-                        if len(available) >= 3:
-                            break
-
-        return available or ['Alphabet', 'Bronze Working', 'Pottery']
 
     def _get_fallback_unit_actions(self, game_state: Dict[str, Any]) -> Dict[str, List[Dict[str, Any]]]:
         """Fallback action generation when state_extractor is unavailable."""
@@ -3218,8 +3179,8 @@ class LLMWSHandler(websocket.WebSocketHandler):
     def _get_unit_tile(self, unit_id: int) -> int:
         """Get the tile ID where a unit is currently located.
 
-        This is required for actions like city building that need to know
-        the unit's position on the map.
+        Delegates to civcom.get_unit_tile() which maintains the authoritative
+        unit position data from PACKET_UNIT_INFO packets.
 
         Args:
             unit_id: The unit's ID
@@ -3230,29 +3191,11 @@ class LLMWSHandler(websocket.WebSocketHandler):
         Raises:
             ValueError: If unit not found or tile information unavailable
         """
-        game_state = self._get_current_game_state()
-
-        if not game_state or 'units' not in game_state:
-            raise ValueError(f"No game state available to find unit {unit_id}")
-
-        units = game_state['units']
-        unit = None
-
-        # Handle both dict and list formats (state can be in either format)
-        if isinstance(units, dict):
-            # Try both string and int keys
-            unit = units.get(str(unit_id)) or units.get(unit_id)
-        else:
-            # List format - find by ID
-            unit = next((u for u in units if u.get('id') == unit_id), None)
-
-        if not unit:
-            raise ValueError(f"Unit {unit_id} not found in game state")
-
-        if 'tile' not in unit:
-            raise ValueError(f"Unit {unit_id} has no tile information")
-
-        return unit['tile']
+        if self.civcom:
+            tile = self.civcom.get_unit_tile(unit_id)
+            if tile >= 0:
+                return tile
+        raise ValueError(f"Unit {unit_id} not found or tile unavailable")
 
     def _get_nation_id(self, nation_name: str) -> int:
         """Get nation ID from nation name using dynamically received nation list.
@@ -3490,7 +3433,8 @@ class LLMWSHandler(websocket.WebSocketHandler):
             del llm_agents[self.agent_id]
 
         # Invalidate cache for this player
-        if self.player_id:
+        # Note: player_id=0 is valid, so use 'is not None' instead of falsy check
+        if self.player_id is not None:
             state_cache.invalidate(player_id=self.player_id)
 
         SecurityLogger.log_connection_event(self.agent_id, "DISCONNECTED",

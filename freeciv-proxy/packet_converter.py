@@ -164,8 +164,11 @@ def _convert_action_to_packet_impl(
     # If civcom is provided and contains ruleset data, RulesetMapper will be used
 
     if action_type == "unit_move":
-        # Strict canonical input: expect target: {"x": int, "y": int}
-        # This matches the gateway spec where movement targets are coordinates.
+        # Accept both formats for flexibility:
+        # 1. target: {"x": int, "y": int} (nested object format)
+        # 2. dest_x, dest_y (flat coordinate format)
+        # Internally normalize to dest_x, dest_y for consistency
+        
         map_width = 80
         if (
             civcom
@@ -174,13 +177,26 @@ def _convert_action_to_packet_impl(
             and civcom.map_info.get("width")
         ):
             map_width = civcom.map_info.get("width", 80)
+        
+        # Extract coordinates from either format
+        dest_x = None
+        dest_y = None
+        
+        # Try nested target format first
         target = action.get("target")
-        if not isinstance(target, dict) or "x" not in target or "y" not in target:
+        if target and isinstance(target, dict) and "x" in target and "y" in target:
+            dest_x = int(target["x"])
+            dest_y = int(target["y"])
+        # Try flat format
+        elif "dest_x" in action and "dest_y" in action:
+            dest_x = int(action["dest_x"])
+            dest_y = int(action["dest_y"])
+        else:
             raise ValueError(
-                "unit_move requires 'target' dict with 'x' and 'y' integer fields"
+                "unit_move requires either 'target' dict with 'x' and 'y' keys, "
+                "or 'dest_x' and 'dest_y' integer fields"
             )
-        dest_x = int(target["x"])
-        dest_y = int(target["y"])
+        
         dest_tile = dest_x + dest_y * map_width
 
         src_tile = _get_unit_tile(action.get("unit_id", -1), civcom)
@@ -253,16 +269,19 @@ def _convert_action_to_packet_impl(
         )
 
     elif action_type == "tech_research":
-        # Strict canonical input: expect target: {"tech": "<technology name>"}
+        # Accept both canonical format (target: {"tech": "name"}) and
+        # normalized format (tech_name: "name") from llm_handler normalization
         # A RulesetMapper (via civcom) is required to convert the name to an ID.
-        target = action.get("target")
-        if not isinstance(target, dict) or "tech" not in target:
-            raise ValueError(
-                "tech_research requires 'target' dict with 'tech' name string"
-            )
-        tech_name = target.get("tech")
+        tech_name = action.get("tech_name")
         if not tech_name:
-            raise ValueError("tech_research requires non-empty 'tech' name")
+            # Fall back to canonical format
+            target = action.get("target")
+            if isinstance(target, dict):
+                tech_name = target.get("tech") or target.get("tech_name")
+        if not tech_name:
+            raise ValueError(
+                "tech_research requires 'tech_name' or 'target.tech' with tech name string"
+            )
         if not civcom:
             raise ValueError(
                 "tech_research requires a civcom with ruleset info to map tech names to IDs"
