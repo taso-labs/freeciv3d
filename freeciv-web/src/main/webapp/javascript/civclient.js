@@ -65,6 +65,9 @@ var autojoin_active = false;              // Whether autojoin mode is active
 ****************************************************************************/
 function init_observer_follow_mode()
 {
+  // Clear any existing interval first to prevent memory leaks
+  cleanup_observer_follow_mode();
+
   if (!observing) return;
 
   // Parse follow parameter
@@ -98,8 +101,18 @@ function init_observer_follow_mode()
       observer_center_on_followed_player,
       OBSERVER_AUTO_CENTER_MS
     );
-    // Initial center (with delay to ensure cities loaded)
-    setTimeout(observer_center_on_followed_player, 1000);
+    // Initial center with polling to wait for cities to load (more robust than fixed timeout)
+    var initial_center_attempts = 0;
+    var initial_center_interval = setInterval(function() {
+      initial_center_attempts++;
+      if (typeof cities !== 'undefined' && Object.keys(cities).length > 0) {
+        clearInterval(initial_center_interval);
+        observer_center_on_followed_player();
+      } else if (initial_center_attempts >= 10) {
+        clearInterval(initial_center_interval);
+        console.warn('[Observer] Cities not loaded after 10 attempts, giving up initial center');
+      }
+    }, 500);
   } else {
     console.warn('[Observer] Could not find player to follow:', follow_param);
   }

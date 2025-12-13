@@ -372,16 +372,16 @@ async def get_spectator_url(
         # LLM games always use multiplayer ports (6001-6009), never 6000
         game_port = game_session.get("port")
 
-        if game_port is None or game_port == 6000:
+        if game_port is None or not (6001 <= game_port <= 6009):
             # This shouldn't happen - indicates authentication bug or timing issue
-            logger.warning(f"Game {game_id} has no port or invalid port {game_port}. Session data: {game_session}")
+            logger.warning(f"Game {game_id} has invalid port {game_port}. Status: {game_session.get('status')}")
             raise HTTPException(
                 status_code=409,  # Conflict
                 detail="Game port not assigned. Agents may still be connecting/authenticating. Wait a few seconds and try again."
             )
 
-        # Generate spectator URL
-        base_url = "http://localhost:8080"  # Could be made configurable
+        # Generate spectator URL using configured base URL
+        base_url = settings.freeciv_web_base_url.rstrip("/")
         spectator_url = f"{base_url}/webclient/spectator.jsp?game_id={game_id}&port={game_port}&mode=full"
         logger.info(f"Generated spectator URL for game {game_id}: port={game_port}")
 
@@ -407,6 +407,7 @@ async def get_spectator_url(
 
 
 @router.get("/games/{game_id}/observer-urls")
+@limiter.limit(f"{settings.rate_limit_requests_per_minute}/minute") if limiter else lambda x: x
 async def get_observer_urls(
     game_id: str,
     request: Request
@@ -433,10 +434,10 @@ async def get_observer_urls(
         # Get the game port - MUST be set and valid for multiplayer
         game_port = game_session.get("port")
 
-        if game_port is None or game_port == 6000:
+        if game_port is None or not (6001 <= game_port <= 6009):
             logger.warning(
-                f"Game {game_id} has no port or invalid port {game_port}. "
-                f"Session data: {game_session}"
+                f"Game {game_id} has invalid port {game_port}. "
+                f"Status: {game_session.get('status')}"
             )
             raise HTTPException(
                 status_code=409,
