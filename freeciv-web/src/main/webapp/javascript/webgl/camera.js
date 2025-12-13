@@ -27,6 +27,53 @@ var camera_current_y = 0;
 var camera_current_z = 0;
 var slide_init = false;
 
+/****************************************************************************
+  Camera presets for observer views.
+  Each preset defines offsets that create different viewing angles:
+  - dx: lateral offset (X axis)
+  - dy: height offset (Y axis) - higher = more top-down view
+  - dz: depth offset (Z axis) - higher = more distant/angled view
+
+  Viewing angle from horizontal ≈ atan(dy/dz)
+****************************************************************************/
+var camera_presets = {
+  'default':    { dx: 50,  dy: 410, dz: 242 },  // ~60° - standard view
+  'strategic':  { dx: 50,  dy: 800, dz: 100 },  // ~83° - near top-down overview
+  'cinematic':  { dx: 50,  dy: 300, dz: 400 },  // ~37° - low dramatic angle
+  'isometric':  { dx: 50,  dy: 500, dz: 500 },  // 45° - classic strategy game
+};
+
+/****************************************************************************
+  Apply a camera preset by name.
+  @param {string} preset_name - One of: default, strategic, cinematic, isometric
+****************************************************************************/
+function set_camera_preset(preset_name)
+{
+  var preset = camera_presets[preset_name] || camera_presets['default'];
+  camera_dx = preset.dx;
+  camera_dy = preset.dy;
+  camera_dz = preset.dz;
+
+  // Re-apply camera position with new offsets if camera has a current position
+  if (camera_current_x !== 0 || camera_current_z !== 0) {
+    camera_look_at(camera_current_x, camera_current_y, camera_current_z);
+  }
+}
+
+/****************************************************************************
+  Initialize camera preset from URL parameter.
+  Parses ?camera=preset_name and applies the preset if valid.
+****************************************************************************/
+function init_camera_from_url_params()
+{
+  if (typeof $ !== 'undefined' && $.getUrlVar) {
+    var camera_param = $.getUrlVar('camera');
+    if (camera_param) {
+      set_camera_preset(camera_param);
+    }
+  }
+}
+
 
 /****************************************************************************
   Point the camera to look at point x, y, z in Three.js coordinates.

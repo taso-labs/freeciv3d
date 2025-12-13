@@ -7,6 +7,8 @@ REST API endpoints for LLM Gateway
 
 import logging
 from typing import Dict, Any, List, Optional
+from urllib.parse import quote
+import uuid
 from fastapi import APIRouter, HTTPException, Query, Depends, Header, Request
 from pydantic import BaseModel, Field, ValidationError
 
@@ -404,41 +406,89 @@ async def get_spectator_url(
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
-@router.get("/games")
-async def list_games(
-    request: Request,
-    status: Optional[str] = Query(None, description="Filter by game status")
+@router.get("/games/{game_id}/observer-urls")
+async def get_observer_urls(
+    game_id: str,
+    request: Request
 ) -> Dict[str, Any]:
-    """List all active games available for spectating"""
+    """
+    Get observer URLs for embedding game views in agent-clash-client.
+
+    Returns 3 observer URLs:
+    - global: Bird's eye view with strategic camera preset
+    - player1: AI*1's perspective with fog-of-war and cinematic camera
+    - player2: AI*2's perspective with fog-of-war and cinematic camera
+
+    All URLs include embed=1 and autojoin=1 for seamless iframe embedding.
+    """
     try:
         gw = get_gateway()
 
-        games = []
-        for game_id, session in gw.game_sessions.items():
-            game_status = session.get("status", "unknown")
+        # Check if game exists
+        if game_id not in gw.game_sessions:
+            raise HTTPException(status_code=404, detail="Game not found")
 
-            # Filter by status if provided
-            if status and game_status != status:
-                continue
+        game_session = gw.game_sessions[game_id]
 
-            games.append({
-                "game_id": game_id,
-                "port": session.get("port", 6000),
-                "status": game_status,
-                "players": len(session.get("agents", {})),
-                "created_at": session.get("created_at"),
-                "turn": session.get("turn", 0),
-                "spectator_url": f"http://localhost:8080/webclient/spectator.jsp?game_id={game_id}&port={session.get('port', 6000)}&mode=full"
-            })
+        # Get the game port - MUST be set and valid for multiplayer
+        game_port = game_session.get("port")
 
-        return {
-            "success": True,
-            "games": games,
-            "total": len(games)
+        if game_port is None or game_port == 6000:
+            logger.warning(
+                f"Game {game_id} has no port or invalid port {game_port}. "
+                f"Session data: {game_session}"
+            )
+            raise HTTPException(
+                status_code=409,
+                detail="Game port not assigned. Agents may still be connecting. "
+                       "Wait a few seconds and try again."
+            )
+
+        # Build observer URLs using configured base URL
+        base_url = settings.freeciv_web_base_url.rstrip("/")
+        webclient_path = f"{base_url}/webclient/"
+
+        # URL-encode AI player names using quote() for proper encoding
+        # AI*1 -> AI%2A1 (the * character needs to be percent-encoded)
+        ai_player1_encoded = quote("AI*1", safe="")
+        ai_player2_encoded = quote("AI*2", safe="")
+
+        # Generate unique viewer names to prevent WebSocket conflicts
+        # when multiple viewers connect to the same game
+        unique_suffix = uuid.uuid4().hex[:8]
+        global_viewer_name = f"global_view_{unique_suffix}"
+        player1_viewer_name = f"player1_view_{unique_suffix}"
+        player2_viewer_name = f"player2_view_{unique_suffix}"
+
+        observer_urls = {
+            "global": (
+                f"{webclient_path}?action=observe&civserverport={game_port}"
+                f"&embed=1&autojoin=1&name={global_viewer_name}&camera=strategic"
+            ),
+            "player1": (
+                f"{webclient_path}?action=observe&civserverport={game_port}"
+                f"&observe_player={ai_player1_encoded}&follow={ai_player1_encoded}"
+                f"&embed=1&autojoin=1&name={player1_viewer_name}&camera=cinematic"
+            ),
+            "player2": (
+                f"{webclient_path}?action=observe&civserverport={game_port}"
+                f"&observe_player={ai_player2_encoded}&follow={ai_player2_encoded}"
+                f"&embed=1&autojoin=1&name={player2_viewer_name}&camera=cinematic"
+            )
         }
 
+        logger.info(f"Generated observer URLs for game {game_id}: port={game_port}")
+
+        return {
+            "game_id": game_id,
+            "civserver_port": game_port,
+            "observer_urls": observer_urls
+        }
+
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Error listing games: {e}")
+        logger.error(f"Error getting observer URLs for game {game_id}: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
