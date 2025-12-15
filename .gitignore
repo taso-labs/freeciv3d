@@ -105,3 +105,4 @@ freeciv-web/src/main/webapp/javascript/packhand_gen.js
 
 # Documentation (generated/local)
 docs/
+*Zone.Identifier
