@@ -309,13 +309,18 @@ describe('Observer Player Attachment', () => {
   // ===========================================================================
 
   describe('observe player edge cases', () => {
-    test('should handle player name with spaces', () => {
+    test('should block player name with spaces (security)', () => {
+      // Spaces are blocked to prevent command injection
+      const consoleSpy = jest.spyOn(console, 'error').mockImplementation();
       setUrlParams({ observe_player: 'Player One' });
 
       init_observe_player_mode();
       execute_observe_player_attachment();
 
-      expect(send_message).toHaveBeenCalledWith('/observe Player One');
+      // Should NOT send message due to security validation
+      expect(send_message).not.toHaveBeenCalled();
+      expect(consoleSpy).toHaveBeenCalled();
+      consoleSpy.mockRestore();
     });
 
     test('should handle numeric player name', () => {
@@ -336,6 +341,94 @@ describe('Observer Player Attachment', () => {
 
       expect(send_message).toHaveBeenCalledWith('/observe DirectPlayer');
       expect(global.observe_player).toBe('DirectPlayer');
+    });
+  });
+
+  describe('Security: Command Injection Prevention', () => {
+    beforeEach(() => {
+      send_message.mockClear();
+      global.observe_player = null;
+      // Add safe player name regex to global
+      global.SAFE_PLAYER_NAME_REGEX = /^[a-zA-Z0-9_*-]+$/;
+    });
+
+    test('should block command injection attempt with semicolon', () => {
+      const consoleSpy = jest.spyOn(console, 'error').mockImplementation();
+
+      request_observe_player(';/surrender');
+
+      expect(send_message).not.toHaveBeenCalled();
+      expect(consoleSpy).toHaveBeenCalledWith(
+        '[Observer] Invalid player name contains unsafe characters:',
+        ';/surrender'
+      );
+      consoleSpy.mockRestore();
+    });
+
+    test('should block command injection attempt with spaces', () => {
+      const consoleSpy = jest.spyOn(console, 'error').mockImplementation();
+
+      request_observe_player('player /surrender');
+
+      expect(send_message).not.toHaveBeenCalled();
+      expect(consoleSpy).toHaveBeenCalled();
+      consoleSpy.mockRestore();
+    });
+
+    test('should block command injection attempt with newline', () => {
+      const consoleSpy = jest.spyOn(console, 'error').mockImplementation();
+
+      request_observe_player('player\n/surrender');
+
+      expect(send_message).not.toHaveBeenCalled();
+      consoleSpy.mockRestore();
+    });
+
+    test('should allow valid AI*1 player name', () => {
+      request_observe_player('AI*1');
+
+      expect(send_message).toHaveBeenCalledWith('/observe AI*1');
+      expect(global.observe_player).toBe('AI*1');
+    });
+
+    test('should allow valid alphanumeric player name', () => {
+      request_observe_player('Player123');
+
+      expect(send_message).toHaveBeenCalledWith('/observe Player123');
+    });
+
+    test('should allow valid player name with underscores and hyphens', () => {
+      request_observe_player('Player_1-test');
+
+      expect(send_message).toHaveBeenCalledWith('/observe Player_1-test');
+    });
+
+    test('should block player name with special characters', () => {
+      const consoleSpy = jest.spyOn(console, 'error').mockImplementation();
+
+      request_observe_player('player<script>');
+
+      expect(send_message).not.toHaveBeenCalled();
+      consoleSpy.mockRestore();
+    });
+
+    test('execute_observe_player_attachment should validate stored player name', () => {
+      const consoleSpy = jest.spyOn(console, 'error').mockImplementation();
+      global.observe_player = ';malicious';
+
+      execute_observe_player_attachment();
+
+      expect(send_message).not.toHaveBeenCalled();
+      expect(consoleSpy).toHaveBeenCalled();
+      consoleSpy.mockRestore();
+    });
+
+    test('execute_observe_player_attachment should allow valid stored player name', () => {
+      global.observe_player = 'AI*2';
+
+      execute_observe_player_attachment();
+
+      expect(send_message).toHaveBeenCalledWith('/observe AI*2');
     });
   });
 });

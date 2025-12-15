@@ -575,11 +575,21 @@ global.get_observe_player_param = function() {
   return param.trim();
 };
 
+// Player name validation regex - allows letters, numbers, underscore, asterisk (for AI*1), hyphen
+global.SAFE_PLAYER_NAME_REGEX = /^[a-zA-Z0-9_*-]+$/;
+
 /**
  * Send /observe command to attach to a specific player or observe globally.
+ * SECURITY: Validates player_name to prevent command injection attacks.
  * @param {string|null} player_name - Player name to observe, or null for global
  */
 global.request_observe_player = function(player_name) {
+  // SECURITY: Validate player name contains only safe characters
+  if (player_name && !global.SAFE_PLAYER_NAME_REGEX.test(player_name)) {
+    console.error('[Observer] Invalid player name contains unsafe characters:', player_name);
+    return;
+  }
+
   global.observe_player = player_name;
 
   if (typeof global.send_message === 'function') {
@@ -606,9 +616,16 @@ global.init_observe_player_mode = function() {
 /**
  * Execute observer attachment after successful login.
  * Sends /observe command if observe_player was set during initialization.
+ * SECURITY: Validates player name format to prevent command injection.
  */
 global.execute_observe_player_attachment = function() {
   if (!global.observe_player || global.observe_player === '') {
+    return;
+  }
+
+  // SECURITY: Validate player name format to prevent command injection
+  if (!global.SAFE_PLAYER_NAME_REGEX.test(global.observe_player)) {
+    console.error('[Observer] Invalid player name contains unsafe characters:', global.observe_player);
     return;
   }
 

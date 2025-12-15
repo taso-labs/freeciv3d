@@ -456,10 +456,11 @@ async def get_observer_urls(
 
         # Generate unique viewer names to prevent WebSocket conflicts
         # when multiple viewers connect to the same game
+        # URL-encode for consistency (even though these names are alphanumeric)
         unique_suffix = uuid.uuid4().hex[:8]
-        global_viewer_name = f"global_view_{unique_suffix}"
-        player1_viewer_name = f"player1_view_{unique_suffix}"
-        player2_viewer_name = f"player2_view_{unique_suffix}"
+        global_viewer_name = quote(f"global_view_{unique_suffix}", safe="")
+        player1_viewer_name = quote(f"player1_view_{unique_suffix}", safe="")
+        player2_viewer_name = quote(f"player2_view_{unique_suffix}", safe="")
 
         observer_urls = {
             "global": (

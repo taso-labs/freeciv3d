@@ -50,6 +50,13 @@ var camera_presets = {
 function set_camera_preset(preset_name)
 {
   var preset = camera_presets[preset_name] || camera_presets['default'];
+
+  // Validate preset has required numeric properties (defensive coding)
+  if (typeof preset.dx !== 'number' || typeof preset.dy !== 'number' || typeof preset.dz !== 'number') {
+    console.error('[Camera] Invalid preset:', preset_name, '- missing or invalid dx/dy/dz, using default');
+    preset = camera_presets['default'];
+  }
+
   camera_dx = preset.dx;
   camera_dy = preset.dy;
   camera_dz = preset.dz;

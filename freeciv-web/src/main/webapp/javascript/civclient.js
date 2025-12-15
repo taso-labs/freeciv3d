@@ -47,11 +47,19 @@ var dialog_close_trigger = "";
 var dialog_message_close_task;
 
 // Observer follow mode state
-var observer_follow_player = null;       // Player ID to follow, or null for global
-var observer_auto_center_interval = null; // Interval timer ID
-var OBSERVER_AUTO_CENTER_MS = 5000;       // Re-center every 5 seconds
+var observer_follow_player = null;        // Player ID to follow, or null for global
+var observer_auto_center_interval = null; // Interval timer ID for periodic re-centering
+var observer_initial_center_interval = null; // Interval timer ID for initial center polling
+var OBSERVER_AUTO_CENTER_MS = 5000;       // Default re-center interval (5 seconds)
+var MIN_AUTOCENTER_MS = 1000;             // Minimum autocenter interval (1 second)
+var MAX_AUTOCENTER_MS = 60000;            // Maximum autocenter interval (60 seconds)
+var MAX_INITIAL_CENTER_ATTEMPTS = 10;     // Max polling attempts for initial center
+var INITIAL_CENTER_POLL_INTERVAL_MS = 500; // Polling interval for initial center (500ms)
 var embed_mode = false;                   // Embed mode for iframe viewing
 var keyboard_input_enabled = true;        // Keyboard input enabled flag
+
+// Player name validation regex - allows letters, numbers, underscore, asterisk (for AI*1), hyphen
+var SAFE_PLAYER_NAME_REGEX = /^[a-zA-Z0-9_*-]+$/;
 
 // Observer player attachment state
 var observe_player = null;                // Player name to attach to, or null for global
@@ -74,23 +82,26 @@ function init_observer_follow_mode()
   var follow_param = $.getUrlVar('follow');
   if (!follow_param) return;
 
-  // Parse autocenter interval
+  // Parse autocenter interval with bounds checking to prevent DoS
   var autocenter_param = $.getUrlVar('autocenter');
   if (autocenter_param) {
     var parsed = parseInt(autocenter_param);
-    if (!isNaN(parsed) && parsed > 0) {
+    if (!isNaN(parsed) && parsed >= MIN_AUTOCENTER_MS && parsed <= MAX_AUTOCENTER_MS) {
       OBSERVER_AUTO_CENTER_MS = parsed;
+    } else {
+      console.warn('[Observer] Invalid autocenter value (must be ' + MIN_AUTOCENTER_MS + '-' + MAX_AUTOCENTER_MS + 'ms), using default:', OBSERVER_AUTO_CENTER_MS);
     }
   }
 
-  // Find player by name, username, or playerno
+  // Find player by name, username, or playerno (with null checks for defensive coding)
   for (var player_id in players) {
     var player = players[player_id];
-    if (player['name'] === follow_param ||
-        player['username'] === follow_param ||
-        player['playerno'].toString() === follow_param) {
+    if (player && (
+        player['name'] === follow_param ||
+        (player['username'] && player['username'] === follow_param) ||
+        (player['playerno'] !== undefined && player['playerno'].toString() === follow_param))) {
       observer_follow_player = player['playerno'];
-      console.log('[Observer] Following player:', player['name'], 'id:', observer_follow_player);
+      console.log('[Observer] Following player:', player['name'] || 'Unknown', 'id:', observer_follow_player);
       break;
     }
   }
@@ -103,16 +114,18 @@ function init_observer_follow_mode()
     );
     // Initial center with polling to wait for cities to load (more robust than fixed timeout)
     var initial_center_attempts = 0;
-    var initial_center_interval = setInterval(function() {
+    observer_initial_center_interval = setInterval(function() {
       initial_center_attempts++;
       if (typeof cities !== 'undefined' && Object.keys(cities).length > 0) {
-        clearInterval(initial_center_interval);
+        clearInterval(observer_initial_center_interval);
+        observer_initial_center_interval = null;
         observer_center_on_followed_player();
-      } else if (initial_center_attempts >= 10) {
-        clearInterval(initial_center_interval);
-        console.warn('[Observer] Cities not loaded after 10 attempts, giving up initial center');
+      } else if (initial_center_attempts >= MAX_INITIAL_CENTER_ATTEMPTS) {
+        clearInterval(observer_initial_center_interval);
+        observer_initial_center_interval = null;
+        console.warn('[Observer] Cities not loaded after', MAX_INITIAL_CENTER_ATTEMPTS, 'attempts, giving up initial center');
       }
-    }, 500);
+    }, INITIAL_CENTER_POLL_INTERVAL_MS);
   } else {
     console.warn('[Observer] Could not find player to follow:', follow_param);
   }
@@ -156,7 +169,7 @@ function observer_center_on_followed_player()
     var ptile = city_tile(target_city);
     if (ptile) {
       center_tile_mapcanvas(ptile);
-      console.log('[Observer] Centered on', target_city['name'], 'size:', target_city['size']);
+      console.log('[Observer] Centered on', target_city['name'] || 'Unknown', 'size:', target_city['size'] || 0);
     }
   } else {
     console.log('[Observer] No cities found for player', observer_follow_player);
@@ -171,6 +184,10 @@ function cleanup_observer_follow_mode()
   if (observer_auto_center_interval) {
     clearInterval(observer_auto_center_interval);
     observer_auto_center_interval = null;
+  }
+  if (observer_initial_center_interval) {
+    clearInterval(observer_initial_center_interval);
+    observer_initial_center_interval = null;
   }
   observer_follow_player = null;
 }
@@ -371,9 +388,16 @@ function get_observe_player_param()
 /****************************************************************************
   Send /observe command to attach to a specific player or observe globally.
   player_name: Player name to observe, or null for global observation.
+  SECURITY: Validates player_name to prevent command injection attacks.
 ****************************************************************************/
 function request_observe_player(player_name)
 {
+  // SECURITY: Validate player name contains only safe characters
+  if (player_name && !SAFE_PLAYER_NAME_REGEX.test(player_name)) {
+    console.error('[Observer] Invalid player name contains unsafe characters:', player_name);
+    return;
+  }
+
   observe_player = player_name;
 
   if (typeof send_message === 'function') {
@@ -401,11 +425,32 @@ function init_observe_player_mode()
 /****************************************************************************
   Execute observer attachment after successful login.
   Sends /observe command if observe_player was set during initialization.
+  SECURITY: Validates player name format to prevent command injection.
 ****************************************************************************/
 function execute_observe_player_attachment()
 {
   if (!observe_player || observe_player === '') {
     return;
+  }
+
+  // SECURITY: Validate player name format to prevent command injection
+  if (!SAFE_PLAYER_NAME_REGEX.test(observe_player)) {
+    console.error('[Observer] Invalid player name contains unsafe characters:', observe_player);
+    return;
+  }
+
+  // VALIDATION: Check if player exists (optional - warn but proceed, server will reject if invalid)
+  var player_exists = false;
+  if (typeof players !== 'undefined') {
+    for (var player_id in players) {
+      if (players[player_id] && players[player_id]['name'] === observe_player) {
+        player_exists = true;
+        break;
+      }
+    }
+    if (!player_exists) {
+      console.warn('[Observer] Player not found:', observe_player, '- proceeding anyway');
+    }
   }
 
   if (typeof send_message === 'function') {
