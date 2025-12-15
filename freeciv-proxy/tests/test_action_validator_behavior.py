@@ -112,25 +112,25 @@ class TestUnitStateActionValidation(unittest.TestCase):
         )
 
     def test_unit_fortify_missing_unit_id(self):
-        """Fortify without unit_id should fail with E050"""
+        """Fortify without unit_id should fail with E010 (standardized error code)"""
         action = {"type": "unit_fortify"}
         result = self.validator.validate_action(action, self.player_id, GAME_STATE)
         self.assertFalse(result.is_valid)
-        self.assertEqual(result.error_code, "E050")
+        self.assertEqual(result.error_code, "E010")
 
     def test_unit_fortify_wrong_player(self):
-        """Fortify unit owned by another player should fail with E052"""
+        """Fortify unit owned by another player should fail with E231 (standardized)"""
         action = {"type": "unit_fortify", "unit_id": 99}  # Owned by player 2
         result = self.validator.validate_action(action, self.player_id, GAME_STATE)
         self.assertFalse(result.is_valid)
-        self.assertEqual(result.error_code, "E052")
+        self.assertEqual(result.error_code, "E231")
 
     def test_unit_fortify_unit_not_found(self):
-        """Fortify non-existent unit should fail with E051"""
+        """Fortify non-existent unit should fail with E230 (standardized)"""
         action = {"type": "unit_fortify", "unit_id": 9999}
         result = self.validator.validate_action(action, self.player_id, GAME_STATE)
         self.assertFalse(result.is_valid)
-        self.assertEqual(result.error_code, "E051")
+        self.assertEqual(result.error_code, "E230")
 
     def test_unit_fortify_without_game_state(self):
         """Fortify should work without game state (minimal validation)"""
@@ -149,11 +149,11 @@ class TestUnitStateActionValidation(unittest.TestCase):
         self.assertTrue(result.is_valid)
 
     def test_unit_sentry_missing_unit_id(self):
-        """Sentry without unit_id should fail with E060"""
+        """Sentry without unit_id should fail with E010 (standardized)"""
         action = {"type": "unit_sentry"}
         result = self.validator.validate_action(action, self.player_id, GAME_STATE)
         self.assertFalse(result.is_valid)
-        self.assertEqual(result.error_code, "E060")
+        self.assertEqual(result.error_code, "E010")
 
     def test_unit_sentry_wrong_player(self):
         """Sentry unit owned by another player should fail"""
@@ -566,11 +566,11 @@ class TestTerrainActionValidation(unittest.TestCase):
         self.assertTrue(result.is_valid)
 
     def test_build_road_missing_unit(self):
-        """Build road without unit_id should fail with E070"""
+        """Build road without unit_id should fail with E010 (standardized)"""
         action = {"type": "unit_build_road"}
         result = self.validator.validate_action(action, self.player_id, GAME_STATE)
         self.assertFalse(result.is_valid)
-        self.assertEqual(result.error_code, "E070")
+        self.assertEqual(result.error_code, "E010")
 
     def test_build_road_wrong_player(self):
         """Build road with unit owned by other player should fail"""
@@ -599,11 +599,11 @@ class TestTerrainActionValidation(unittest.TestCase):
         self.assertTrue(result.is_valid)
 
     def test_build_irrigation_missing_unit(self):
-        """Build irrigation without unit_id should fail with E080"""
+        """Build irrigation without unit_id should fail with E010 (standardized)"""
         action = {"type": "unit_build_irrigation"}
         result = self.validator.validate_action(action, self.player_id, GAME_STATE)
         self.assertFalse(result.is_valid)
-        self.assertEqual(result.error_code, "E080")
+        self.assertEqual(result.error_code, "E010")
 
     def test_build_irrigation_wrong_player(self):
         """Build irrigation with unit owned by other player should fail"""
@@ -634,11 +634,11 @@ class TestTerrainActionValidation(unittest.TestCase):
         self.assertTrue(result.is_valid)
 
     def test_build_mine_missing_unit(self):
-        """Build mine without unit_id should fail with E090"""
+        """Build mine without unit_id should fail with E010 (standardized)"""
         action = {"type": "unit_build_mine"}
         result = self.validator.validate_action(action, self.player_id, GAME_STATE)
         self.assertFalse(result.is_valid)
-        self.assertEqual(result.error_code, "E090")
+        self.assertEqual(result.error_code, "E010")
 
     def test_build_mine_wrong_player(self):
         """Build mine with unit owned by other player should fail"""
@@ -841,6 +841,113 @@ class TestActionCategoryMapping(unittest.TestCase):
 # =============================================================================
 # Input Validation & Security Tests
 # =============================================================================
+
+
+class TestUnitMovesValidation(unittest.TestCase):
+    """Test unit action validation for moves_left (E023/E024 fix)
+
+    This validates that units with no moves remaining are rejected at submission time,
+    even if they appeared in legal_actions. This prevents stale actions (E023).
+    """
+
+    def setUp(self):
+        self.validator = LLMActionValidator()
+        self.player_id = 1
+
+        # Game state with an exhausted unit (no moves left)
+        self.GAME_STATE_WITH_EXHAUSTED_UNIT = {
+            "turn": 15,
+            "phase": "movement",
+            "map_info": {"width": 80, "height": 50},
+            "units": {
+                48: {
+                    "id": 48,
+                    "type": "Warrior",
+                    "x": 10,
+                    "y": 20,
+                    "owner": 1,
+                    "moves_left": 0,  # Exhausted unit
+                },
+                49: {
+                    "id": 49,
+                    "type": "Workers",
+                    "x": 15,
+                    "y": 25,
+                    "owner": 1,
+                    "moves_left": 0,  # Exhausted worker
+                },
+            },
+            "cities": {},
+            "players": {1: {"id": 1, "name": "Player1"}},
+        }
+
+    def test_unit_fortify_exhausted_fails_with_E024(self):
+        """Fortify with exhausted unit should fail with E024"""
+        action = {"type": "unit_fortify", "unit_id": 48}
+        result = self.validator.validate_action(
+            action, self.player_id, self.GAME_STATE_WITH_EXHAUSTED_UNIT
+        )
+        self.assertFalse(result.is_valid)
+        self.assertEqual(result.error_code, "E024")
+        self.assertIn("no moves remaining", result.error_message)
+
+    def test_unit_sentry_exhausted_fails_with_E024(self):
+        """Sentry with exhausted unit should fail with E024"""
+        action = {"type": "unit_sentry", "unit_id": 48}
+        result = self.validator.validate_action(
+            action, self.player_id, self.GAME_STATE_WITH_EXHAUSTED_UNIT
+        )
+        self.assertFalse(result.is_valid)
+        self.assertEqual(result.error_code, "E024")
+
+    def test_unit_build_road_exhausted_fails_with_E024(self):
+        """Build road with exhausted worker should fail with E024"""
+        action = {"type": "unit_build_road", "unit_id": 49}
+        result = self.validator.validate_action(
+            action, self.player_id, self.GAME_STATE_WITH_EXHAUSTED_UNIT
+        )
+        self.assertFalse(result.is_valid)
+        self.assertEqual(result.error_code, "E024")
+
+    def test_unit_build_irrigation_exhausted_fails_with_E024(self):
+        """Build irrigation with exhausted worker should fail with E024"""
+        action = {"type": "unit_build_irrigation", "unit_id": 49}
+        result = self.validator.validate_action(
+            action, self.player_id, self.GAME_STATE_WITH_EXHAUSTED_UNIT
+        )
+        self.assertFalse(result.is_valid)
+        self.assertEqual(result.error_code, "E024")
+
+    def test_unit_build_mine_exhausted_fails_with_E024(self):
+        """Build mine with exhausted worker should fail with E024"""
+        action = {"type": "unit_build_mine", "unit_id": 49}
+        result = self.validator.validate_action(
+            action, self.player_id, self.GAME_STATE_WITH_EXHAUSTED_UNIT
+        )
+        self.assertFalse(result.is_valid)
+        self.assertEqual(result.error_code, "E024")
+
+    def test_unit_with_moves_passes_validation(self):
+        """Unit with moves remaining should pass validation"""
+        action = {"type": "unit_fortify", "unit_id": 42}
+        result = self.validator.validate_action(action, self.player_id, GAME_STATE)
+        self.assertTrue(result.is_valid)
+
+    def test_unit_destroyed_between_legal_actions_and_submission(self):
+        """Unit destroyed after legal_actions (not in game state) should fail with E230"""
+        # Simulate: legal_actions included unit 42, but it was destroyed
+        state_without_unit = {
+            "turn": 15,
+            "map_info": {"width": 80, "height": 50},
+            "units": {},  # Unit 42 no longer exists
+            "cities": {},
+            "players": {1: {"id": 1, "name": "Player1"}},
+        }
+        action = {"type": "unit_fortify", "unit_id": 42}
+        result = self.validator.validate_action(action, self.player_id, state_without_unit)
+        self.assertFalse(result.is_valid)
+        self.assertEqual(result.error_code, "E230")
+        self.assertIn("not found", result.error_message)
 
 
 class TestInputValidatorIntegration(unittest.TestCase):

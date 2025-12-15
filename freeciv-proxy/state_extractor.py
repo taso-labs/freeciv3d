@@ -1945,8 +1945,8 @@ class StateExtractor:
         return {
             'cities': {
                 'count': len(cities),
-                'total_population': sum(c['population'] for c in cities),
-                'production_focus': [c['production'] for c in cities],
+                'total_population': sum(c.get('population', 0) for c in cities),
+                'production_focus': [c.get('production', 'unknown') for c in cities],
                 'growth_potential': self._assess_growth_potential(cities)
             },
             'resources': {

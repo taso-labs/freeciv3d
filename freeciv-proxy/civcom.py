@@ -354,6 +354,34 @@ class CivCom(Thread):
         # Tile data storage for terrain lookups
         self.tiles = {}  # {tile_index: {terrain, extras, ...}}
 
+    def invalidate_action_cache(self, player_id=None, cache_type=None):
+        """Invalidate cached actions when game state changes.
+
+        This should be called when:
+        - Tech research state changes (PACKET_RESEARCH_INFO with new researching value)
+        - City production completes
+        - Any state change that affects legal actions
+
+        Args:
+            player_id: Specific player to invalidate, or None for all players
+            cache_type: 'tech', 'city', or None for all types
+        """
+        keys_to_remove = []
+
+        for key in self._action_cache:
+            # Cache key format: "{turn}_{player_id}_{type}_actions"
+            if player_id is not None and f"_{player_id}_" not in key:
+                continue
+            if cache_type is not None and f"_{cache_type}_" not in key:
+                continue
+            keys_to_remove.append(key)
+
+        for key in keys_to_remove:
+            del self._action_cache[key]
+
+        if keys_to_remove:
+            logger.debug(f"Invalidated {len(keys_to_remove)} action cache entries for player={player_id}, type={cache_type}")
+
     def get_unit_tile(self, unit_id: int) -> int:
         """Return the tile index of a unit by id. Returns -1 if unknown.
 
@@ -1450,12 +1478,28 @@ class CivCom(Thread):
             elif packet_type == PACKET_RESEARCH_INFO:
                 research_id = packet.get('id')
                 if research_id is not None:
+                    # Check if research state changed to invalidate tech action cache
+                    old_research = self.research_info.get(research_id, {})
+                    old_researching = old_research.get('researching')
+                    new_researching = packet.get('researching')
+
+                    # Update research info
                     self.research_info[research_id] = packet
-                    logger.debug(
-                        f"Updated research info for player {research_id}: "
-                        f"researching={packet.get('researching')}, "
-                        f"techs_researched={packet.get('techs_researched')}"
-                    )
+
+                    # If researching state changed, invalidate tech action cache
+                    # This ensures legal_actions returns fresh tech choices after selection
+                    if old_researching != new_researching:
+                        self.invalidate_action_cache(research_id, 'tech')
+                        logger.info(
+                            f"Research state changed for player {research_id}: "
+                            f"{old_researching} -> {new_researching}, tech action cache invalidated"
+                        )
+                    else:
+                        logger.debug(
+                            f"Updated research info for player {research_id}: "
+                            f"researching={new_researching}, "
+                            f"techs_researched={packet.get('techs_researched')}"
+                        )
 
             # RULESET terrain packet - defines terrain types (Plains, Ocean, Hills, etc.)
             # Used for movement cost calculations and action validity checks
