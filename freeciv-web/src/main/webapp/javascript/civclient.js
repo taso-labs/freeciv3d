@@ -323,18 +323,30 @@ function validate_autojoin_username(name)
 
 /****************************************************************************
   Get the username for autojoin mode.
-  Uses URL param if provided and valid, otherwise generates a random name.
+  Uses URL param base if provided, with random suffix for uniqueness.
+  This ensures page refreshes don't cause "username already connected" errors.
 ****************************************************************************/
 function get_autojoin_username()
 {
   var name_param = $.getUrlVar('name');
+  var random_suffix = '_' + Math.random().toString(36).substring(2, 6);
 
   if (name_param) {
-    // Trim whitespace
+    // Trim whitespace and any existing random suffix
     name_param = name_param.trim();
+    // Remove any existing suffix (e.g., global_view_abc123_xyz9 -> global_view_abc123)
+    var base_name = name_param.replace(/_[a-z0-9]{4}$/, '');
 
-    if (validate_autojoin_username(name_param)) {
-      return name_param;
+    // Add new random suffix to make connection unique
+    var unique_name = base_name + random_suffix;
+
+    // Ensure total length is valid (3-31 chars)
+    if (unique_name.length > 31) {
+      unique_name = base_name.substring(0, 27) + random_suffix;
+    }
+
+    if (validate_autojoin_username(unique_name)) {
+      return unique_name;
     }
   }
 
@@ -359,6 +371,29 @@ function init_autojoin_mode()
   if (name_param && !validate_autojoin_username(name_param.trim())) {
     username = generate_observer_name();
   }
+
+  console.log('[Autojoin] Starting autojoin mode with username:', username);
+
+  // Hide intro elements (same as pregame_handle_user)
+  // Check if dialog is initialized before trying to close it
+  try {
+    if ($("#dialog").hasClass('ui-dialog-content')) {
+      $("#dialog").dialog('close');
+    }
+  } catch (e) {
+    // Dialog was never initialized, ignore
+  }
+  $("#fciv-intro").hide();
+
+  // Initialize embed mode if URL has embed=1 (hides UI elements, disables audio)
+  init_embed_mode();
+
+  // Initialize observe_player mode if URL has observe_player param
+  // Note: Actual /observe command is sent after login via execute_observe_player_attachment()
+  init_observe_player_mode();
+
+  // Initialize sprites/tileset (critical for rendering - prevents black screen)
+  init_sprites();
 
   // Initialize network connection
   network_init();

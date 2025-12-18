@@ -63,12 +63,21 @@ var MAPVIEW_ASPECT_FACTOR = 35.71;
 ****************************************************************************/
 function webgl_start_renderer()
 {
-  var new_mapview_width = $(window).width() - width_offset;
+  var new_mapview_width;
   var new_mapview_height;
-  if (!is_small_screen()) {
-    new_mapview_height = $(window).height() - height_offset;
+
+  // In embed mode, use full window dimensions for iframe viewing
+  if (typeof is_embed_mode === 'function' && is_embed_mode()) {
+    new_mapview_width = $(window).width();
+    new_mapview_height = $(window).height();
+    console.log('[Observer] Embed mode: using full window dimensions', new_mapview_width, 'x', new_mapview_height);
   } else {
-    new_mapview_height = $(window).height() - height_offset - 40;
+    new_mapview_width = $(window).width() - width_offset;
+    if (!is_small_screen()) {
+      new_mapview_height = $(window).height() - height_offset;
+    } else {
+      new_mapview_height = $(window).height() - height_offset - 40;
+    }
   }
 
   console.log("Three.js " + THREE.REVISION);
