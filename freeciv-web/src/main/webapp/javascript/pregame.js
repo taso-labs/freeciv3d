@@ -919,6 +919,13 @@ function show_intro_dialog(title, message) {
     return;
   }
 
+  // Autojoin mode: skip username dialog and connect directly
+  // Used by observer URLs for embedded iframe viewing
+  if (should_autojoin()) {
+    init_autojoin_mode();
+    return;
+  }
+
   // reset dialog page.
   $("#dialog").remove();
   $("<div id='dialog'></div>").appendTo("div#game_page");

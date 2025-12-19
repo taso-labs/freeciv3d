@@ -60,6 +60,16 @@ function set_client_state(newstate)
         advance_unit_focus();
         if (observing) {
           center_tile_mapcanvas(map_pos_to_tile(map['xsize'] / 2, map['ysize'] / 2));
+
+          // Initialize observer player attachment (sends /observe command if observe_player param set)
+          if (typeof execute_observe_player_attachment === 'function') {
+            execute_observe_player_attachment();
+          }
+
+          // Initialize observer follow mode (auto-centering on followed player)
+          if (typeof init_observer_follow_mode === 'function') {
+            init_observer_follow_mode();
+          }
         }
       }
       $("#fciv-intro").remove();

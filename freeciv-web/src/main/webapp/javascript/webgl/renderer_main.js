@@ -57,7 +57,11 @@ function webgl_preload_complete()
 {
   $.unblockUI();
 
-  network_init();
+  // Skip network_init if already in autojoin mode (init_autojoin_mode handles it)
+  // This prevents duplicate WebSocket connections
+  if ($.getUrlVar('autojoin') != '1') {
+    network_init();
+  }
 }
 
 /****************************************************************************

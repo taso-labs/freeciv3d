@@ -3,19 +3,19 @@
 """
 TDD tests for Observer URLs endpoint.
 
-RED PHASE: These tests are written BEFORE the implementation.
-They should FAIL initially until the observer URLs endpoint is implemented.
-
 Tests cover:
 - GET /api/games/{game_id}/observer-urls endpoint
 - freeciv_web_base_url configuration setting
 - URL structure and parameters
+
+Updated to test connection_manager-based implementation (Approach B).
 """
 
 import os
 import sys
+import time
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, AsyncMock
 from urllib.parse import urlparse, parse_qs
 
 # Ensure we can import from parent directory
@@ -29,6 +29,17 @@ from fastapi.testclient import TestClient
 from main import app
 
 
+def mock_game_info(civserver_port=6001, player_id=0, agent_id="test-agent"):
+    """Helper to create mock game info dict"""
+    return {
+        "civserver_port": civserver_port,
+        "player_id": player_id,
+        "agent_id": agent_id,
+        "session_id": "test-session",
+        "connected_at": time.time(),
+    }
+
+
 class TestObserverUrlsEndpoint:
     """Test GET /api/games/{game_id}/observer-urls endpoint"""
 
@@ -37,11 +48,9 @@ class TestObserverUrlsEndpoint:
         self.client = TestClient(app)
 
     def test_returns_404_for_nonexistent_game(self):
-        """Should return 404 when game_id doesn't exist in game_sessions"""
-        with patch("api_endpoints.get_gateway") as mock_gw:
-            mock_gateway = MagicMock()
-            mock_gateway.game_sessions = {}  # Empty sessions
-            mock_gw.return_value = mock_gateway
+        """Should return 404 when game_id doesn't exist in connection_manager"""
+        with patch("api_endpoints.connection_manager") as mock_cm:
+            mock_cm.get_game_info = AsyncMock(return_value=None)
 
             response = self.client.get("/api/games/nonexistent-game/observer-urls")
 
@@ -50,15 +59,8 @@ class TestObserverUrlsEndpoint:
 
     def test_returns_409_when_port_not_assigned(self):
         """Should return 409 Conflict when game exists but port is None"""
-        with patch("api_endpoints.get_gateway") as mock_gw:
-            mock_gateway = MagicMock()
-            mock_gateway.game_sessions = {
-                "game-123": {
-                    "port": None,  # Port not yet assigned
-                    "status": "waiting"
-                }
-            }
-            mock_gw.return_value = mock_gateway
+        with patch("api_endpoints.connection_manager") as mock_cm:
+            mock_cm.get_game_info = AsyncMock(return_value=mock_game_info(civserver_port=None))
 
             response = self.client.get("/api/games/game-123/observer-urls")
 
@@ -67,15 +69,8 @@ class TestObserverUrlsEndpoint:
 
     def test_returns_409_when_port_is_6000(self):
         """Should return 409 when port is 6000 (singleplayer, invalid for LLM games)"""
-        with patch("api_endpoints.get_gateway") as mock_gw:
-            mock_gateway = MagicMock()
-            mock_gateway.game_sessions = {
-                "game-123": {
-                    "port": 6000,  # Invalid singleplayer port
-                    "status": "running"
-                }
-            }
-            mock_gw.return_value = mock_gateway
+        with patch("api_endpoints.connection_manager") as mock_cm:
+            mock_cm.get_game_info = AsyncMock(return_value=mock_game_info(civserver_port=6000))
 
             response = self.client.get("/api/games/game-123/observer-urls")
 
@@ -83,16 +78,8 @@ class TestObserverUrlsEndpoint:
 
     def test_returns_observer_urls_for_valid_game(self):
         """Should return observer URLs when game has valid port (6001-6009)"""
-        with patch("api_endpoints.get_gateway") as mock_gw:
-            mock_gateway = MagicMock()
-            mock_gateway.game_sessions = {
-                "game-123": {
-                    "port": 6001,
-                    "status": "running",
-                    "agents": {"agent1": {}, "agent2": {}}
-                }
-            }
-            mock_gw.return_value = mock_gateway
+        with patch("api_endpoints.connection_manager") as mock_cm:
+            mock_cm.get_game_info = AsyncMock(return_value=mock_game_info(civserver_port=6001))
 
             response = self.client.get("/api/games/game-123/observer-urls")
 
@@ -109,12 +96,8 @@ class TestObserverUrlsEndpoint:
 
     def test_global_url_has_strategic_camera(self):
         """Global observer URL should use strategic camera preset for bird's eye view"""
-        with patch("api_endpoints.get_gateway") as mock_gw:
-            mock_gateway = MagicMock()
-            mock_gateway.game_sessions = {
-                "game-123": {"port": 6001, "status": "running", "agents": {}}
-            }
-            mock_gw.return_value = mock_gateway
+        with patch("api_endpoints.connection_manager") as mock_cm:
+            mock_cm.get_game_info = AsyncMock(return_value=mock_game_info(civserver_port=6001))
 
             response = self.client.get("/api/games/game-123/observer-urls")
 
@@ -129,12 +112,8 @@ class TestObserverUrlsEndpoint:
 
     def test_player_urls_have_fog_of_war_attachment(self):
         """Player observer URLs should include observe_player param for FOW"""
-        with patch("api_endpoints.get_gateway") as mock_gw:
-            mock_gateway = MagicMock()
-            mock_gateway.game_sessions = {
-                "game-123": {"port": 6001, "status": "running", "agents": {}}
-            }
-            mock_gw.return_value = mock_gateway
+        with patch("api_endpoints.connection_manager") as mock_cm:
+            mock_cm.get_game_info = AsyncMock(return_value=mock_game_info(civserver_port=6001))
 
             response = self.client.get("/api/games/game-123/observer-urls")
 
@@ -152,12 +131,8 @@ class TestObserverUrlsEndpoint:
 
     def test_player_urls_have_cinematic_camera(self):
         """Player observer URLs should use cinematic camera preset"""
-        with patch("api_endpoints.get_gateway") as mock_gw:
-            mock_gateway = MagicMock()
-            mock_gateway.game_sessions = {
-                "game-123": {"port": 6001, "status": "running", "agents": {}}
-            }
-            mock_gw.return_value = mock_gateway
+        with patch("api_endpoints.connection_manager") as mock_cm:
+            mock_cm.get_game_info = AsyncMock(return_value=mock_game_info(civserver_port=6001))
 
             response = self.client.get("/api/games/game-123/observer-urls")
 
@@ -170,12 +145,8 @@ class TestObserverUrlsEndpoint:
 
     def test_urls_use_configured_base_url(self):
         """URLs should use GATEWAY_FREECIV_WEB_BASE_URL from config"""
-        with patch("api_endpoints.get_gateway") as mock_gw:
-            mock_gateway = MagicMock()
-            mock_gateway.game_sessions = {
-                "game-123": {"port": 6001, "status": "running", "agents": {}}
-            }
-            mock_gw.return_value = mock_gateway
+        with patch("api_endpoints.connection_manager") as mock_cm:
+            mock_cm.get_game_info = AsyncMock(return_value=mock_game_info(civserver_port=6001))
 
             response = self.client.get("/api/games/game-123/observer-urls")
 
@@ -188,12 +159,8 @@ class TestObserverUrlsEndpoint:
 
     def test_urls_include_civserverport_parameter(self):
         """All URLs should include civserverport parameter matching game port"""
-        with patch("api_endpoints.get_gateway") as mock_gw:
-            mock_gateway = MagicMock()
-            mock_gateway.game_sessions = {
-                "game-123": {"port": 6003, "status": "running", "agents": {}}
-            }
-            mock_gw.return_value = mock_gateway
+        with patch("api_endpoints.connection_manager") as mock_cm:
+            mock_cm.get_game_info = AsyncMock(return_value=mock_game_info(civserver_port=6003))
 
             response = self.client.get("/api/games/game-123/observer-urls")
 
@@ -205,12 +172,8 @@ class TestObserverUrlsEndpoint:
 
     def test_urls_include_unique_viewer_names(self):
         """Each view URL should have a unique viewer name to avoid conflicts"""
-        with patch("api_endpoints.get_gateway") as mock_gw:
-            mock_gateway = MagicMock()
-            mock_gateway.game_sessions = {
-                "game-123": {"port": 6001, "status": "running", "agents": {}}
-            }
-            mock_gw.return_value = mock_gateway
+        with patch("api_endpoints.connection_manager") as mock_cm:
+            mock_cm.get_game_info = AsyncMock(return_value=mock_game_info(civserver_port=6001))
 
             response = self.client.get("/api/games/game-123/observer-urls")
 
@@ -229,16 +192,8 @@ class TestObserverUrlsEndpoint:
 
     def test_response_includes_civserver_port(self):
         """Response should include civserver_port for reference"""
-        with patch("api_endpoints.get_gateway") as mock_gw:
-            mock_gateway = MagicMock()
-            mock_gateway.game_sessions = {
-                "game-123": {
-                    "port": 6005,
-                    "status": "running",
-                    "agents": {}
-                }
-            }
-            mock_gw.return_value = mock_gateway
+        with patch("api_endpoints.connection_manager") as mock_cm:
+            mock_cm.get_game_info = AsyncMock(return_value=mock_game_info(civserver_port=6005))
 
             response = self.client.get("/api/games/game-123/observer-urls")
 
@@ -303,12 +258,8 @@ class TestObserverUrlsEdgeCases:
     def test_handles_different_port_numbers(self):
         """Should work with any valid multiplayer port (6001-6009)"""
         for port in [6001, 6002, 6005, 6009]:
-            with patch("api_endpoints.get_gateway") as mock_gw:
-                mock_gateway = MagicMock()
-                mock_gateway.game_sessions = {
-                    "test-game": {"port": port, "status": "running", "agents": {}}
-                }
-                mock_gw.return_value = mock_gateway
+            with patch("api_endpoints.connection_manager") as mock_cm:
+                mock_cm.get_game_info = AsyncMock(return_value=mock_game_info(civserver_port=port))
 
                 response = self.client.get("/api/games/test-game/observer-urls")
 
@@ -319,12 +270,8 @@ class TestObserverUrlsEdgeCases:
         """Should handle game IDs with special characters"""
         game_id = "game-with-dashes_and_underscores"
 
-        with patch("api_endpoints.get_gateway") as mock_gw:
-            mock_gateway = MagicMock()
-            mock_gateway.game_sessions = {
-                game_id: {"port": 6001, "status": "running", "agents": {}}
-            }
-            mock_gw.return_value = mock_gateway
+        with patch("api_endpoints.connection_manager") as mock_cm:
+            mock_cm.get_game_info = AsyncMock(return_value=mock_game_info(civserver_port=6001))
 
             response = self.client.get(f"/api/games/{game_id}/observer-urls")
 

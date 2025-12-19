@@ -47,6 +47,8 @@ from packet_constants import (
     PACKET_CONN_PING,
     PACKET_CONN_PONG,
     PACKET_RESEARCH_INFO,
+    PACKET_SERVER_JOIN_REPLY,
+    PACKET_CLIENT_INFO,
     get_packet_name
 )
 
@@ -1143,8 +1145,30 @@ class CivCom(Thread):
                 if packet_type in [PACKET_CONN_INFO, PACKET_PLAYER_INFO]:
                     logger.debug(f"Packet details: {str(packet)[:200]}")
 
+            # CRITICAL: Server join reply - must respond with PACKET_CLIENT_INFO to complete handshake
+            # Without this response, civserver rejects the connection as "incomplete"
+            if packet_type == PACKET_SERVER_JOIN_REPLY:
+                you_can_join = packet.get('you_can_join', False)
+                conn_id = packet.get('conn_id', -1)
+                logger.info(f"Received PACKET_SERVER_JOIN_REPLY: you_can_join={you_can_join}, conn_id={conn_id} for {self.username}")
+
+                if you_can_join:
+                    # Send PACKET_CLIENT_INFO to complete the connection handshake
+                    # gui=7 is GUI_WEB (matches the web client)
+                    client_info_packet = json.dumps({
+                        'pid': PACKET_CLIENT_INFO,
+                        'gui': 7,  # GUI_WEB
+                        'emerg_version': 0,
+                        'distribution': ''
+                    })
+                    logger.info(f"Sending PACKET_CLIENT_INFO to complete handshake for {self.username}")
+                    self.queue_to_civserver(client_info_packet)
+                else:
+                    message = packet.get('message', 'Unknown rejection reason')
+                    logger.error(f"Server rejected join request for {self.username}: {message}")
+
             # Map info packet (contains xsize, ysize)
-            if packet_type == PACKET_MAP_INFO:
+            elif packet_type == PACKET_MAP_INFO:
                 self.map_info = {
                     'width': packet.get('xsize', 0),
                     'height': packet.get('ysize', 0),

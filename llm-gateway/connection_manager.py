@@ -38,6 +38,7 @@ class ConnectionInfo:
         # Session persistence fields
         self.player_id: Optional[int] = None
         self.game_id: Optional[str] = None
+        self.civserver_port: Optional[int] = None  # Port for observer URL generation
         self.disconnected_at: Optional[float] = None
 
     def update_activity(self):
@@ -61,6 +62,7 @@ class ConnectionInfo:
             "duration": time.time() - self.connected_at,
             "player_id": self.player_id,
             "game_id": self.game_id,
+            "civserver_port": self.civserver_port,
             "disconnected_at": self.disconnected_at
         }
 
@@ -337,13 +339,20 @@ class ConnectionManager:
         if successful_broadcasts > 0:
             logger.debug(f"Broadcasted to {successful_broadcasts} spectators of game {game_id}")
 
-    async def update_agent_auth(self, agent_id: str, player_id: int, game_id: Optional[str] = None):
+    async def update_agent_auth(
+        self,
+        agent_id: str,
+        player_id: int,
+        game_id: Optional[str] = None,
+        civserver_port: Optional[int] = None
+    ):
         """Update agent authentication info after receiving auth_success from proxy
 
         Args:
             agent_id: Agent identifier
             player_id: Player ID from civserver
             game_id: Optional game ID
+            civserver_port: Optional civserver port for observer URL generation
         """
         agent_connections = await self.get_agent_connections(agent_id)
 
@@ -352,10 +361,13 @@ class ConnectionManager:
             connection_info.authenticated = True
             if game_id:
                 connection_info.game_id = game_id
+            if civserver_port:
+                connection_info.civserver_port = civserver_port
 
             logger.info(
                 f"✅ Updated auth for agent {agent_id}: "
                 f"player_id={player_id}, game_id={game_id}, "
+                f"civserver_port={civserver_port}, "
                 f"session_id={connection_info.session_id}"
             )
 
@@ -375,6 +387,32 @@ class ConnectionManager:
                 "spectator": spectator_count
             }
         }
+
+    async def get_game_info(self, game_id: str) -> Optional[Dict[str, Any]]:
+        """Get game info by game_id from authenticated agent connections.
+
+        Searches all agent connections for one with matching game_id and returns
+        its game-related info (port, player_id, agent_id). Used by observer-urls
+        endpoint to retrieve civserver port for URL generation.
+
+        Args:
+            game_id: The game ID to search for
+
+        Returns:
+            Dict with civserver_port, player_id, agent_id if found, None otherwise
+        """
+        for conn_id, conn_info in self.connections.items():
+            if (conn_info.connection_type == "agent"
+                and conn_info.game_id == game_id
+                and conn_info.authenticated):
+                return {
+                    "civserver_port": conn_info.civserver_port,
+                    "player_id": conn_info.player_id,
+                    "agent_id": conn_info.identifier,
+                    "session_id": conn_info.session_id,
+                    "connected_at": conn_info.connected_at,
+                }
+        return None
 
     async def _heartbeat_loop(self):
         """Background task for connection maintenance"""

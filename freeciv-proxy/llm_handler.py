@@ -3272,9 +3272,16 @@ class LLMWSHandler(websocket.WebSocketHandler):
 
             # Create proper FreeCiv login packet (PACKET_SERVER_JOIN_REQ)
             # Must include pid=4 and version fields for server to parse it
+            # FreeCiv usernames cannot start with a digit (see is_valid_username in player.c)
+            # Agent IDs like "01JFCQ00..." start with digits, so we prefix with 'a'
+            civserver_username = self.agent_id
+            if civserver_username and civserver_username[0].isdigit():
+                civserver_username = 'a' + civserver_username
+                logger.debug(f"Prefixed agent_id with 'a' for civserver username: {civserver_username}")
+
             login_packet = json.dumps({
                 'pid': PACKET_SERVER_JOIN_REQ,  # PACKET_SERVER_JOIN_REQ
-                'username': self.agent_id,
+                'username': civserver_username,
                 'capability': '+Freeciv.Web.Devel-3.3',
                 'version_label': '-dev',
                 'major_version': 3,

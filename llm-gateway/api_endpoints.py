@@ -22,8 +22,10 @@ except ImportError:
 
 try:
     from .config import settings
+    from .connection_manager import connection_manager
 except ImportError:
     from config import settings
+    from connection_manager import connection_manager
 
 # Gateway will be injected from main.py to avoid circular imports
 gateway = None
@@ -423,21 +425,19 @@ async def get_observer_urls(
     All URLs include embed=1 and autojoin=1 for seamless iframe embedding.
     """
     try:
-        gw = get_gateway()
+        # Query connection_manager for game info (single source of truth for WebSocket connections)
+        game_info = await connection_manager.get_game_info(game_id)
 
-        # Check if game exists
-        if game_id not in gw.game_sessions:
+        if game_info is None:
             raise HTTPException(status_code=404, detail="Game not found")
 
-        game_session = gw.game_sessions[game_id]
-
-        # Get the game port - MUST be set and valid for multiplayer
-        game_port = game_session.get("port")
+        # Get the game port from authenticated connection
+        game_port = game_info.get("civserver_port")
 
         if game_port is None or not (6001 <= game_port <= 6009):
             logger.warning(
                 f"Game {game_id} has invalid port {game_port}. "
-                f"Status: {game_session.get('status')}"
+                f"Agent may still be connecting."
             )
             raise HTTPException(
                 status_code=409,
