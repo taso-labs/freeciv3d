@@ -34,23 +34,34 @@ var width_offset = 10;
 **************************************************************************/
 function set_client_state(newstate)
 {
+  console.log('[ClientState] set_client_state called with:', newstate, 'current:', civclient_state);
   if (civclient_state != newstate) {
     civclient_state = newstate;
+    console.log('[ClientState] State changed, entering switch');
 
     switch (civclient_state) {
     case C_S_RUNNING:
-      clear_chatbox();
+      console.log('[ClientState] C_S_RUNNING case');
+      try { clear_chatbox(); } catch(e) { console.error('[ClientState] clear_chatbox error:', e); }
       $("#game_text_input").blur();
       $.unblockUI();
-      show_new_game_message();
+      try { show_new_game_message(); } catch(e) { console.error('[ClientState] show_new_game_message error:', e); }
 
-      set_client_page(PAGE_GAME);
+      try { set_client_page(PAGE_GAME); } catch(e) { console.error('[ClientState] set_client_page error:', e); }
+      console.log('[ClientState] set_client_page done');
       setup_window_size();
       if (unitpanel_active) init_game_unit_panel();
 
       update_metamessage_on_gamestart();
 
+      console.log('[ClientState] About to call renderer_init()');
       renderer_init();
+      console.log('[ClientState] renderer_init() returned');
+
+      // Initialize camera preset from URL parameter (e.g., ?camera=strategic)
+      if (typeof init_camera_from_url_params === 'function') {
+        init_camera_from_url_params();
+      }
 
       /* remove context menu from pregame. */
       $(".context-menu-root").remove();
@@ -340,7 +351,8 @@ function set_default_mapview_active()
     update_active_units_dialog();
   }
 
-  if (chatbox_active) {
+  // Don't show chatbox in embed mode - it should remain hidden
+  if (chatbox_active && (typeof is_embed_mode !== 'function' || !is_embed_mode())) {
     $("#game_chatbox_panel").parent().show();
     if (current_message_dialog_state == "minimized") $("#game_chatbox_panel").dialogExtend("minimize");
   }
@@ -352,10 +364,12 @@ function set_default_mapview_active()
   allow_right_click = false;
   keyboard_input = true;
 
-  $("#freeciv_custom_scrollbar_div").mCustomScrollbar("scrollTo", "bottom",{scrollInertia:0});
-
-  $(".chatbox_dialog").css("top", "52px");
-  $(".chatbox_dialog").css("left", "5px");
+  // Skip scrollbar and chatbox operations in embed mode - elements are hidden
+  if (typeof is_embed_mode !== 'function' || !is_embed_mode()) {
+    $("#freeciv_custom_scrollbar_div").mCustomScrollbar("scrollTo", "bottom",{scrollInertia:0});
+    $(".chatbox_dialog").css("top", "52px");
+    $(".chatbox_dialog").css("left", "5px");
+  }
 
  $("#mapview_canvas_div").show();
 }

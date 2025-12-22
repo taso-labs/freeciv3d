@@ -449,10 +449,11 @@ async def get_observer_urls(
         base_url = settings.freeciv_web_base_url.rstrip("/")
         webclient_path = f"{base_url}/webclient/"
 
-        # URL-encode AI player names using quote() for proper encoding
-        # AI*1 -> AI%2A1 (the * character needs to be percent-encoded)
-        ai_player1_encoded = quote("AI*1", safe="")
-        ai_player2_encoded = quote("AI*2", safe="")
+        # Use player numbers (playerno) instead of names for reliability
+        # Player names can be customized (e.g., "GPT-5.2", "Sonnet 4.5"),
+        # but playerno is always 0 for first player, 1 for second player
+        player1_id = "0"
+        player2_id = "1"
 
         # Generate unique viewer names to prevent WebSocket conflicts
         # when multiple viewers connect to the same game
@@ -469,12 +470,12 @@ async def get_observer_urls(
             ),
             "player1": (
                 f"{webclient_path}?action=observe&civserverport={game_port}"
-                f"&observe_player={ai_player1_encoded}&follow={ai_player1_encoded}"
+                f"&observe_player={player1_id}&follow={player1_id}"
                 f"&embed=1&autojoin=1&name={player1_viewer_name}&camera=cinematic"
             ),
             "player2": (
                 f"{webclient_path}?action=observe&civserverport={game_port}"
-                f"&observe_player={ai_player2_encoded}&follow={ai_player2_encoded}"
+                f"&observe_player={player2_id}&follow={player2_id}"
                 f"&embed=1&autojoin=1&name={player2_viewer_name}&camera=cinematic"
             )
         }

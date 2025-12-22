@@ -121,13 +121,13 @@ class TestObserverUrlsEndpoint:
         player1_url = data["observer_urls"]["player1"]
         player2_url = data["observer_urls"]["player2"]
 
-        # Player 1 should observe AI*1 (URL encoded as AI%2A1)
-        assert "observe_player=AI%2A1" in player1_url
-        assert "follow=AI%2A1" in player1_url
+        # Player 1 should observe player 0 (first player)
+        assert "observe_player=0" in player1_url
+        assert "follow=0" in player1_url
 
-        # Player 2 should observe AI*2 (URL encoded as AI%2A2)
-        assert "observe_player=AI%2A2" in player2_url
-        assert "follow=AI%2A2" in player2_url
+        # Player 2 should observe player 1 (second player)
+        assert "observe_player=1" in player2_url
+        assert "follow=1" in player2_url
 
     def test_player_urls_have_cinematic_camera(self):
         """Player observer URLs should use cinematic camera preset"""

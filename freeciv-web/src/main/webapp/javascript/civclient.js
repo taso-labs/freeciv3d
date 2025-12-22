@@ -50,6 +50,7 @@ var dialog_message_close_task;
 var observer_follow_player = null;        // Player ID to follow, or null for global
 var observer_auto_center_interval = null; // Interval timer ID for periodic re-centering
 var observer_initial_center_interval = null; // Interval timer ID for initial center polling
+var observer_player_search_interval = null; // Interval timer ID for player search polling
 var OBSERVER_AUTO_CENTER_MS = 5000;       // Default re-center interval (5 seconds)
 var MIN_AUTOCENTER_MS = 1000;             // Minimum autocenter interval (1 second)
 var MAX_AUTOCENTER_MS = 60000;            // Maximum autocenter interval (60 seconds)
@@ -76,11 +77,17 @@ function init_observer_follow_mode()
   // Clear any existing interval first to prevent memory leaks
   cleanup_observer_follow_mode();
 
+  // Register cleanup handler for page unload (important for iframes)
+  register_observer_cleanup_handler();
+
   if (!observing) return;
 
   // Parse follow parameter
   var follow_param = $.getUrlVar('follow');
   if (!follow_param) return;
+
+  // Decode URL-encoded characters (e.g., AI%2A1 → AI*1)
+  follow_param = decodeURIComponent(follow_param);
 
   // Parse autocenter interval with bounds checking to prevent DoS
   var autocenter_param = $.getUrlVar('autocenter');
@@ -107,28 +114,67 @@ function init_observer_follow_mode()
   }
 
   if (observer_follow_player !== null) {
-    // Start auto-centering interval
-    observer_auto_center_interval = setInterval(
-      observer_center_on_followed_player,
-      OBSERVER_AUTO_CENTER_MS
-    );
-    // Initial center with polling to wait for cities to load (more robust than fixed timeout)
-    var initial_center_attempts = 0;
-    observer_initial_center_interval = setInterval(function() {
-      initial_center_attempts++;
-      if (typeof cities !== 'undefined' && Object.keys(cities).length > 0) {
-        clearInterval(observer_initial_center_interval);
-        observer_initial_center_interval = null;
-        observer_center_on_followed_player();
-      } else if (initial_center_attempts >= MAX_INITIAL_CENTER_ATTEMPTS) {
-        clearInterval(observer_initial_center_interval);
-        observer_initial_center_interval = null;
-        console.warn('[Observer] Cities not loaded after', MAX_INITIAL_CENTER_ATTEMPTS, 'attempts, giving up initial center');
+    start_observer_follow_intervals();
+  } else {
+    // Player not found immediately - poll until players list is populated
+    console.log('[Observer] Player not found yet, polling for:', follow_param);
+    var player_poll_attempts = 0;
+    observer_player_search_interval = setInterval(function() {
+      player_poll_attempts++;
+
+      // Search players list again
+      for (var player_id in players) {
+        var player = players[player_id];
+        if (player && (
+            player['name'] === follow_param ||
+            (player['username'] && player['username'] === follow_param) ||
+            (player['playerno'] !== undefined && player['playerno'].toString() === follow_param))) {
+          observer_follow_player = player['playerno'];
+          console.log('[Observer] Found player after polling:', player['name'] || 'Unknown', 'id:', observer_follow_player);
+          clearInterval(observer_player_search_interval);
+          observer_player_search_interval = null;
+          start_observer_follow_intervals();
+          return;
+        }
+      }
+
+      if (player_poll_attempts >= MAX_INITIAL_CENTER_ATTEMPTS) {
+        clearInterval(observer_player_search_interval);
+        observer_player_search_interval = null;
+        console.warn('[Observer] Player not found after', MAX_INITIAL_CENTER_ATTEMPTS, 'polling attempts:', follow_param);
       }
     }, INITIAL_CENTER_POLL_INTERVAL_MS);
-  } else {
-    console.warn('[Observer] Could not find player to follow:', follow_param);
   }
+}
+
+/****************************************************************************
+  Helper function to start the observer follow intervals (auto-centering).
+  Called once a player is found, either immediately or after polling.
+****************************************************************************/
+function start_observer_follow_intervals()
+{
+  if (observer_follow_player === null) return;
+
+  // Start auto-centering interval
+  observer_auto_center_interval = setInterval(
+    observer_center_on_followed_player,
+    OBSERVER_AUTO_CENTER_MS
+  );
+
+  // Initial center with polling to wait for cities to load (more robust than fixed timeout)
+  var initial_center_attempts = 0;
+  observer_initial_center_interval = setInterval(function() {
+    initial_center_attempts++;
+    if (typeof cities !== 'undefined' && Object.keys(cities).length > 0) {
+      clearInterval(observer_initial_center_interval);
+      observer_initial_center_interval = null;
+      observer_center_on_followed_player();
+    } else if (initial_center_attempts >= MAX_INITIAL_CENTER_ATTEMPTS) {
+      clearInterval(observer_initial_center_interval);
+      observer_initial_center_interval = null;
+      console.warn('[Observer] Cities not loaded after', MAX_INITIAL_CENTER_ATTEMPTS, 'attempts, giving up initial center');
+    }
+  }, INITIAL_CENTER_POLL_INTERVAL_MS);
 }
 
 /****************************************************************************
@@ -189,7 +235,22 @@ function cleanup_observer_follow_mode()
     clearInterval(observer_initial_center_interval);
     observer_initial_center_interval = null;
   }
+  if (observer_player_search_interval) {
+    clearInterval(observer_player_search_interval);
+    observer_player_search_interval = null;
+  }
   observer_follow_player = null;
+}
+
+/****************************************************************************
+  Register beforeunload handler for observer cleanup.
+  Ensures interval timers are cleared when the page/iframe is closed.
+****************************************************************************/
+function register_observer_cleanup_handler()
+{
+  $(window).on('beforeunload', function() {
+    cleanup_observer_follow_mode();
+  });
 }
 
 /****************************************************************************
@@ -233,7 +294,7 @@ function apply_embed_mode_settings()
   // Hide UI elements in embed mode
   var embed_hidden_elements = [
     'game_menu_panel',
-    'chat_panel',
+    'game_chatbox_panel',  // The actual chatbox element (not 'chat_panel')
     'turn_done_button',
     'unit_orders_bar',
     'minimap_panel',
@@ -247,6 +308,11 @@ function apply_embed_mode_settings()
       el.style.display = 'none';
     }
   });
+
+  // Also hide the jQuery UI dialog wrapper for chatbox (has class .chatbox_dialog)
+  $(".chatbox_dialog").hide();
+  // And hide the dialog's parent container
+  $("#game_chatbox_panel").parent().hide();
 
   console.log('[Observer] Embed mode enabled - controls and UI disabled');
 }
@@ -283,7 +349,7 @@ function generate_observer_name()
 {
   var chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
   var suffix = '';
-  for (var i = 0; i < 5; i++) {
+  for (var i = 0; i < 8; i++) {
     suffix += chars.charAt(Math.floor(Math.random() * chars.length));
   }
   return 'observer_' + suffix;
@@ -329,20 +395,21 @@ function validate_autojoin_username(name)
 function get_autojoin_username()
 {
   var name_param = $.getUrlVar('name');
-  var random_suffix = '_' + Math.random().toString(36).substring(2, 6);
+  // Use 8 random chars for better uniqueness with many concurrent viewers
+  var random_suffix = '_' + Math.random().toString(36).substring(2, 10);
 
   if (name_param) {
     // Trim whitespace and any existing random suffix
     name_param = name_param.trim();
-    // Remove any existing suffix (e.g., global_view_abc123_xyz9 -> global_view_abc123)
-    var base_name = name_param.replace(/_[a-z0-9]{4}$/, '');
+    // Remove any existing suffix (e.g., global_view_abc12345 -> global_view)
+    var base_name = name_param.replace(/_[a-z0-9]{4,8}$/, '');
 
     // Add new random suffix to make connection unique
     var unique_name = base_name + random_suffix;
 
     // Ensure total length is valid (3-31 chars)
     if (unique_name.length > 31) {
-      unique_name = base_name.substring(0, 27) + random_suffix;
+      unique_name = base_name.substring(0, 22) + random_suffix;
     }
 
     if (validate_autojoin_username(unique_name)) {
@@ -392,11 +459,10 @@ function init_autojoin_mode()
   // Note: Actual /observe command is sent after login via execute_observe_player_attachment()
   init_observe_player_mode();
 
-  // Initialize sprites/tileset (critical for rendering - prevents black screen)
+  // Initialize sprites/tileset - this triggers async loading chain:
+  // init_sprites() → preload_check() → webgl_preload() → webgl_preload_complete() → network_init()
+  // We must NOT call network_init() here - let the callback chain handle it after assets load
   init_sprites();
-
-  // Initialize network connection
-  network_init();
 }
 
 /****************************************************************************
