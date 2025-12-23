@@ -46,6 +46,532 @@ var seconds_to_phasedone_sync = 0;
 var dialog_close_trigger = "";
 var dialog_message_close_task;
 
+// Observer follow mode state
+var observer_follow_player = null;        // Player ID to follow, or null for global
+var observer_auto_center_interval = null; // Interval timer ID for periodic re-centering
+var observer_initial_center_interval = null; // Interval timer ID for initial center polling
+var observer_player_search_interval = null; // Interval timer ID for player search polling
+var OBSERVER_AUTO_CENTER_MS = 5000;       // Default re-center interval (5 seconds)
+var MIN_AUTOCENTER_MS = 1000;             // Minimum autocenter interval (1 second)
+var MAX_AUTOCENTER_MS = 60000;            // Maximum autocenter interval (60 seconds)
+var MAX_INITIAL_CENTER_ATTEMPTS = 10;     // Max polling attempts for initial center
+var INITIAL_CENTER_POLL_INTERVAL_MS = 500; // Polling interval for initial center (500ms)
+var embed_mode = false;                   // Embed mode for iframe viewing
+var keyboard_input_enabled = true;        // Keyboard input enabled flag
+
+// Player name validation regex - allows letters, numbers, underscore, asterisk (for AI*1), hyphen
+var SAFE_PLAYER_NAME_REGEX = /^[a-zA-Z0-9_*-]+$/;
+
+// Observer player attachment state
+var observe_player = null;                // Player name to attach to, or null for global
+
+// Autojoin state
+var autojoin_active = false;              // Whether autojoin mode is active
+
+/****************************************************************************
+  Initialize observer follow mode from URL parameter.
+  Parses ?follow=player_name and sets up auto-centering on that player.
+****************************************************************************/
+function init_observer_follow_mode()
+{
+  // Clear any existing interval first to prevent memory leaks
+  cleanup_observer_follow_mode();
+
+  // Register cleanup handler for page unload (important for iframes)
+  register_observer_cleanup_handler();
+
+  if (!observing) return;
+
+  // Parse follow parameter
+  var follow_param = $.getUrlVar('follow');
+  if (!follow_param) return;
+
+  // Decode URL-encoded characters (e.g., AI%2A1 → AI*1)
+  follow_param = decodeURIComponent(follow_param);
+
+  // Parse autocenter interval with bounds checking to prevent DoS
+  var autocenter_param = $.getUrlVar('autocenter');
+  if (autocenter_param) {
+    var parsed = parseInt(autocenter_param);
+    if (!isNaN(parsed) && parsed >= MIN_AUTOCENTER_MS && parsed <= MAX_AUTOCENTER_MS) {
+      OBSERVER_AUTO_CENTER_MS = parsed;
+    } else {
+      console.warn('[Observer] Invalid autocenter value (must be ' + MIN_AUTOCENTER_MS + '-' + MAX_AUTOCENTER_MS + 'ms), using default:', OBSERVER_AUTO_CENTER_MS);
+    }
+  }
+
+  // Find player by name, username, or playerno (with null checks for defensive coding)
+  for (var player_id in players) {
+    var player = players[player_id];
+    if (player && (
+        player['name'] === follow_param ||
+        (player['username'] && player['username'] === follow_param) ||
+        (player['playerno'] !== undefined && player['playerno'].toString() === follow_param))) {
+      observer_follow_player = player['playerno'];
+      freelog(LOG_DEBUG, '[Observer] Following player: ' + (player['name'] || 'Unknown') + ' id: ' + observer_follow_player);
+      break;
+    }
+  }
+
+  if (observer_follow_player !== null) {
+    start_observer_follow_intervals();
+  } else {
+    // Player not found immediately - poll until players list is populated
+    freelog(LOG_DEBUG, '[Observer] Player not found yet, polling for: ' + follow_param);
+    var player_poll_attempts = 0;
+    observer_player_search_interval = setInterval(function() {
+      player_poll_attempts++;
+
+      // Search players list again
+      for (var player_id in players) {
+        var player = players[player_id];
+        if (player && (
+            player['name'] === follow_param ||
+            (player['username'] && player['username'] === follow_param) ||
+            (player['playerno'] !== undefined && player['playerno'].toString() === follow_param))) {
+          observer_follow_player = player['playerno'];
+          freelog(LOG_DEBUG, '[Observer] Found player after polling: ' + (player['name'] || 'Unknown') + ' id: ' + observer_follow_player);
+          clearInterval(observer_player_search_interval);
+          observer_player_search_interval = null;
+          start_observer_follow_intervals();
+          return;
+        }
+      }
+
+      if (player_poll_attempts >= MAX_INITIAL_CENTER_ATTEMPTS) {
+        clearInterval(observer_player_search_interval);
+        observer_player_search_interval = null;
+        console.warn('[Observer] Player not found after', MAX_INITIAL_CENTER_ATTEMPTS, 'polling attempts:', follow_param);
+      }
+    }, INITIAL_CENTER_POLL_INTERVAL_MS);
+  }
+}
+
+/****************************************************************************
+  Helper function to start the observer follow intervals (auto-centering).
+  Called once a player is found, either immediately or after polling.
+****************************************************************************/
+function start_observer_follow_intervals()
+{
+  if (observer_follow_player === null) return;
+
+  // Start auto-centering interval
+  observer_auto_center_interval = setInterval(
+    observer_center_on_followed_player,
+    OBSERVER_AUTO_CENTER_MS
+  );
+
+  // Initial center with polling to wait for cities to load (more robust than fixed timeout)
+  var initial_center_attempts = 0;
+  observer_initial_center_interval = setInterval(function() {
+    initial_center_attempts++;
+    if (typeof cities !== 'undefined' && Object.keys(cities).length > 0) {
+      clearInterval(observer_initial_center_interval);
+      observer_initial_center_interval = null;
+      observer_center_on_followed_player();
+    } else if (initial_center_attempts >= MAX_INITIAL_CENTER_ATTEMPTS) {
+      clearInterval(observer_initial_center_interval);
+      observer_initial_center_interval = null;
+      console.warn('[Observer] Cities not loaded after', MAX_INITIAL_CENTER_ATTEMPTS, 'attempts, giving up initial center');
+    }
+  }, INITIAL_CENTER_POLL_INTERVAL_MS);
+}
+
+/****************************************************************************
+  Center view on followed player's main population center.
+  Priority: 1) Capital city, 2) Largest city by size, 3) Any city
+****************************************************************************/
+function observer_center_on_followed_player()
+{
+  if (observer_follow_player === null) return;
+
+  var player = players[observer_follow_player];
+  if (!player || !player['is_alive']) {
+    freelog(LOG_DEBUG, '[Observer] Followed player not found or dead');
+    return;
+  }
+
+  var target_city = null;
+
+  // Priority 1: Capital city
+  target_city = player_capital(player);
+
+  // Priority 2: Largest city by population size
+  if (!target_city) {
+    var max_size = 0;
+    for (var city_id in cities) {
+      var pcity = cities[city_id];
+      if (city_owner_player_id(pcity) === observer_follow_player) {
+        if (pcity['size'] > max_size) {
+          max_size = pcity['size'];
+          target_city = pcity;
+        }
+      }
+    }
+  }
+
+  // Center on target
+  if (target_city) {
+    var ptile = city_tile(target_city);
+    if (ptile) {
+      center_tile_mapcanvas(ptile);
+      freelog(LOG_DEBUG, '[Observer] Centered on ' + (target_city['name'] || 'Unknown') + ' size: ' + (target_city['size'] || 0));
+    }
+  } else {
+    freelog(LOG_DEBUG, '[Observer] No cities found for player ' + observer_follow_player);
+  }
+}
+
+/****************************************************************************
+  Clean up observer follow mode - clear interval and reset state.
+****************************************************************************/
+function cleanup_observer_follow_mode()
+{
+  if (observer_auto_center_interval) {
+    clearInterval(observer_auto_center_interval);
+    observer_auto_center_interval = null;
+  }
+  if (observer_initial_center_interval) {
+    clearInterval(observer_initial_center_interval);
+    observer_initial_center_interval = null;
+  }
+  if (observer_player_search_interval) {
+    clearInterval(observer_player_search_interval);
+    observer_player_search_interval = null;
+  }
+  observer_follow_player = null;
+}
+
+/****************************************************************************
+  Register beforeunload handler for observer cleanup.
+  Ensures interval timers are cleared when the page/iframe is closed.
+  Uses namespaced event to prevent listener accumulation on repeated calls.
+****************************************************************************/
+function register_observer_cleanup_handler()
+{
+  // Remove any existing handler first to prevent accumulation
+  $(window).off('beforeunload.observer_cleanup');
+  // Add namespaced event handler
+  $(window).on('beforeunload.observer_cleanup', function() {
+    cleanup_observer_follow_mode();
+  });
+}
+
+/****************************************************************************
+  Initialize embed mode from URL parameter.
+  Parses ?embed=1 and disables user interaction for iframe viewing.
+****************************************************************************/
+function init_embed_mode()
+{
+  var embed_param = $.getUrlVar('embed');
+  if (embed_param === '1' || embed_param === 'true') {
+    embed_mode = true;
+    apply_embed_mode_settings();
+  }
+}
+
+/****************************************************************************
+  Apply embed mode settings - disable audio, controls, keyboard, and reduce UI.
+****************************************************************************/
+function apply_embed_mode_settings()
+{
+  if (!embed_mode) return;
+
+  // Disable audio
+  audio_enabled = false;
+  sounds_enabled = false;
+
+  // Disable keyboard input
+  keyboard_input_enabled = false;
+
+  // Add CSS class for styling
+  document.body.classList.add('embed-mode');
+
+  // Disable OrbitControls if available
+  if (typeof controls !== 'undefined' && controls !== null) {
+    controls.enabled = false;
+    controls.enablePan = false;
+    controls.enableZoom = false;
+    controls.enableRotate = false;
+  }
+
+  // Hide UI elements in embed mode
+  var embed_hidden_elements = [
+    'game_menu_panel',
+    'game_chatbox_panel',  // The actual chatbox element (not 'chat_panel')
+    'turn_done_button',
+    'unit_orders_bar',
+    'minimap_panel',
+    'info_panel',
+    'civ_status_bar'
+  ];
+
+  embed_hidden_elements.forEach(function(elementId) {
+    var el = document.getElementById(elementId);
+    if (el) {
+      el.style.display = 'none';
+    }
+  });
+
+  // Also hide the jQuery UI dialog wrapper for chatbox (has class .chatbox_dialog)
+  $(".chatbox_dialog").hide();
+  // And hide the dialog's parent container
+  $("#game_chatbox_panel").parent().hide();
+
+  freelog(LOG_DEBUG, '[Observer] Embed mode enabled - controls and UI disabled');
+}
+
+/****************************************************************************
+  Check if embed mode is currently active.
+  Returns true if embed_mode flag is set.
+****************************************************************************/
+function is_embed_mode()
+{
+  return embed_mode;
+}
+
+/****************************************************************************
+  AUTOJOIN MODE SYSTEM
+  Functions for automatic connection without username dialog.
+****************************************************************************/
+
+/****************************************************************************
+  Check if autojoin mode should be activated from URL parameters.
+  Returns true if autojoin=1 or autojoin=true in URL.
+****************************************************************************/
+function should_autojoin()
+{
+  var autojoin_param = $.getUrlVar('autojoin');
+  return autojoin_param === '1' || autojoin_param === 'true';
+}
+
+/****************************************************************************
+  Generate a random observer username in format: observer_XXXXX
+  Used when no username is provided in URL.
+****************************************************************************/
+function generate_observer_name()
+{
+  var chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
+  var suffix = '';
+  for (var i = 0; i < 8; i++) {
+    suffix += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return 'observer_' + suffix;
+}
+
+/****************************************************************************
+  Validate a username for autojoin.
+  Rules: 3-31 chars, alphanumeric + underscore, starts with letter or underscore
+****************************************************************************/
+function validate_autojoin_username(name)
+{
+  if (name === null || name === undefined) {
+    return false;
+  }
+
+  if (typeof name !== 'string') {
+    return false;
+  }
+
+  // Length check: 3-31 characters
+  if (name.length < 3 || name.length > 31) {
+    return false;
+  }
+
+  // Must start with letter or underscore
+  if (!/^[a-zA-Z_]/.test(name)) {
+    return false;
+  }
+
+  // Must only contain letters, numbers, and underscores
+  if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(name)) {
+    return false;
+  }
+
+  return true;
+}
+
+/****************************************************************************
+  Get the username for autojoin mode.
+  Uses URL param base if provided, with random suffix for uniqueness.
+  This ensures page refreshes don't cause "username already connected" errors.
+****************************************************************************/
+function get_autojoin_username()
+{
+  var name_param = $.getUrlVar('name');
+  // Use 8 random chars for better uniqueness with many concurrent viewers
+  var random_suffix = '_' + Math.random().toString(36).substring(2, 10);
+
+  if (name_param) {
+    // Trim whitespace and any existing random suffix
+    name_param = name_param.trim();
+    // Remove any existing suffix (e.g., global_view_abc12345 -> global_view)
+    var base_name = name_param.replace(/_[a-z0-9]{4,8}$/, '');
+
+    // Add new random suffix to make connection unique
+    var unique_name = base_name + random_suffix;
+
+    // Ensure total length is valid (3-31 chars)
+    if (unique_name.length > 31) {
+      unique_name = base_name.substring(0, 22) + random_suffix;
+    }
+
+    if (validate_autojoin_username(unique_name)) {
+      return unique_name;
+    }
+  }
+
+  // Generate random name
+  return generate_observer_name();
+}
+
+/****************************************************************************
+  Initialize autojoin mode - skip username dialog and connect directly.
+****************************************************************************/
+function init_autojoin_mode()
+{
+  if (!should_autojoin()) {
+    return;
+  }
+
+  autojoin_active = true;
+  username = get_autojoin_username();
+
+  // Check if provided name is invalid and regenerate
+  var name_param = $.getUrlVar('name');
+  if (name_param && !validate_autojoin_username(name_param.trim())) {
+    username = generate_observer_name();
+  }
+
+  freelog(LOG_DEBUG, '[Autojoin] Starting autojoin mode with username: ' + username);
+
+  // Hide intro elements (same as pregame_handle_user)
+  // Check if dialog is initialized before trying to close it
+  try {
+    if ($("#dialog").hasClass('ui-dialog-content')) {
+      $("#dialog").dialog('close');
+    }
+  } catch (e) {
+    // Dialog was never initialized, ignore
+  }
+  $("#fciv-intro").hide();
+
+  // Initialize embed mode if URL has embed=1 (hides UI elements, disables audio)
+  init_embed_mode();
+
+  // Initialize observe_player mode if URL has observe_player param
+  // Note: Actual /observe command is sent after login via execute_observe_player_attachment()
+  init_observe_player_mode();
+
+  // Initialize sprites/tileset - this triggers async loading chain:
+  // init_sprites() → preload_check() → webgl_preload() → webgl_preload_complete() → network_init()
+  // We must NOT call network_init() here - let the callback chain handle it after assets load
+  init_sprites();
+}
+
+/****************************************************************************
+  OBSERVER PLAYER ATTACHMENT SYSTEM
+  Functions for attaching to a specific player's fog-of-war view.
+****************************************************************************/
+
+/****************************************************************************
+  Get the observe_player URL parameter, handling URL encoding.
+  Returns player name to observe, or null if not specified.
+****************************************************************************/
+function get_observe_player_param()
+{
+  var param = $.getUrlVar('observe_player');
+
+  if (!param || param === '') {
+    return null;
+  }
+
+  // Trim whitespace
+  return param.trim();
+}
+
+/****************************************************************************
+  Send /observe command to attach to a specific player or observe globally.
+  player_name: Player name to observe, or null for global observation.
+  SECURITY: Validates player_name to prevent command injection attacks.
+****************************************************************************/
+function request_observe_player(player_name)
+{
+  // SECURITY: Validate player name contains only safe characters
+  if (player_name && !SAFE_PLAYER_NAME_REGEX.test(player_name)) {
+    console.error('[Observer] Invalid player name contains unsafe characters:', player_name);
+    return;
+  }
+
+  observe_player = player_name;
+
+  if (typeof send_message === 'function') {
+    if (player_name) {
+      send_message('/observe ' + player_name);
+    } else {
+      send_message('/observe ');
+    }
+  }
+}
+
+/****************************************************************************
+  Initialize observe player mode from URL parameter.
+  Does NOT send command - that happens after login via execute_observe_player_attachment.
+****************************************************************************/
+function init_observe_player_mode()
+{
+  var player_param = get_observe_player_param();
+
+  if (player_param) {
+    observe_player = player_param;
+  }
+}
+
+/****************************************************************************
+  Execute observer attachment after successful login.
+  Sends /observe command if observe_player was set during initialization.
+  SECURITY: Validates player name format to prevent command injection.
+****************************************************************************/
+function execute_observe_player_attachment()
+{
+  if (!observe_player || observe_player === '') {
+    return;
+  }
+
+  // SECURITY: Validate player name format to prevent command injection
+  if (!SAFE_PLAYER_NAME_REGEX.test(observe_player)) {
+    console.error('[Observer] Invalid player name contains unsafe characters:', observe_player);
+    return;
+  }
+
+  // VALIDATION: Check if player exists (optional - warn but proceed, server will reject if invalid)
+  var player_exists = false;
+  if (typeof players !== 'undefined') {
+    for (var player_id in players) {
+      if (players[player_id] && players[player_id]['name'] === observe_player) {
+        player_exists = true;
+        break;
+      }
+    }
+    if (!player_exists) {
+      console.warn('[Observer] Player not found:', observe_player, '- proceeding anyway');
+    }
+  }
+
+  if (typeof send_message === 'function') {
+    send_message('/observe ' + observe_player);
+  }
+}
+
+/****************************************************************************
+  Check if observer is attached to a specific player (vs global observer).
+  Returns true if attached to a player's fog-of-war view.
+****************************************************************************/
+function is_attached_observer()
+{
+  return observe_player !== null && observe_player !== '';
+}
+
 /**************************************************************************
  Main starting point for FCIV.NET
 **************************************************************************/

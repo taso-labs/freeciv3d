@@ -29,12 +29,19 @@ var civserverport = null;
 var ping_last = new Date().getTime();
 var pingtime_check = 240000;
 var ping_timer = null;
+var network_init_called = false;  // Guard against double initialization
 
 /****************************************************************************
   Initialized the Network communication, by requesting a valid server port.
 ****************************************************************************/
 function network_init()
 {
+  // Prevent double initialization (both civclient.js and renderer_main.js call this)
+  if (network_init_called) {
+    freelog(LOG_DEBUG, "network_init: Already called, skipping duplicate initialization");
+    return;
+  }
+  network_init_called = true;
 
   var civclient_request_url = "/civclientlauncher";
   if ($.getUrlVar('action') != null) civclient_request_url += "?action=" + $.getUrlVar('action');

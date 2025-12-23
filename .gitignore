@@ -102,3 +102,7 @@ freeciv-web/flyway.properties
 freeciv-web/src/main/webapp/javascript/packets.js
 freeciv-web/src/main/webapp/javascript/packhand_gen.js
 .cache/
+
+# Documentation (generated/local)
+docs/
+*Zone.Identifier

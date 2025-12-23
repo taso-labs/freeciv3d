@@ -288,11 +288,13 @@ class AgentWebSocketHandler:
                             # CRITICAL FIX (AGE-192): Update ConnectionInfo with player_id for session persistence
                             # This enables session resumption to work correctly after disconnects
                             game_id = msg_data.get('game_id')
+                            civserver_port = msg_data.get('civserver_port')  # For observer URL generation
                             if self.player_id is not None:
                                 await connection_manager.update_agent_auth(
                                     self.agent_id,
                                     self.player_id,
-                                    game_id
+                                    game_id,
+                                    civserver_port
                                 )
 
                             logger.info(

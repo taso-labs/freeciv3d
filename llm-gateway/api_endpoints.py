@@ -6,7 +6,10 @@ REST API endpoints for LLM Gateway
 """
 
 import logging
+import time
 from typing import Dict, Any, List, Optional
+from urllib.parse import quote
+import uuid
 from fastapi import APIRouter, HTTPException, Query, Depends, Header, Request
 from pydantic import BaseModel, Field, ValidationError
 
@@ -20,8 +23,10 @@ except ImportError:
 
 try:
     from .config import settings
+    from .connection_manager import connection_manager
 except ImportError:
     from config import settings
+    from connection_manager import connection_manager
 
 # Gateway will be injected from main.py to avoid circular imports
 gateway = None
@@ -46,6 +51,20 @@ if HAS_SLOWAPI:
         limiter = Limiter(key_func=get_remote_address)
 else:
     limiter = None
+
+
+def rate_limit(limit_string: str):
+    """
+    Rate limit decorator that gracefully handles missing slowapi.
+    Returns no-op decorator if limiter is not available.
+    """
+    if limiter is not None:
+        return limiter.limit(limit_string)
+    else:
+        # No-op decorator when rate limiting is not available
+        def noop_decorator(func):
+            return func
+        return noop_decorator
 
 
 # Pydantic models for request/response validation
@@ -320,7 +339,7 @@ async def get_game_info(
 
 
 @router.get("/games")
-@limiter.limit(f"{settings.rate_limit_requests_per_minute}/minute") if limiter else lambda x: x
+@rate_limit(f"{settings.rate_limit_requests_per_minute}/minute")
 async def list_games(
     request: Request,
     auth: Dict[str, Any] = Depends(verify_api_key),
@@ -370,16 +389,16 @@ async def get_spectator_url(
         # LLM games always use multiplayer ports (6001-6009), never 6000
         game_port = game_session.get("port")
 
-        if game_port is None or game_port == 6000:
+        if game_port is None or not (6001 <= game_port <= 6009):
             # This shouldn't happen - indicates authentication bug or timing issue
-            logger.warning(f"Game {game_id} has no port or invalid port {game_port}. Session data: {game_session}")
+            logger.warning(f"Game {game_id} has invalid port {game_port}. Status: {game_session.get('status')}")
             raise HTTPException(
                 status_code=409,  # Conflict
                 detail="Game port not assigned. Agents may still be connecting/authenticating. Wait a few seconds and try again."
             )
 
-        # Generate spectator URL
-        base_url = "http://localhost:8080"  # Could be made configurable
+        # Generate spectator URL using configured base URL
+        base_url = settings.freeciv_web_base_url.rstrip("/")
         spectator_url = f"{base_url}/webclient/spectator.jsp?game_id={game_id}&port={game_port}&mode=full"
         logger.info(f"Generated spectator URL for game {game_id}: port={game_port}")
 
@@ -404,41 +423,90 @@ async def get_spectator_url(
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
-@router.get("/games")
-async def list_games(
-    request: Request,
-    status: Optional[str] = Query(None, description="Filter by game status")
+@router.get("/games/{game_id}/observer-urls")
+@rate_limit(f"{settings.rate_limit_requests_per_minute}/minute")
+async def get_observer_urls(
+    game_id: str,
+    request: Request
 ) -> Dict[str, Any]:
-    """List all active games available for spectating"""
+    """
+    Get observer URLs for embedding game views in agent-clash-client.
+
+    Returns 3 observer URLs:
+    - global: Bird's eye view with strategic camera preset
+    - player1: AI*1's perspective with fog-of-war and cinematic camera
+    - player2: AI*2's perspective with fog-of-war and cinematic camera
+
+    All URLs include embed=1 and autojoin=1 for seamless iframe embedding.
+    """
     try:
-        gw = get_gateway()
+        # Query connection_manager for game info (single source of truth for WebSocket connections)
+        game_info = await connection_manager.get_game_info(game_id)
 
-        games = []
-        for game_id, session in gw.game_sessions.items():
-            game_status = session.get("status", "unknown")
+        if game_info is None:
+            raise HTTPException(status_code=404, detail="Game not found")
 
-            # Filter by status if provided
-            if status and game_status != status:
-                continue
+        # Get the game port from authenticated connection
+        game_port = game_info.get("civserver_port")
 
-            games.append({
-                "game_id": game_id,
-                "port": session.get("port", 6000),
-                "status": game_status,
-                "players": len(session.get("agents", {})),
-                "created_at": session.get("created_at"),
-                "turn": session.get("turn", 0),
-                "spectator_url": f"http://localhost:8080/webclient/spectator.jsp?game_id={game_id}&port={session.get('port', 6000)}&mode=full"
-            })
+        if game_port is None or not (6001 <= game_port <= 6009):
+            logger.warning(
+                f"Game {game_id} has invalid port {game_port}. "
+                f"Agent may still be connecting."
+            )
+            raise HTTPException(
+                status_code=409,
+                detail="Game port not assigned. Agents may still be connecting. "
+                       "Wait a few seconds and try again."
+            )
 
-        return {
-            "success": True,
-            "games": games,
-            "total": len(games)
+        # Build observer URLs using configured base URL
+        base_url = settings.freeciv_web_base_url.rstrip("/")
+        webclient_path = f"{base_url}/webclient/"
+
+        # Use player numbers (playerno) instead of names for reliability
+        # Player names can be customized (e.g., "GPT-5.2", "Sonnet 4.5"),
+        # but playerno is always 0 for first player, 1 for second player
+        player1_id = "0"
+        player2_id = "1"
+
+        # Generate unique viewer names to prevent WebSocket conflicts
+        # when multiple viewers connect to the same game
+        # URL-encode for consistency (even though these names are alphanumeric)
+        unique_suffix = uuid.uuid4().hex[:8]
+        global_viewer_name = quote(f"global_view_{unique_suffix}", safe="")
+        player1_viewer_name = quote(f"player1_view_{unique_suffix}", safe="")
+        player2_viewer_name = quote(f"player2_view_{unique_suffix}", safe="")
+
+        observer_urls = {
+            "global": (
+                f"{webclient_path}?action=observe&civserverport={game_port}"
+                f"&embed=1&autojoin=1&name={global_viewer_name}&camera=strategic"
+            ),
+            "player1": (
+                f"{webclient_path}?action=observe&civserverport={game_port}"
+                f"&observe_player={player1_id}&follow={player1_id}"
+                f"&embed=1&autojoin=1&name={player1_viewer_name}&camera=cinematic"
+            ),
+            "player2": (
+                f"{webclient_path}?action=observe&civserverport={game_port}"
+                f"&observe_player={player2_id}&follow={player2_id}"
+                f"&embed=1&autojoin=1&name={player2_viewer_name}&camera=cinematic"
+            )
         }
 
+        logger.info(f"Generated observer URLs for game {game_id}: port={game_port}")
+
+        return {
+            "game_id": game_id,
+            "civserver_port": game_port,
+            "observer_urls": observer_urls
+        }
+
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Error listing games: {e}")
+        logger.error(f"Error getting observer URLs for game {game_id}: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
@@ -490,5 +558,3 @@ def check_rate_limit(agent_id: str) -> Dict[str, Any]:
     return {"allowed": True}
 
 
-# Import time for metrics
-import time

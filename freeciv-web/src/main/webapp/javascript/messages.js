@@ -205,7 +205,10 @@ function update_chatbox(messages)
         message_log.update(messages[i]);
       }
   }
-  setTimeout(() => $('#freeciv_custom_scrollbar_div').mCustomScrollbar('scrollTo', 'bottom'), 100);
+  // Skip scrollbar operation in embed mode - element is hidden
+  if (typeof is_embed_mode !== 'function' || !is_embed_mode()) {
+    setTimeout(() => $('#freeciv_custom_scrollbar_div').mCustomScrollbar('scrollTo', 'bottom'), 100);
+  }
 }
 
 /**************************************************************************

@@ -80,6 +80,9 @@ class Settings(BaseSettings):
     enable_batch_actions: bool = True
     enable_metrics: bool = True
 
+    # Observer streaming settings
+    freeciv_web_base_url: str = "http://localhost:8080"  # Base URL for FreeCiv web client
+
     class Config:
         env_file = ".env"
         env_prefix = "GATEWAY_"

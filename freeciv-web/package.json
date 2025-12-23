@@ -1,0 +1,43 @@
+{
+  "name": "freeciv-web-tests",
+  "version": "1.0.0",
+  "description": "Test suite for FreeCiv-web JavaScript components",
+  "scripts": {
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "test:coverage": "jest --coverage",
+    "test:observer": "jest --testPathPattern=observer"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0",
+    "jest-environment-jsdom": "^29.7.0",
+    "@testing-library/jest-dom": "^6.1.0"
+  },
+  "jest": {
+    "testEnvironment": "jsdom",
+    "setupFilesAfterEnv": [
+      "<rootDir>/jest.setup.js"
+    ],
+    "testMatch": [
+      "**/src/main/webapp/javascript/__tests__/**/*.test.js"
+    ],
+    "moduleNameMapper": {
+      "^@/(.*)$": "<rootDir>/src/main/webapp/javascript/$1"
+    },
+    "collectCoverageFrom": [
+      "src/main/webapp/javascript/**/*.js",
+      "!src/main/webapp/javascript/2dcanvas/**",
+      "!src/main/webapp/javascript/libs/**",
+      "!src/main/webapp/javascript/__tests__/**",
+      "!src/main/webapp/javascript/__mocks__/**"
+    ],
+    "coverageThreshold": {
+      "global": {
+        "branches": 70,
+        "functions": 70,
+        "lines": 70,
+        "statements": 70
+      }
+    }
+  }
+}

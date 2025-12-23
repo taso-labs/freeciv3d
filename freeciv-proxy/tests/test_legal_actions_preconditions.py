@@ -865,5 +865,150 @@ class TestCityProductionBuildPermissions:
         assert city2_actions[0]['production_name'] == 'Settlers'
 
 
+class TestCacheInvalidation:
+    """Test cache invalidation behavior for stale action prevention (E041, E023)"""
+
+    def test_invalidate_action_cache_clears_all(self):
+        """Test that invalidate_action_cache() clears all cached actions"""
+        civcom = create_mock_civcom()
+        civcom.invalidate_action_cache = CivCom.invalidate_action_cache.__get__(civcom)
+
+        # Pre-populate cache
+        civcom._action_cache = {
+            '10_0_tech_actions': [{'type': 'tech_research', 'tech_id': 1}],
+            '10_0_city_actions': [{'type': 'city_production', 'city_id': 1}],
+            '10_1_tech_actions': [{'type': 'tech_research', 'tech_id': 2}],
+        }
+
+        # Invalidate all cache
+        civcom.invalidate_action_cache()
+
+        # All entries should be cleared
+        assert len(civcom._action_cache) == 0
+
+    def test_invalidate_action_cache_clears_specific_player(self):
+        """Test that invalidate_action_cache() can clear only specific player's cache"""
+        civcom = create_mock_civcom()
+        civcom.invalidate_action_cache = CivCom.invalidate_action_cache.__get__(civcom)
+
+        # Pre-populate cache for multiple players
+        civcom._action_cache = {
+            '10_0_tech_actions': [{'type': 'tech_research', 'tech_id': 1}],
+            '10_1_tech_actions': [{'type': 'tech_research', 'tech_id': 2}],
+            '10_0_city_actions': [{'type': 'city_production', 'city_id': 1}],
+        }
+
+        # Invalidate only player 0's cache
+        civcom.invalidate_action_cache(player_id=0)
+
+        # Only player 1's cache should remain
+        assert '10_1_tech_actions' in civcom._action_cache
+        assert '10_0_tech_actions' not in civcom._action_cache
+        assert '10_0_city_actions' not in civcom._action_cache
+
+    def test_invalidate_action_cache_clears_specific_type(self):
+        """Test that invalidate_action_cache() can clear only specific cache type"""
+        civcom = create_mock_civcom()
+        civcom.invalidate_action_cache = CivCom.invalidate_action_cache.__get__(civcom)
+
+        # Pre-populate cache
+        civcom._action_cache = {
+            '10_0_tech_actions': [{'type': 'tech_research', 'tech_id': 1}],
+            '10_0_city_actions': [{'type': 'city_production', 'city_id': 1}],
+        }
+
+        # Invalidate only tech actions
+        civcom.invalidate_action_cache(cache_type='tech')
+
+        # Only city cache should remain
+        assert '10_0_city_actions' in civcom._action_cache
+        assert '10_0_tech_actions' not in civcom._action_cache
+
+    def test_invalidate_action_cache_with_player_and_type(self):
+        """Test that invalidate_action_cache() can filter by both player and type"""
+        civcom = create_mock_civcom()
+        civcom.invalidate_action_cache = CivCom.invalidate_action_cache.__get__(civcom)
+
+        # Pre-populate cache
+        civcom._action_cache = {
+            '10_0_tech_actions': [{'type': 'tech_research', 'tech_id': 1}],
+            '10_0_city_actions': [{'type': 'city_production', 'city_id': 1}],
+            '10_1_tech_actions': [{'type': 'tech_research', 'tech_id': 2}],
+        }
+
+        # Invalidate only player 0's tech actions
+        civcom.invalidate_action_cache(player_id=0, cache_type='tech')
+
+        # Other caches should remain
+        assert '10_0_city_actions' in civcom._action_cache
+        assert '10_1_tech_actions' in civcom._action_cache
+        assert '10_0_tech_actions' not in civcom._action_cache
+
+    def test_tech_cache_invalidated_on_research_state_change(self):
+        """Test that tech actions are invalidated when research state changes"""
+        civcom = create_mock_civcom()
+        civcom.invalidate_action_cache = CivCom.invalidate_action_cache.__get__(civcom)
+        civcom.game_turn = 10
+        civcom.research_info = {
+            0: {
+                'researching': A_UNSET,  # No tech selected
+                'inventions': []
+            }
+        }
+
+        with patch.object(civcom, 'get_researchable_techs') as mock_researchable:
+            mock_researchable.return_value = [
+                {'id': 1, 'name': 'Writing', 'cost': 50},
+                {'id': 2, 'name': 'Bronze Working', 'cost': 60}
+            ]
+
+            # First call - populates cache
+            actions1 = civcom._get_tech_research_actions(player_id=0)
+            assert len(actions1) == 2
+
+            # Simulate tech selection - research state changes
+            civcom.research_info[0]['researching'] = 1  # Now researching Writing
+
+            # Without invalidation, cache would return stale data
+            # After invalidation, should return empty (already researching)
+            civcom.invalidate_action_cache(player_id=0, cache_type='tech')
+
+            actions2 = civcom._get_tech_research_actions(player_id=0)
+
+            # Should return empty - already researching a tech
+            assert len(actions2) == 0
+
+    def test_tech_cache_returns_stale_without_invalidation(self):
+        """Test that without invalidation, cache returns stale tech actions (the bug)"""
+        civcom = create_mock_civcom()
+        civcom.game_turn = 10
+        civcom.research_info = {
+            0: {
+                'researching': A_UNSET,
+                'inventions': []
+            }
+        }
+
+        with patch.object(civcom, 'get_researchable_techs') as mock_researchable:
+            mock_researchable.return_value = [
+                {'id': 1, 'name': 'Writing', 'cost': 50}
+            ]
+
+            # First call - populates cache
+            actions1 = civcom._get_tech_research_actions(player_id=0)
+            assert len(actions1) == 1
+
+            # Simulate tech selection without cache invalidation
+            civcom.research_info[0]['researching'] = 1
+
+            # Second call - returns cached (stale!) data
+            actions2 = civcom._get_tech_research_actions(player_id=0)
+
+            # Bug behavior: cache returns stale tech actions
+            # This demonstrates why we need cache invalidation
+            assert actions2 is actions1  # Same cached object
+            assert len(actions2) == 1  # Stale: should be 0
+
+
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])

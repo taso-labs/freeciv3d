@@ -147,25 +147,33 @@ class WSHandler(websocket.WebSocketHandler):
 def validate_username(name):
     if (name is None or len(name) <= 2 or len(name) >= 32):
         return False
-    
-    # Clean up stopped connections for this username before validation
+
+    # Clean up existing connections for this username before validation
+    # This allows reconnection (e.g., page refresh, multiple tabs) by closing old connection
     keys_to_remove = []
     for civkey in list(civcoms.keys()):
-        if name == civcoms[civkey].username:
+        if civkey in civcoms and name == civcoms[civkey].username:
             if civcoms[civkey].stopped:
                 logger.info(f"Removing stopped connection for user: {name}")
-                keys_to_remove.append(civkey)
             else:
-                logger.warn(f"User already connected: {name}")
-                return False
-    
-    # Remove stopped connections
+                # Close active connection to allow reconnection
+                logger.info(f"Closing active connection for reconnecting user: {name}")
+                civcoms[civkey].stopped = True
+                try:
+                    civcoms[civkey].close_connection()
+                except Exception as e:
+                    logger.warn(f"Error closing connection: {e}")
+            keys_to_remove.append(civkey)
+
+    # Remove old connections (check if key still exists)
     for key in keys_to_remove:
-        del civcoms[key]
-        logger.info(f"Deleted stopped connection key: {key}")
+        if key in civcoms:
+            del civcoms[key]
+            logger.info(f"Deleted connection key: {key}")
 
     name = name.lower()
-    return re.fullmatch('[a-z][a-z0-9]*', name) is not None
+    # Allow letters, numbers, and underscores (for observer names like global_view_abc123)
+    return re.fullmatch('[a-z][a-z0-9_]*', name) is not None
 
 
 if __name__ == "__main__":

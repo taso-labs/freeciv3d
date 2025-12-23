@@ -1156,3 +1156,44 @@ li.tech-both::before {
 #city_add_to_worklist_btn {
   padding: 10px;
 }
+/* ============================================
+   EMBED MODE STYLES
+   For iframe observer viewing - hides navbar, footer, and maximizes game canvas
+   ============================================ */
+
+body.embed-mode {
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+body.embed-mode .navbar,
+body.embed-mode #freeciv_custom_navbar,
+body.embed-mode .navbar-header,
+body.embed-mode .fciv-intro,
+body.embed-mode #fciv-intro,
+body.embed-mode #game_welcome_text,
+body.embed-mode footer,
+body.embed-mode .footer,
+body.embed-mode .ad_bottom,
+body.embed-mode #ad-bottom {
+  display: none !important;
+}
+
+body.embed-mode #tabs,
+body.embed-mode #tabs-map,
+body.embed-mode #mapcanvas,
+body.embed-mode #mapview_canvas_div {
+  position: fixed !important;
+  top: 0 !important;
+  left: 0 !important;
+  width: 100vw !important;
+  height: 100vh !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+
+body.embed-mode canvas {
+  width: 100vw !important;
+  height: 100vh !important;
+}

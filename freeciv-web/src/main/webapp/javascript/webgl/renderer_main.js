@@ -57,6 +57,8 @@ function webgl_preload_complete()
 {
   $.unblockUI();
 
+  // Always call network_init() - this is the proper place in the initialization chain
+  // The network_init_called guard in clinet.js prevents duplicate WebSocket connections
   network_init();
 }
 
@@ -64,19 +66,29 @@ function webgl_preload_complete()
  Init the map renderer
  ****************************************************************************/
 function renderer_init() {
+  freelog(LOG_DEBUG, '[Renderer] renderer_init() called, client_state: ' + client_state());
   if (!Detector.webgl) {
     swal("3D WebGL not supported by your browser or you don't have a 3D graphics card. ");
     return;
   }
 
   if (C_S_RUNNING === client_state() || C_S_OVER === client_state()) {
+    freelog(LOG_DEBUG, '[Renderer] Starting webgl_start_renderer()');
     webgl_start_renderer();
     init_webgl_mapview();
     init_webgl_mapctrl();
     init_game_unit_panel();
-    init_chatbox();
+    // Skip chatbox init in embed mode - mCustomScrollbar plugin fails on hidden elements
+    if (typeof is_embed_mode !== 'function' || !is_embed_mode()) {
+      init_chatbox();
+    }
    keyboard_input=true;
     $.unblockUI();
-    setTimeout("$('#mapcanvas').fadeIn(2500);", 300);
+    freelog(LOG_DEBUG, '[Renderer] Scheduling mapcanvas fadeIn');
+    setTimeout(function() {
+      freelog(LOG_DEBUG, '[Renderer] Executing mapcanvas fadeIn');
+      $('#mapcanvas').fadeIn(2500);
+    }, 300);
+    freelog(LOG_DEBUG, '[Renderer] renderer_init() completed successfully');
   }
 }
