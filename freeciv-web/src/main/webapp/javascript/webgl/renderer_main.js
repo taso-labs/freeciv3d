@@ -66,14 +66,14 @@ function webgl_preload_complete()
  Init the map renderer
  ****************************************************************************/
 function renderer_init() {
-  console.log('[Renderer] renderer_init() called, client_state:', client_state());
+  freelog(LOG_DEBUG, '[Renderer] renderer_init() called, client_state: ' + client_state());
   if (!Detector.webgl) {
     swal("3D WebGL not supported by your browser or you don't have a 3D graphics card. ");
     return;
   }
 
   if (C_S_RUNNING === client_state() || C_S_OVER === client_state()) {
-    console.log('[Renderer] Starting webgl_start_renderer()');
+    freelog(LOG_DEBUG, '[Renderer] Starting webgl_start_renderer()');
     webgl_start_renderer();
     init_webgl_mapview();
     init_webgl_mapctrl();
@@ -84,11 +84,11 @@ function renderer_init() {
     }
    keyboard_input=true;
     $.unblockUI();
-    console.log('[Renderer] Scheduling mapcanvas fadeIn');
+    freelog(LOG_DEBUG, '[Renderer] Scheduling mapcanvas fadeIn');
     setTimeout(function() {
-      console.log('[Renderer] Executing mapcanvas fadeIn');
+      freelog(LOG_DEBUG, '[Renderer] Executing mapcanvas fadeIn');
       $('#mapcanvas').fadeIn(2500);
     }, 300);
-    console.log('[Renderer] renderer_init() completed successfully');
+    freelog(LOG_DEBUG, '[Renderer] renderer_init() completed successfully');
   }
 }

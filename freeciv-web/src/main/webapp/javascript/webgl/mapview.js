@@ -63,7 +63,7 @@ var MAPVIEW_ASPECT_FACTOR = 35.71;
 ****************************************************************************/
 function webgl_start_renderer()
 {
-  console.log('[Renderer] webgl_start_renderer() called');
+  freelog(LOG_DEBUG, '[Renderer] webgl_start_renderer() called');
   var new_mapview_width;
   var new_mapview_height;
 
@@ -71,7 +71,7 @@ function webgl_start_renderer()
   if (typeof is_embed_mode === 'function' && is_embed_mode()) {
     new_mapview_width = $(window).width();
     new_mapview_height = $(window).height();
-    console.log('[Renderer] Embed mode: using full window dimensions', new_mapview_width, 'x', new_mapview_height);
+    freelog(LOG_DEBUG, '[Renderer] Embed mode: using full window dimensions ' + new_mapview_width + 'x' + new_mapview_height);
 
     // In embed mode, ensure mapcanvas and parents are visible before creating WebGL context
     // Some browsers have issues creating WebGL in hidden containers
@@ -79,7 +79,7 @@ function webgl_start_renderer()
     $('#mapview_canvas_div').show();
     $('#tabs-map').show();
     $('#game_page').show();
-    console.log('[Renderer] Embed mode: made canvas containers visible');
+    freelog(LOG_DEBUG, '[Renderer] Embed mode: made canvas containers visible');
   } else {
     new_mapview_width = $(window).width() - width_offset;
     if (!is_small_screen()) {
@@ -96,7 +96,7 @@ function webgl_start_renderer()
   }
 
   container = document.getElementById('mapcanvas');
-  console.log('[Renderer] mapcanvas element:', container, 'display:', container ? container.style.display : 'null');
+  freelog(LOG_DEBUG, '[Renderer] mapcanvas element: ' + container + ' display: ' + (container ? container.style.display : 'null'));
   camera = new THREE.PerspectiveCamera( 45, new_mapview_width / new_mapview_height, 1, 12000 );
   scene = new THREE.Scene();
 
@@ -144,14 +144,14 @@ function webgl_start_renderer()
   maprenderer.setPixelRatio(window.devicePixelRatio);
   maprenderer.setSize(new_mapview_width, new_mapview_height);
   container.appendChild(maprenderer.domElement);
-  console.log('[Renderer] Three.js canvas appended to mapcanvas');
+  freelog(LOG_DEBUG, '[Renderer] Three.js canvas appended to mapcanvas');
 
   if (anaglyph_3d_enabled) {
     anaglyph_effect = new AnaglyphEffect( maprenderer );
     anaglyph_effect.setSize( new_mapview_width, new_mapview_height );
   }
 
-  console.log('[Renderer] Starting animation loop');
+  freelog(LOG_DEBUG, '[Renderer] Starting animation loop');
   animate();
 
   if (is_small_screen()) {

@@ -526,7 +526,7 @@ function handle_map_info(packet)
   // (fallback check in case handle_map_info is called after handle_game_info)
   if (observing && game_info != null && game_info['turn'] >= 1
       && client_state() == C_S_PREPARING) {
-    console.log('[Observer] Map info received, game in progress (turn ' + game_info['turn'] + '), triggering C_S_RUNNING');
+    freelog(LOG_DEBUG, '[Observer] Map info received, game in progress (turn ' + game_info['turn'] + '), triggering C_S_RUNNING');
     update_client_state(C_S_RUNNING);
   }
 }
@@ -540,7 +540,7 @@ function handle_game_info(packet)
   // since they won't receive PACKET_START_PHASE (it was already sent before they joined)
   if (observing && game_info['turn'] >= 1 && client_state() == C_S_PREPARING
       && typeof map !== 'undefined' && map != null && map['xsize'] > 0) {
-    console.log('[Observer] Game already in progress (turn ' + game_info['turn'] + '), triggering C_S_RUNNING');
+    freelog(LOG_DEBUG, '[Observer] Game already in progress (turn ' + game_info['turn'] + '), triggering C_S_RUNNING');
     update_client_state(C_S_RUNNING);
   }
 }

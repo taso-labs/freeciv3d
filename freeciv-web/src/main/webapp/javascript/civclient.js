@@ -108,7 +108,7 @@ function init_observer_follow_mode()
         (player['username'] && player['username'] === follow_param) ||
         (player['playerno'] !== undefined && player['playerno'].toString() === follow_param))) {
       observer_follow_player = player['playerno'];
-      console.log('[Observer] Following player:', player['name'] || 'Unknown', 'id:', observer_follow_player);
+      freelog(LOG_DEBUG, '[Observer] Following player: ' + (player['name'] || 'Unknown') + ' id: ' + observer_follow_player);
       break;
     }
   }
@@ -117,7 +117,7 @@ function init_observer_follow_mode()
     start_observer_follow_intervals();
   } else {
     // Player not found immediately - poll until players list is populated
-    console.log('[Observer] Player not found yet, polling for:', follow_param);
+    freelog(LOG_DEBUG, '[Observer] Player not found yet, polling for: ' + follow_param);
     var player_poll_attempts = 0;
     observer_player_search_interval = setInterval(function() {
       player_poll_attempts++;
@@ -130,7 +130,7 @@ function init_observer_follow_mode()
             (player['username'] && player['username'] === follow_param) ||
             (player['playerno'] !== undefined && player['playerno'].toString() === follow_param))) {
           observer_follow_player = player['playerno'];
-          console.log('[Observer] Found player after polling:', player['name'] || 'Unknown', 'id:', observer_follow_player);
+          freelog(LOG_DEBUG, '[Observer] Found player after polling: ' + (player['name'] || 'Unknown') + ' id: ' + observer_follow_player);
           clearInterval(observer_player_search_interval);
           observer_player_search_interval = null;
           start_observer_follow_intervals();
@@ -187,7 +187,7 @@ function observer_center_on_followed_player()
 
   var player = players[observer_follow_player];
   if (!player || !player['is_alive']) {
-    console.log('[Observer] Followed player not found or dead');
+    freelog(LOG_DEBUG, '[Observer] Followed player not found or dead');
     return;
   }
 
@@ -215,10 +215,10 @@ function observer_center_on_followed_player()
     var ptile = city_tile(target_city);
     if (ptile) {
       center_tile_mapcanvas(ptile);
-      console.log('[Observer] Centered on', target_city['name'] || 'Unknown', 'size:', target_city['size'] || 0);
+      freelog(LOG_DEBUG, '[Observer] Centered on ' + (target_city['name'] || 'Unknown') + ' size: ' + (target_city['size'] || 0));
     }
   } else {
-    console.log('[Observer] No cities found for player', observer_follow_player);
+    freelog(LOG_DEBUG, '[Observer] No cities found for player ' + observer_follow_player);
   }
 }
 
@@ -318,7 +318,7 @@ function apply_embed_mode_settings()
   // And hide the dialog's parent container
   $("#game_chatbox_panel").parent().hide();
 
-  console.log('[Observer] Embed mode enabled - controls and UI disabled');
+  freelog(LOG_DEBUG, '[Observer] Embed mode enabled - controls and UI disabled');
 }
 
 /****************************************************************************
@@ -443,7 +443,7 @@ function init_autojoin_mode()
     username = generate_observer_name();
   }
 
-  console.log('[Autojoin] Starting autojoin mode with username:', username);
+  freelog(LOG_DEBUG, '[Autojoin] Starting autojoin mode with username: ' + username);
 
   // Hide intro elements (same as pregame_handle_user)
   // Check if dialog is initialized before trying to close it

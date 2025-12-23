@@ -34,29 +34,29 @@ var width_offset = 10;
 **************************************************************************/
 function set_client_state(newstate)
 {
-  console.log('[ClientState] set_client_state called with:', newstate, 'current:', civclient_state);
+  freelog(LOG_DEBUG, '[ClientState] set_client_state called with: ' + newstate + ' current: ' + civclient_state);
   if (civclient_state != newstate) {
     civclient_state = newstate;
-    console.log('[ClientState] State changed, entering switch');
+    freelog(LOG_DEBUG, '[ClientState] State changed, entering switch');
 
     switch (civclient_state) {
     case C_S_RUNNING:
-      console.log('[ClientState] C_S_RUNNING case');
+      freelog(LOG_DEBUG, '[ClientState] C_S_RUNNING case');
       try { clear_chatbox(); } catch(e) { console.error('[ClientState] clear_chatbox error:', e); }
       $("#game_text_input").blur();
       $.unblockUI();
       try { show_new_game_message(); } catch(e) { console.error('[ClientState] show_new_game_message error:', e); }
 
       try { set_client_page(PAGE_GAME); } catch(e) { console.error('[ClientState] set_client_page error:', e); }
-      console.log('[ClientState] set_client_page done');
+      freelog(LOG_DEBUG, '[ClientState] set_client_page done');
       setup_window_size();
       if (unitpanel_active) init_game_unit_panel();
 
       update_metamessage_on_gamestart();
 
-      console.log('[ClientState] About to call renderer_init()');
+      freelog(LOG_DEBUG, '[ClientState] About to call renderer_init()');
       renderer_init();
-      console.log('[ClientState] renderer_init() returned');
+      freelog(LOG_DEBUG, '[ClientState] renderer_init() returned');
 
       // Initialize camera preset from URL parameter (e.g., ?camera=strategic)
       if (typeof init_camera_from_url_params === 'function') {
