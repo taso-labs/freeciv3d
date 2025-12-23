@@ -6,6 +6,7 @@ REST API endpoints for LLM Gateway
 """
 
 import logging
+import time
 from typing import Dict, Any, List, Optional
 from urllib.parse import quote
 import uuid
@@ -50,6 +51,20 @@ if HAS_SLOWAPI:
         limiter = Limiter(key_func=get_remote_address)
 else:
     limiter = None
+
+
+def rate_limit(limit_string: str):
+    """
+    Rate limit decorator that gracefully handles missing slowapi.
+    Returns no-op decorator if limiter is not available.
+    """
+    if limiter is not None:
+        return limiter.limit(limit_string)
+    else:
+        # No-op decorator when rate limiting is not available
+        def noop_decorator(func):
+            return func
+        return noop_decorator
 
 
 # Pydantic models for request/response validation
@@ -324,7 +339,7 @@ async def get_game_info(
 
 
 @router.get("/games")
-@limiter.limit(f"{settings.rate_limit_requests_per_minute}/minute") if limiter else lambda x: x
+@rate_limit(f"{settings.rate_limit_requests_per_minute}/minute")
 async def list_games(
     request: Request,
     auth: Dict[str, Any] = Depends(verify_api_key),
@@ -409,7 +424,7 @@ async def get_spectator_url(
 
 
 @router.get("/games/{game_id}/observer-urls")
-@limiter.limit(f"{settings.rate_limit_requests_per_minute}/minute") if limiter else lambda x: x
+@rate_limit(f"{settings.rate_limit_requests_per_minute}/minute")
 async def get_observer_urls(
     game_id: str,
     request: Request
@@ -543,5 +558,3 @@ def check_rate_limit(agent_id: str) -> Dict[str, Any]:
     return {"allowed": True}
 
 
-# Import time for metrics
-import time

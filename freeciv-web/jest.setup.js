@@ -472,7 +472,7 @@ global.should_autojoin = function() {
 global.generate_observer_name = function() {
   var chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
   var suffix = '';
-  for (var i = 0; i < 5; i++) {
+  for (var i = 0; i < 8; i++) {  // Match production: 8 chars for better uniqueness
     suffix += chars.charAt(Math.floor(Math.random() * chars.length));
   }
   return 'observer_' + suffix;

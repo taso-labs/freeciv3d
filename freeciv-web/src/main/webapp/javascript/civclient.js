@@ -245,10 +245,14 @@ function cleanup_observer_follow_mode()
 /****************************************************************************
   Register beforeunload handler for observer cleanup.
   Ensures interval timers are cleared when the page/iframe is closed.
+  Uses namespaced event to prevent listener accumulation on repeated calls.
 ****************************************************************************/
 function register_observer_cleanup_handler()
 {
-  $(window).on('beforeunload', function() {
+  // Remove any existing handler first to prevent accumulation
+  $(window).off('beforeunload.observer_cleanup');
+  // Add namespaced event handler
+  $(window).on('beforeunload.observer_cleanup', function() {
     cleanup_observer_follow_mode();
   });
 }

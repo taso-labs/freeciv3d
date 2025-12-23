@@ -88,12 +88,12 @@ describe('Autojoin Mode', () => {
       expect(get_autojoin_username()).toBe('player1_view');
     });
 
-    test('should generate observer_XXXXX name when name param is missing', () => {
+    test('should generate observer_XXXXXXXX name when name param is missing', () => {
       setUrlParams({ autojoin: '1' });
 
       const name = get_autojoin_username();
 
-      expect(name).toMatch(/^observer_[a-z0-9]{5}$/);
+      expect(name).toMatch(/^observer_[a-z0-9]{8}$/);  // 8 chars for better uniqueness
     });
 
     test('should generate different random names on each call when no name param', () => {
@@ -223,7 +223,7 @@ describe('Autojoin Mode', () => {
 
       init_autojoin_mode();
 
-      expect(global.username).toMatch(/^observer_[a-z0-9]{5}$/);
+      expect(global.username).toMatch(/^observer_[a-z0-9]{8}$/);  // 8 chars for better uniqueness
     });
 
     test('should not throw when called multiple times', () => {
@@ -322,8 +322,8 @@ describe('Autojoin Mode', () => {
 
       init_autojoin_mode();
 
-      // Should fall back to generated name
-      expect(global.username).toMatch(/^observer_[a-z0-9]{5}$/);
+      // Should fall back to generated name (8 chars for better uniqueness)
+      expect(global.username).toMatch(/^observer_[a-z0-9]{8}$/);
     });
   });
 
@@ -336,10 +336,10 @@ describe('Autojoin Mode', () => {
       expect(typeof generate_observer_name).toBe('function');
     });
 
-    test('should generate name in format observer_XXXXX', () => {
+    test('should generate name in format observer_XXXXXXXX', () => {
       const name = generate_observer_name();
 
-      expect(name).toMatch(/^observer_[a-z0-9]{5}$/);
+      expect(name).toMatch(/^observer_[a-z0-9]{8}$/);  // 8 chars for better uniqueness
     });
 
     test('should generate lowercase alphanumeric suffix', () => {
