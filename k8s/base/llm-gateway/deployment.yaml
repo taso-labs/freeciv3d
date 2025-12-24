@@ -2,7 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: llm-gateway
-  namespace: freeciv3d
+  namespace: freeciv
   labels:
     app: llm-gateway
     component: game-integration
@@ -21,7 +21,7 @@ spec:
         component: game-integration
         version: v1
     spec:
-      serviceAccountName: llm-gateway-sa
+      serviceAccountName: freeciv-sa
 
       containers:
         - name: llm-gateway
@@ -36,13 +36,13 @@ spec:
           env:
             # FreeCiv server connection
             - name: FREECIV_SERVER_HOST
-              value: "fciv-net.freeciv3d.svc.cluster.local"
+              value: "fciv-net.freeciv.svc.cluster.local"
             - name: FREECIV_SERVER_PORT
               value: "8002"
 
             # Redis connection
             - name: REDIS_HOST
-              value: "redis.freeciv3d.svc.cluster.local"
+              value: "redis.freeciv.svc.cluster.local"
             - name: REDIS_PORT
               value: "6379"
 

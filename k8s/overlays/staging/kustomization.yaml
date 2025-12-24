@@ -37,21 +37,12 @@ patches:
     patch: |-
       - op: replace
         path: /spec/template/spec/initContainers/0/args/6
-        value: "clashai-staging:us-central1:freeciv3d-staging-db-SUFFIX"
+        value: "clashai-staging:us-central1:freeciv-staging-db-XXXX"
 
-  # Patch fciv-net ServiceAccount for Workload Identity
+  # Patch unified ServiceAccount for Workload Identity
   - target:
       kind: ServiceAccount
-      name: fciv-net-sa
-    patch: |-
-      - op: replace
-        path: /metadata/annotations/iam.gke.io~1gcp-service-account
-        value: "gateway-sa@clashai-staging.iam.gserviceaccount.com"
-
-  # Patch llm-gateway ServiceAccount for Workload Identity
-  - target:
-      kind: ServiceAccount
-      name: llm-gateway-sa
+      name: freeciv-sa
     patch: |-
       - op: replace
         path: /metadata/annotations/iam.gke.io~1gcp-service-account
@@ -64,7 +55,7 @@ patches:
     patch: |-
       - op: replace
         path: /spec/data/0/remoteRef/key
-        value: "freeciv3d-staging-db-connection-string"
+        value: "freeciv-staging-db-connection-string"
 
   # Patch HPA limits for staging
   - target:

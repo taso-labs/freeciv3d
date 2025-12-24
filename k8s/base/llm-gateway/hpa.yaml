@@ -2,7 +2,7 @@ apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
   name: llm-gateway-hpa
-  namespace: freeciv3d
+  namespace: freeciv
   labels:
     app: llm-gateway
     component: game-integration

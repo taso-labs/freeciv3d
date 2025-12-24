@@ -1,21 +1,24 @@
+# Unified ServiceAccount for all FreeCiv pods
+# Consolidates fciv-net-sa and llm-gateway-sa into a single SA
+# Both pods share the same GCP service account (gateway-sa) via Workload Identity
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: fciv-net-sa
-  namespace: freeciv3d
+  name: freeciv-sa
+  namespace: freeciv
   labels:
-    app: fciv-net
-    component: game-server
+    app.kubernetes.io/part-of: freeciv
   annotations:
     # Workload Identity - reuses gateway-sa (shared with agent-clash)
     # The GCP SA email will be patched by Kustomize overlay
     iam.gke.io/gcp-service-account: gateway-sa@PROJECT_ID.iam.gserviceaccount.com
 ---
+# Role with merged permissions from fciv-net-role and llm-gateway-role
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: fciv-net-role
-  namespace: freeciv3d
+  name: freeciv-role
+  namespace: freeciv
 rules:
   - apiGroups: [""]
     resources: ["configmaps", "secrets"]
@@ -27,13 +30,13 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: fciv-net-rolebinding
-  namespace: freeciv3d
+  name: freeciv-rolebinding
+  namespace: freeciv
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
-  name: fciv-net-role
+  name: freeciv-role
 subjects:
   - kind: ServiceAccount
-    name: fciv-net-sa
-    namespace: freeciv3d
+    name: freeciv-sa
+    namespace: freeciv

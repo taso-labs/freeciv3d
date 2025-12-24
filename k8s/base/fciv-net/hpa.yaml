@@ -2,7 +2,7 @@ apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
   name: fciv-net-hpa
-  namespace: freeciv3d
+  namespace: freeciv
   labels:
     app: fciv-net
     component: game-server

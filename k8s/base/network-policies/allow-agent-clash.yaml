@@ -2,11 +2,11 @@ apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: allow-from-agent-clash
-  namespace: freeciv3d
+  namespace: freeciv
   labels:
-    app.kubernetes.io/part-of: freeciv3d
+    app.kubernetes.io/part-of: freeciv
   annotations:
-    description: "Allow ingress from agent-clash namespace to access freeciv3d services"
+    description: "Allow ingress from agent-clash namespace to access freeciv services"
 spec:
   podSelector: {}
   policyTypes:

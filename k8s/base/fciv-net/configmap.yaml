@@ -2,7 +2,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: fciv-net-config
-  namespace: freeciv3d
+  namespace: freeciv
   labels:
     app: fciv-net
     component: game-server
@@ -21,7 +21,7 @@ data:
   db-name: "freeciv_web"
 
   # Redis configuration
-  redis-host: "redis.freeciv3d.svc.cluster.local"
+  redis-host: "redis.freeciv.svc.cluster.local"
   redis-port: "6379"
 
   # Logging

@@ -2,7 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: redis
-  namespace: freeciv3d
+  namespace: freeciv
   labels:
     app: redis
     component: cache

@@ -2,12 +2,12 @@ apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
 # Namespace for all resources
-namespace: freeciv3d
+namespace: freeciv
 
 # Common labels applied to all resources
 labels:
   - pairs:
-      app.kubernetes.io/part-of: freeciv3d
+      app.kubernetes.io/part-of: freeciv
       app.kubernetes.io/managed-by: kustomize
 
 # Resources to include
@@ -15,8 +15,7 @@ resources:
   - namespace.yaml
   - external-secrets.yaml
   # RBAC
-  - rbac/fciv-net-sa.yaml
-  - rbac/llm-gateway-sa.yaml
+  - rbac/freeciv-sa.yaml
   # Core services
   - fciv-net/deployment.yaml
   - fciv-net/service.yaml

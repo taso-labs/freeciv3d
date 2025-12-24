@@ -2,11 +2,11 @@ apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: allow-internal
-  namespace: freeciv3d
+  namespace: freeciv
   labels:
-    app.kubernetes.io/part-of: freeciv3d
+    app.kubernetes.io/part-of: freeciv
   annotations:
-    description: "Allow all traffic within freeciv3d namespace"
+    description: "Allow all traffic within freeciv namespace"
 spec:
   podSelector: {}
   policyTypes:

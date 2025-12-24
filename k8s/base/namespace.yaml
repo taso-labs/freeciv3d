@@ -1,9 +1,9 @@
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: freeciv3d
+  name: freeciv
   labels:
-    name: freeciv3d
-    app.kubernetes.io/part-of: freeciv3d
+    name: freeciv
+    app.kubernetes.io/part-of: freeciv
     # Label for NetworkPolicy namespace selector
-    kubernetes.io/metadata.name: freeciv3d
+    kubernetes.io/metadata.name: freeciv

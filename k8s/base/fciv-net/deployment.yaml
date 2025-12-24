@@ -2,7 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: fciv-net
-  namespace: freeciv3d
+  namespace: freeciv
   labels:
     app: fciv-net
     component: game-server
@@ -21,7 +21,7 @@ spec:
         component: game-server
         version: v1
     spec:
-      serviceAccountName: fciv-net-sa
+      serviceAccountName: freeciv-sa
 
       # Cloud SQL Proxy as native sidecar (K8s 1.28+)
       initContainers:
@@ -92,7 +92,7 @@ spec:
 
             # Redis connection
             - name: REDIS_HOST
-              value: "redis.freeciv3d.svc.cluster.local"
+              value: "redis.freeciv.svc.cluster.local"
             - name: REDIS_PORT
               value: "6379"
 
