@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: freeciv
+  labels:
+    name: freeciv
+    app.kubernetes.io/part-of: freeciv
+    # Label for NetworkPolicy namespace selector
+    kubernetes.io/metadata.name: freeciv

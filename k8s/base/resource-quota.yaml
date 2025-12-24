@@ -1,0 +1,19 @@
+# Resource Quota limits total resource consumption in the freeciv namespace
+# Prevents runaway resource usage from affecting other workloads
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: freeciv-quota
+  namespace: freeciv
+  labels:
+    app.kubernetes.io/part-of: freeciv
+spec:
+  hard:
+    # CPU limits
+    requests.cpu: "8"
+    limits.cpu: "16"
+    # Memory limits
+    requests.memory: 16Gi
+    limits.memory: 32Gi
+    # Pod count limit
+    pods: "20"

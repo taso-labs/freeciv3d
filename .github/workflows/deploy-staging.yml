@@ -1,0 +1,98 @@
+name: Deploy to Staging
+
+on:
+  workflow_run:
+    workflows: ['Build Docker Images']
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to deploy (e.g., 0.1.0 or latest)'
+        required: false
+        default: 'latest'
+
+env:
+  GCP_PROJECT: clashai-staging
+  GKE_CLUSTER: clashai-staging-gke
+  GKE_REGION: us-central1
+  APP_NAMESPACE: freeciv3d
+  REGISTRY: us-central1-docker.pkg.dev/clashai-staging/clashai-staging-registry
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    # Only run if triggered manually or if the build workflow succeeded
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: projects/978279426764/locations/global/workloadIdentityPools/github/providers/github
+          service_account: github-actions-sa@clashai-staging.iam.gserviceaccount.com
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.GCP_PROJECT }}
+
+      - name: Get GKE credentials
+        uses: google-github-actions/get-gke-credentials@v2
+        with:
+          cluster_name: ${{ env.GKE_CLUSTER }}
+          location: ${{ env.GKE_REGION }}
+          project_id: ${{ env.GCP_PROJECT }}
+
+      - name: Install Kustomize
+        run: |
+          curl -s "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" | bash
+          sudo mv kustomize /usr/local/bin/
+
+      - name: Determine version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            # Get version from VERSION file
+            echo "version=$(cat VERSION)" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Update Kustomize images
+        run: |
+          cd k8s/overlays/staging
+          kustomize edit set image fciv-net=${{ env.REGISTRY }}/fciv-net:${{ steps.version.outputs.version }}
+          kustomize edit set image llm-gateway=${{ env.REGISTRY }}/llm-gateway:${{ steps.version.outputs.version }}
+
+      - name: Create namespace if not exists
+        run: |
+          kubectl create namespace ${{ env.APP_NAMESPACE }} --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Apply Kustomize manifests
+        run: |
+          kubectl apply -k k8s/overlays/staging
+
+      - name: Wait for rollout
+        run: |
+          kubectl rollout status deployment/fciv-net -n ${{ env.APP_NAMESPACE }} --timeout=300s
+          kubectl rollout status deployment/llm-gateway -n ${{ env.APP_NAMESPACE }} --timeout=300s
+          kubectl rollout status deployment/redis -n ${{ env.APP_NAMESPACE }} --timeout=120s
+
+      - name: Verify deployment
+        run: |
+          echo "=== Deployment Status ==="
+          kubectl get deployments -n ${{ env.APP_NAMESPACE }}
+          echo ""
+          echo "=== Pod Status ==="
+          kubectl get pods -n ${{ env.APP_NAMESPACE }}
+          echo ""
+          echo "=== Services ==="
+          kubectl get services -n ${{ env.APP_NAMESPACE }}

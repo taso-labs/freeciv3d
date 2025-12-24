@@ -1,0 +1,39 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Namespace for all resources
+namespace: freeciv
+
+# Common labels applied to all resources
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: freeciv
+      app.kubernetes.io/managed-by: kustomize
+
+# Resources to include
+resources:
+  - namespace.yaml
+  - external-secrets.yaml
+  # RBAC
+  - rbac/freeciv-sa.yaml
+  # Core services
+  - fciv-net/deployment.yaml
+  - fciv-net/service.yaml
+  - fciv-net/configmap.yaml
+  - fciv-net/hpa.yaml
+  # LLM Gateway
+  - llm-gateway/deployment.yaml
+  - llm-gateway/service.yaml
+  - llm-gateway/configmap.yaml
+  - llm-gateway/hpa.yaml
+  # Redis (in-cluster)
+  - redis/deployment.yaml
+  - redis/service.yaml
+  # Network Policies
+  - network-policies/default-deny.yaml
+  - network-policies/allow-agent-clash.yaml
+  - network-policies/internal-allow.yaml
+  - network-policies/allow-egress.yaml
+  # Production hardening
+  - pdb.yaml
+  - resource-quota.yaml

@@ -1,0 +1,62 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress
+  namespace: freeciv
+  labels:
+    app.kubernetes.io/part-of: freeciv
+  annotations:
+    description: "Allow egress for DNS, Cloud SQL Proxy, and internal services"
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    # Allow DNS resolution (kube-dns)
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+
+    # Allow internal namespace traffic
+    - to:
+        - podSelector: {}
+      ports:
+        - port: 8003
+          protocol: TCP
+        - port: 8080
+          protocol: TCP
+        - port: 8002
+          protocol: TCP
+        - port: 5556
+          protocol: TCP
+        - port: 6379
+          protocol: TCP
+        - port: 3306
+          protocol: TCP
+
+    # Allow Cloud SQL Proxy to connect to Cloud SQL (private IP)
+    - to:
+        - ipBlock:
+            cidr: 10.0.0.0/8
+      ports:
+        - port: 3307
+          protocol: TCP
+
+    # Allow metadata server access (for Workload Identity)
+    - to:
+        - ipBlock:
+            cidr: 169.254.169.254/32
+      ports:
+        - port: 80
+          protocol: TCP
+        - port: 988
+          protocol: TCP
