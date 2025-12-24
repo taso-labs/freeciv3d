@@ -11,13 +11,13 @@ import json
 import logging
 import threading
 import time
-from typing import Dict, Set, Optional, Any
+import aiohttp
+from typing import Dict, Optional, Any
 from dataclasses import dataclass, field
 from enum import Enum
 
 from state_extractor import civcom_registry
-from metaserver_client import get_metaserver_client
-from config_loader import llm_config
+from packet_constants import PACKET_CHAT_MSG_REQ
 
 logger = logging.getLogger("freeciv-proxy")
 
@@ -61,7 +61,7 @@ class GameSession:
         self._ai_slot_lock = threading.Lock()  # Lock for thread-safe AI slot allocation
 
     def allocate_ai_slot(self) -> int:
-        """Thread-safe AI slot allocation
+        """Thread-safe AI slot allocation for /take commands
 
         Returns the next available AI slot (1, 2, 3, ...) for this game session.
         Each call increments the counter atomically using a threading.Lock, ensuring
@@ -71,9 +71,9 @@ class GameSession:
         is called from async contexts but the increment operation must be atomic
         at the OS thread level, not just within the asyncio event loop.
 
-        For multiplayer servers with aifill=2:
-          - First call returns 1
-          - Second call returns 2
+        For multiplayer servers (ports 6001-6009) with aifill=2:
+          - First call returns 1 (AI*1)
+          - Second call returns 2 (AI*2)
 
         Returns:
             int: AI slot number (1-indexed)
@@ -189,6 +189,11 @@ class GameSession:
         """Initiate the game start sequence (called once when all players ready)"""
         logger.debug(f"Game {self.game_id}: Initiating game start sequence")
         try:
+            # Brief delay to ensure PACKET_PLAYER_READY packets have been fully processed by civserver
+            # This is minimal (0.5s) to avoid race conditions but not waste time
+            logger.debug(f"Game {self.game_id}: Waiting 0.5s for packet processing")
+            await asyncio.sleep(0.5)
+
             # Double-check we're still ready
             ready_count = self._count_players_ready()
             logger.debug(f"Game {self.game_id}: Double-checking readiness ({ready_count}/{len(self.players)})")
@@ -241,24 +246,26 @@ class GameSession:
                 logger.error(f"Game {self.game_id}: civcom connection is dead!")
                 return
 
-            # DO NOT send /set commands OR /start command!
-            #
-            # Reason 1: /set commands trigger reset_all_start_commands() in civserver,
-            #           which RESETS all players' is_ready flags to FALSE.
-            #           This undoes the PACKET_PLAYER_READY that players already sent!
-            #
-            # Reason 2: With 'autotoggle enabled' in pubscript_multiplayer.serv,
-            #           civserver AUTOMATICALLY starts when all players send PACKET_PLAYER_READY.
-            #           Sending /start after auto-start causes "game already running" error.
+            # DO NOT send /set commands here!
+            # Each /set command triggers reset_all_start_commands() in civserver,
+            # which RESETS all players' is_ready flags to FALSE.
+            # This undoes the PACKET_PLAYER_READY that players already sent!
             #
             # All settings (minplayers, maxplayers, aifill, autotoggle, timeout)
             # are already configured in pubscript_multiplayer.serv BEFORE players connect.
             #
-            # GameSessionManager's ONLY job is to wait for auto-start and broadcast game_ready.
+            # GameSessionManager's ONLY job is to send /start when all players are ready.
             logger.info(f"Game {self.game_id}: All settings pre-configured in pubscript_multiplayer.serv")
-            logger.info(f"Game {self.game_id}: All {len(self.players)} players ready - civserver will auto-start")
 
-            # Mark as started immediately (civserver auto-starts on PACKET_PLAYER_READY)
+            # Send explicit /start command to start the game
+            # Multi-player games require /start command - they don't auto-start like single-player
+            # All players have sent PACKET_PLAYER_READY, now we initiate the game
+            logger.info(f"Game {self.game_id}: All {len(self.players)} players ready - sending /start command")
+            civcom.queue_to_civserver(json.dumps({"pid": PACKET_CHAT_MSG_REQ, "message": "/start"}))
+            civcom.send_packets_to_civserver()
+            logger.info(f"Game {self.game_id}: ✅ /start command sent to civserver")
+
+            # Mark as started
             self.game_started = True
 
             # Verify game actually started instead of blindly waiting
@@ -304,9 +311,6 @@ class GameSession:
             # Broadcast game_ready to all agents now that game has started
             # This notifies agents that the game is fully initialized and ready for state queries
             logger.info(f"Game {self.game_id}: Broadcasting game_ready signal to all {len(self.players)} players")
-
-            broadcast_success = 0
-            broadcast_failed = 0
             for player_info in self.players.values():
                 try:
                     # Send game_ready message to each player's handler
@@ -321,32 +325,12 @@ class GameSession:
                         'message': 'Game fully initialized - ready to accept state queries and actions',
                         'timestamp': time.time()
                     }
-
-                    # CRITICAL FIX: Tornado's write_message() may buffer the message
-                    # We need to ensure it's actually flushed to the client immediately
                     player_info.handler.write_message(json.dumps(game_ready_msg))
-
-                    # Force flush the WebSocket buffer to ensure immediate delivery
-                    # This prevents game_ready from being buffered and delayed
-                    if hasattr(player_info.handler.ws_connection, 'ping'):
-                        # Ping forces flush of buffered messages in Tornado WebSockets
-                        try:
-                            await player_info.handler.ws_connection.ping()
-                        except Exception as ping_err:
-                            logger.debug(f"Ping to flush buffer failed (non-critical): {ping_err}")
-
-                    broadcast_success += 1
                     logger.info(f"✅ Sent game_ready to {player_info.agent_id} (player_id={player_info.player_id})")
                 except Exception as e:
-                    broadcast_failed += 1
                     logger.error(f"❌ Failed to send game_ready to {player_info.agent_id}: {e}")
                     import traceback
                     logger.error(f"Traceback: {traceback.format_exc()}")
-
-            logger.info(f"Game {self.game_id}: Broadcast summary - success: {broadcast_success}/{len(self.players)}, failed: {broadcast_failed}")
-
-            if broadcast_failed > 0:
-                logger.warning(f"Game {self.game_id}: {broadcast_failed} players did not receive game_ready signal")
 
         except Exception as e:
             logger.exception(f"Game {self.game_id}: Error starting game: {e}")
@@ -377,30 +361,78 @@ class GameSession:
 class GameSessionManager:
     """Global manager for all game sessions"""
 
-    def __init__(self):
+    def __init__(self, metaserver_url: str = "http://localhost:8080"):
         self.sessions: Dict[str, GameSession] = {}
         self._lock = asyncio.Lock()
         self._port_lock = asyncio.Lock()  # Separate lock for port allocation
+        self.metaserver_url = metaserver_url
+        self._last_port_used = None  # Track last allocated port for round-robin
+
+    async def _query_metaserver_for_multiplayer_ports(self) -> list[int]:
+        """Query metaserver /meta/allocate to find available multiplayer ports
+        
+        Queries the metaserver's allocation endpoint to discover which ports
+        are running multiplayer servers (type='multiplayer', available >= 1).
+        
+        Returns:
+            List of available multiplayer server ports
+            Empty list if query fails
+        """
+        try:
+            async with aiohttp.ClientSession(self.metaserver_url) as session:
+                # Make POST request with type=multiplayer to trigger allocation logic
+                # The endpoint queries: SELECT * FROM servers WHERE type='multiplayer' AND available != 0
+                async with session.post(
+                    "/freeciv-web/meta/allocate",
+                    params={"type": "multiplayer"},
+                    timeout=aiohttp.ClientTimeout(total=5),
+                ) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        if data.get("success") and "port" in data:
+                            # Got an allocated port - this is ONE available port
+                            port = data["port"]
+                            logger.info(f"Metaserver allocated port {port} for multiplayer game")
+
+                            # Release it immediately since we're just querying
+                            release_url = f"{self.metaserver_url}/meta/release"
+                            async with session.post(
+                                release_url,
+                                data={"host": "localhost", "port": port},
+                                timeout=aiohttp.ClientTimeout(total=5)
+                            ) as release_response:
+                                if release_response.status == 200:
+                                    logger.debug(f"Released port {port} back to pool")
+
+                            # Return this port as available
+                            return [port]
+                    elif response.status == 503:
+                        # No available servers
+                        logger.warning(f"Metaserver reports no available multiplayer servers (503), {response}")
+                        return []
+                    else:
+                        logger.error(f"Metaserver allocate failed with status {response.status}")
+                        return []
+
+        except Exception as e:
+            logger.error(f"Error querying metaserver for multiplayer ports: {e}")
+            return []
 
     async def allocate_civserver_port(self, game_id: str) -> int:
-        """Allocate a civserver port for a game, reusing existing if available
-
-        Queries the metaserver to find available multiplayer pregame servers with 0 players.
-        Prefers the lowest port number to ensure consistent allocation across runs.
-
-        Selection strategy:
-        1. Check if game_id already has an allocated port (for second+ player) → reuse
-        2. Query metaserver /game/list?v=multiplayer for pregame servers with 0 players
-        3. Select lowest port from available servers
-        4. Fail fast if metaserver unavailable or no suitable servers (avoid accidental singleplayer)
-        5. Cache metaserver results for 10s to reduce query load
-
-        THREAD-SAFETY: Creates placeholder session immediately to prevent race condition
-        where two players with same game_id could get different ports if allocation
-        happens before session creation.
+        """Allocate a civserver port for a game by querying metaserver
+        
+        Queries the metaserver /meta/allocate endpoint to find an available
+        multiplayer server port. The metaserver maintains the authoritative
+        database of servers with their types and availability status.
+        
+        IMPORTANT: Does NOT assume odd/even port distinction. Queries actual
+        server type from database via metaserver HTTP API.
+        
+        THREAD-SAFETY: Creates placeholder session immediately to prevent race
+        condition where two players with same game_id could get different ports.
         """
         async with self._port_lock:
-            # REUSE EXISTING SESSION PORT IF GAME ALREADY REGISTERED
+            # Check if game already has an allocated port (for second+ player)
             if game_id in self.sessions:
                 port = self.sessions[game_id].civserver_port
                 existing_session = self.sessions[game_id]
@@ -412,40 +444,46 @@ class GameSessionManager:
                 )
                 return port
 
-            # STRATEGY 1: Query metaserver for available pregame servers
-            try:
-                ms_host = str(llm_config.get('metaserver.host', 'localhost') or 'localhost')
-                _ms_port_raw = llm_config.get('metaserver.port', 8080)
-                # Defensive conversion: only accept basic int-like values
-                if isinstance(_ms_port_raw, (int, float)):
-                    ms_port = int(_ms_port_raw)
-                elif isinstance(_ms_port_raw, str) and _ms_port_raw.isdigit():
-                    ms_port = int(_ms_port_raw)
-                else:
-                    ms_port = 8080
-                metaserver = get_metaserver_client(host=ms_host, port=ms_port)
-                port = metaserver.find_pregame_server(min_players=0, max_players=0)
+            # Query metaserver for available multiplayer ports
+            logger.info(f"🔍 Game {game_id}: Querying metaserver for available multiplayer server")
+            available_ports = await self._query_metaserver_for_multiplayer_ports()
 
-                if port:
-                    logger.info(
-                        f"🆕 Game {game_id}: Allocated port {port} from metaserver\n"
-                        f"   Strategy: metaserver query for pregame servers with 0 players\n"
-                        f"   Total active sessions: {len(self.sessions)}"
-                    )
-                    session = GameSession(game_id, port, min_players=2)
-                    self.sessions[game_id] = session
-                    logger.debug(f"Game {game_id}: Created placeholder session at port {port}")
-                    return port
-                else:
-                    logger.error(
-                        f"❌ Game {game_id}: No suitable multiplayer pregame servers found via metaserver"
-                    )
-                    raise RuntimeError("No multiplayer pregame servers available")
-            except Exception as e:
+            if not available_ports:
+                # No servers available - fail allocation
                 logger.error(
-                    f"❌ Game {game_id}: Metaserver query failed: {e}"
+                    f"❌ Game {game_id}: No multiplayer servers available\n"
+                    f"   Metaserver returned no available ports\n"
+                    f"   This means either:\n"
+                    f"   1. All multiplayer servers are in use\n"
+                    f"   2. Metaserver is unreachable\n"
+                    f"   3. Publite2 hasn't created any multiplayer servers yet\n"
+                    f"   Cannot allocate port for this game."
                 )
-                raise
+                raise RuntimeError(
+                    "No multiplayer servers available. "
+                    "Please wait for servers to become available or check metaserver status."
+                )
+
+            # Use port from metaserver query
+            port = available_ports[0]
+            logger.info(f"✅ Game {game_id}: Allocated port {port} from metaserver")
+            self._last_port_used = port
+
+            total_sessions = len(self.sessions)
+            logger.info(
+                f"🆕 Game {game_id}: Allocated server port {port}\n"
+                f"   Total active sessions: {total_sessions}\n"
+                f"   Port type will be determined by publite2 configuration"
+            )
+
+            # Create placeholder session immediately to reserve this port for this game_id
+            # This prevents race condition where Player 2 could allocate different port
+            # before Player 1 creates the session via get_or_create_session()
+            session = GameSession(game_id, port, min_players=2)
+            self.sessions[game_id] = session
+            logger.debug(f"Game {game_id}: Created placeholder session to reserve port {port}")
+
+            return port
 
     async def get_or_create_session(self, game_id: str, civserver_port: int,
                                    min_players: int = 2) -> GameSession:

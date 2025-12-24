@@ -57,6 +57,11 @@ spec:
                 secretKeyRef:
                   name: llm-gateway-secrets
                   key: api-key-secret
+            - name: LLM_API_TOKENS
+              valueFrom:
+                secretKeyRef:
+                  name: llm-api-tokens
+                  key: tokens
 
             # Application configuration
             - name: LOG_LEVEL
@@ -72,8 +77,17 @@ spec:
               cpu: 500m
               memory: 512Mi
 
+          startupProbe:
+            httpGet:
+              path: /health
+              port: websocket
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            failureThreshold: 30  # 150s max startup time
+
           livenessProbe:
-            tcpSocket:
+            httpGet:
+              path: /health
               port: websocket
             initialDelaySeconds: 15
             periodSeconds: 10
@@ -81,7 +95,8 @@ spec:
             failureThreshold: 3
 
           readinessProbe:
-            tcpSocket:
+            httpGet:
+              path: /health
               port: websocket
             initialDelaySeconds: 5
             periodSeconds: 5
@@ -96,6 +111,8 @@ spec:
             capabilities:
               drop:
                 - ALL
+            seccompProfile:
+              type: RuntimeDefault
 
       dnsPolicy: ClusterFirst
       restartPolicy: Always

@@ -124,6 +124,13 @@ spec:
               cpu: 1000m
               memory: 2Gi
 
+          startupProbe:
+            tcpSocket:
+              port: game
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            failureThreshold: 60  # 300s max startup time (freeciv server is slow to start)
+
           livenessProbe:
             tcpSocket:
               port: game
@@ -154,6 +161,8 @@ spec:
             capabilities:
               drop:
                 - ALL
+            seccompProfile:
+              type: RuntimeDefault
 
       volumes:
         - name: game-data

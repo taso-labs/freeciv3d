@@ -1,0 +1,27 @@
+# Pod Disruption Budgets ensure service availability during voluntary disruptions
+# (node maintenance, cluster upgrades, pod evictions)
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: fciv-net-pdb
+  namespace: freeciv3d
+  labels:
+    app.kubernetes.io/part-of: freeciv3d
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: fciv-net
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: llm-gateway-pdb
+  namespace: freeciv3d
+  labels:
+    app.kubernetes.io/part-of: freeciv3d
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: llm-gateway

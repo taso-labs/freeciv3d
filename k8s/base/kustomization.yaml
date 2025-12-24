@@ -35,3 +35,6 @@ resources:
   - network-policies/allow-agent-clash.yaml
   - network-policies/internal-allow.yaml
   - network-policies/allow-egress.yaml
+  # Production hardening
+  - pdb.yaml
+  - resource-quota.yaml
