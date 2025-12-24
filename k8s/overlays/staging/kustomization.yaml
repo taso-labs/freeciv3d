@@ -37,7 +37,7 @@ patches:
     patch: |-
       - op: replace
         path: /spec/template/spec/initContainers/0/args/6
-        value: "clashai-staging:us-central1:freeciv-staging-db-XXXX"
+        value: "clashai-staging:us-central1:freeciv-staging-db-4e19c888"
 
   # Patch unified ServiceAccount for Workload Identity
   - target:

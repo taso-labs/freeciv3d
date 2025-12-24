@@ -37,7 +37,7 @@ patches:
     patch: |-
       - op: replace
         path: /spec/template/spec/initContainers/0/args/6
-        value: "clashai-production:us-central1:freeciv-production-db-XXXX"
+        value: "clashai-production:us-central1:freeciv-production-db-9cc3ef1e"
 
   # Patch unified ServiceAccount for Workload Identity
   - target:
