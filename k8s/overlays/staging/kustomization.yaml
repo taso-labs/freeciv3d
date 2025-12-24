@@ -15,15 +15,10 @@ images:
   - name: fciv-net
     newName: us-central1-docker.pkg.dev/clashai-staging/clashai-staging-registry/fciv-net
     newTag: latest
-  - name: llm-gateway
-    newName: us-central1-docker.pkg.dev/clashai-staging/clashai-staging-registry/llm-gateway
-    newTag: latest
 
 # Replica configuration for staging
 replicas:
   - name: fciv-net
-    count: 1
-  - name: llm-gateway
     count: 1
   - name: redis
     count: 1
@@ -36,7 +31,7 @@ patches:
       name: fciv-net
     patch: |-
       - op: replace
-        path: /spec/template/spec/initContainers/0/args/6
+        path: /spec/template/spec/initContainers/0/args/7
         value: "clashai-staging:us-central1:freeciv-staging-db-4e19c888"
 
   # Patch unified ServiceAccount for Workload Identity
@@ -68,17 +63,6 @@ patches:
       - op: replace
         path: /spec/maxReplicas
         value: 3
-
-  - target:
-      kind: HorizontalPodAutoscaler
-      name: llm-gateway-hpa
-    patch: |-
-      - op: replace
-        path: /spec/minReplicas
-        value: 1
-      - op: replace
-        path: /spec/maxReplicas
-        value: 2
 
 # ConfigMap generator for staging-specific config
 configMapGenerator:

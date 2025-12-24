@@ -23,6 +23,10 @@ spec:
       port: 8002
       targetPort: proxy
       protocol: TCP
+    - name: llm-gateway
+      port: 8003
+      targetPort: llm-gateway
+      protocol: TCP
   sessionAffinity: ClientIP
   sessionAffinityConfig:
     clientIP:

@@ -21,11 +21,6 @@ resources:
   - fciv-net/service.yaml
   - fciv-net/configmap.yaml
   - fciv-net/hpa.yaml
-  # LLM Gateway
-  - llm-gateway/deployment.yaml
-  - llm-gateway/service.yaml
-  - llm-gateway/configmap.yaml
-  - llm-gateway/hpa.yaml
   # Redis (in-cluster)
   - redis/deployment.yaml
   - redis/service.yaml

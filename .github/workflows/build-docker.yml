@@ -67,23 +67,11 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Build and push llm-gateway to staging
-        uses: docker/build-push-action@v5
-        with:
-          context: ./llm-gateway
-          file: ./llm-gateway/Dockerfile
-          push: true
-          tags: |
-            ${{ env.REGION }}-docker.pkg.dev/${{ env.STAGING_PROJECT }}/${{ env.STAGING_PROJECT }}-registry/llm-gateway:${{ steps.tag.outputs.tag }}
-            ${{ env.REGION }}-docker.pkg.dev/${{ env.STAGING_PROJECT }}/${{ env.STAGING_PROJECT }}-registry/llm-gateway:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
       - name: Authenticate to Google Cloud (Production)
         if: steps.tag.outputs.push_production == 'true'
         uses: google-github-actions/auth@v2
         with:
-          workload_identity_provider: projects/123456789/locations/global/workloadIdentityPools/github/providers/github
+          workload_identity_provider: projects/364210626442/locations/global/workloadIdentityPools/github/providers/github
           service_account: github-actions-sa@clashai-production.iam.gserviceaccount.com
 
       - name: Configure Docker for Artifact Registry (Production)
@@ -98,9 +86,3 @@ jobs:
             ${{ env.REGION }}-docker.pkg.dev/${{ env.PRODUCTION_PROJECT }}/${{ env.PRODUCTION_PROJECT }}-registry/fciv-net:${{ steps.tag.outputs.tag }}
           docker push ${{ env.REGION }}-docker.pkg.dev/${{ env.PRODUCTION_PROJECT }}/${{ env.PRODUCTION_PROJECT }}-registry/fciv-net:${{ steps.tag.outputs.tag }}
 
-      - name: Push llm-gateway to production
-        if: steps.tag.outputs.push_production == 'true'
-        run: |
-          docker tag ${{ env.REGION }}-docker.pkg.dev/${{ env.STAGING_PROJECT }}/${{ env.STAGING_PROJECT }}-registry/llm-gateway:${{ steps.tag.outputs.tag }} \
-            ${{ env.REGION }}-docker.pkg.dev/${{ env.PRODUCTION_PROJECT }}/${{ env.PRODUCTION_PROJECT }}-registry/llm-gateway:${{ steps.tag.outputs.tag }}
-          docker push ${{ env.REGION }}-docker.pkg.dev/${{ env.PRODUCTION_PROJECT }}/${{ env.PRODUCTION_PROJECT }}-registry/llm-gateway:${{ steps.tag.outputs.tag }}

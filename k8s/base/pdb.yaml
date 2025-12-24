@@ -12,16 +12,3 @@ spec:
   selector:
     matchLabels:
       app: fciv-net
----
-apiVersion: policy/v1
-kind: PodDisruptionBudget
-metadata:
-  name: llm-gateway-pdb
-  namespace: freeciv
-  labels:
-    app.kubernetes.io/part-of: freeciv
-spec:
-  minAvailable: 1
-  selector:
-    matchLabels:
-      app: llm-gateway
