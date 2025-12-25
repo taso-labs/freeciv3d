@@ -1,10 +1,10 @@
 name: Deploy to Staging
 
 on:
+  # Trigger when build-docker completes (no branch filter - works for releases too)
   workflow_run:
     workflows: ['Build Docker Images']
     types: [completed]
-    branches: [main]
   workflow_dispatch:
     inputs:
       version:
