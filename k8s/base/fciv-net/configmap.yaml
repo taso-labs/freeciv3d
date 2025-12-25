@@ -7,15 +7,16 @@ metadata:
     app: fciv-net
     component: game-server
 data:
-  # Game server configuration
-  freeciv-port: "5556"
+  # Service ports
+  # - 8080: Tomcat webapp (freeciv-web)
+  # - 8002: FreeCiv proxy for LLM Gateway
+  # - 8003: LLM Gateway API
+  # - 7001-7009: Per-game proxy ports (managed by publite2)
   freeciv-web-port: "8080"
   freeciv-proxy-port: "8002"
-  freeciv-game-mode: "bot-competition"
-  max-players: "4"
-  turn-timeout: "300"
+  llm-gateway-port: "8003"
 
-  # Database configuration (host via Cloud SQL Proxy)
+  # Database configuration (host via Cloud SQL Proxy sidecar)
   db-host: "127.0.0.1"
   db-port: "3306"
   db-name: "freeciv_web"

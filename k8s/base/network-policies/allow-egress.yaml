@@ -30,17 +30,15 @@ spec:
     - to:
         - podSelector: {}
       ports:
-        - port: 8003
+        - port: 8080  # Tomcat webapp
           protocol: TCP
-        - port: 8080
+        - port: 8002  # FreeCiv proxy for LLM
           protocol: TCP
-        - port: 8002
+        - port: 8003  # LLM Gateway API
           protocol: TCP
-        - port: 5556
+        - port: 6379  # Redis
           protocol: TCP
-        - port: 6379
-          protocol: TCP
-        - port: 3306
+        - port: 3306  # MySQL (Cloud SQL Proxy)
           protocol: TCP
 
     # Allow Cloud SQL Proxy to connect to Cloud SQL (private IP)

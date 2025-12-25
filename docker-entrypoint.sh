@@ -9,14 +9,14 @@ export DB_PASSWORD="${DB_PASSWORD:-changeme}"
 export DB_NAME="${DB_NAME:-freeciv_web}"
 
 # Generate Tomcat context.xml with database configuration BEFORE starting services
+# Note: Directory pre-created in Dockerfile with group-write permissions (775)
+# docker user is in tomcat group, so can write without sudo
 echo "Configuring Tomcat database connection..."
-sudo mkdir -p /var/lib/tomcat10/conf/Catalina/localhost
-sudo sed -e "s|#DB_HOST#|${DB_HOST}|g" \
+sed -e "s|#DB_HOST#|${DB_HOST}|g" \
     -e "s|#DB_USER#|${DB_USER}|g" \
     -e "s|#DB_PASSWORD#|${DB_PASSWORD}|g" \
     -e "s|#DB_NAME#|${DB_NAME}|g" \
-    /docker/config/web.context.tmpl | sudo tee /var/lib/tomcat10/conf/Catalina/localhost/freeciv-web.xml > /dev/null
-sudo chown tomcat:tomcat /var/lib/tomcat10/conf/Catalina/localhost/freeciv-web.xml
+    /docker/config/web.context.tmpl > /var/lib/tomcat10/conf/Catalina/localhost/freeciv-web.xml
 echo "✓ Tomcat database configuration ready"
 
 # Start all Freeciv-web services (this starts tomcat and publite2)

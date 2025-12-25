@@ -151,6 +151,10 @@ COPY --from=tomcat-builder --chown=docker:docker /docker/LICENSE.md /docker/LICE
 COPY --from=tomcat-builder --chown=docker:docker /docker/publite2 /docker/publite2
 COPY --from=tomcat-builder --chown=docker:docker /docker/scripts /docker/scripts
 
+# Use Docker-specific startup script (no sudo) instead of default
+RUN ln -sf dependency-services-docker-start.sh /docker/scripts/dependency-services-start.sh && \
+    ln -sf install/dependency-services-default-stop.sh /docker/scripts/dependency-services-stop.sh
+
 # Copy requirements.txt first for better caching
 COPY --from=tomcat-builder --chown=docker:docker /docker/llm-gateway/requirements.txt /docker/llm-gateway/requirements.txt
 
@@ -168,11 +172,9 @@ apt-get install -y --no-install-recommends \
     python3-dotenv \
     python3-pip \
     python3-tornado \
-    sudo \
     tomcat10 \
     && :
-## Give server access to savegames / scenarios directory.
-## TODO: Figure out more targeted solution.
+## Add docker user to tomcat group for directory access
 usermod -a -G tomcat docker
 # Remove documentation, saves 1691975 bytes
 rm -rf /usr/share/doc/* /usr/share/man/* /usr/share/locale/*
@@ -188,6 +190,20 @@ COPY --from=tomcat-builder --chown=docker:docker /docker/llm-gateway /docker/llm
 COPY --from=tomcat-builder --chown=docker:docker /home/docker /home/docker
 COPY --from=tomcat-builder --chown=tomcat:tomcat /usr/share/tomcat10 /usr/share/tomcat10
 COPY --from=tomcat-builder --chown=tomcat:tomcat /var/lib/tomcat10 /var/lib/tomcat10
+
+# Configure Tomcat directories for docker user (member of tomcat group)
+# This allows running Tomcat as docker user without sudo privilege escalation
+# Note: /var/lib/tomcat10/conf is a symlink to /etc/tomcat10, so we configure both
+RUN mkdir -p /etc/tomcat10/Catalina/localhost && \
+    chown -R tomcat:tomcat /etc/tomcat10/Catalina && \
+    chmod -R 775 /etc/tomcat10/Catalina && \
+    # Make logs, work, and cache writable by tomcat group (docker is in tomcat group)
+    chmod 775 /var/log/tomcat10 && \
+    chown tomcat:tomcat /var/log/tomcat10 && \
+    chmod 775 /var/cache/tomcat10 && \
+    chown tomcat:tomcat /var/cache/tomcat10 && \
+    chmod -R 775 /var/cache/tomcat10 && \
+    mkdir -p /docker/logs && chown docker:docker /docker/logs
 
 USER docker
 

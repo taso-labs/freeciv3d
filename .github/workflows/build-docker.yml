@@ -42,9 +42,21 @@ jobs:
         id: tag
         run: |
           if [ "${{ github.event_name }}" = "release" ]; then
-            echo "tag=${{ github.event.release.tag_name }}" >> $GITHUB_OUTPUT
+            # Extract version from release tag (e.g., freeciv3d-v0.2.2 -> 0.2.2)
+            RELEASE_TAG="${{ github.event.release.tag_name }}"
+            if [[ "$RELEASE_TAG" =~ ^freeciv3d-v(.+)$ ]]; then
+              VERSION="${BASH_REMATCH[1]}"
+              echo "tag=$VERSION" >> $GITHUB_OUTPUT
+              echo "✓ Extracted version $VERSION from release tag $RELEASE_TAG"
+            else
+              # Fallback - warn about unexpected tag format
+              echo "::warning::Release tag '$RELEASE_TAG' does not match expected format 'freeciv3d-vX.Y.Z'. Using full tag which may cause deployment issues."
+              echo "tag=$RELEASE_TAG" >> $GITHUB_OUTPUT
+              echo "⚠️ Using full release tag: $RELEASE_TAG (expected format: freeciv3d-vX.Y.Z)"
+            fi
           else
             echo "tag=${{ github.event.inputs.tag }}" >> $GITHUB_OUTPUT
+            echo "Using manual tag: ${{ github.event.inputs.tag }}"
           fi
 
       - name: Build and push fciv-net to staging

@@ -64,11 +64,11 @@ spec:
         - name: fciv-net
           image: fciv-net
           imagePullPolicy: Always
+          # Override CMD to keep container running after entrypoint completes
+          # Entrypoint runs docker-entrypoint.sh, then exec's args
+          args: ["sleep", "infinity"]
 
           ports:
-            - name: game
-              containerPort: 5556
-              protocol: TCP
             - name: web
               containerPort: 8080
               protocol: TCP
@@ -78,6 +78,8 @@ spec:
             - name: llm-gateway
               containerPort: 8003
               protocol: TCP
+            # Per-game proxy ports (7001-7009), publite2 status (4002)
+            # are also available but managed internally
 
           env:
             # Database connection via Cloud SQL Proxy
@@ -100,18 +102,10 @@ spec:
               value: "6379"
 
             # Game server configuration
-            - name: FREECIV_PORT
-              value: "5556"
             - name: FREECIV_WEB_PORT
               value: "8080"
             - name: FREECIV_PROXY_PORT
               value: "8002"
-            - name: FREECIV_GAME_MODE
-              value: "bot-competition"
-            - name: FREECIV_MAX_PLAYERS
-              value: "4"
-            - name: FREECIV_TURN_TIMEOUT
-              value: "300"
 
             # Application configuration
             - name: LOG_LEVEL
@@ -144,28 +138,34 @@ spec:
               cpu: 1000m
               memory: 2Gi
 
+          # Startup probe: Wait for Tomcat to start (TCP check on port 8080)
+          # Max wait: 30s initial + (60 * 10s) = 630s total startup time
           startupProbe:
             tcpSocket:
-              port: game
-            initialDelaySeconds: 10
-            periodSeconds: 5
-            failureThreshold: 60  # 300s max startup time (freeciv server is slow to start)
-
-          livenessProbe:
-            tcpSocket:
-              port: game
+              port: web
             initialDelaySeconds: 30
             periodSeconds: 10
             timeoutSeconds: 5
+            failureThreshold: 60
+
+          # Liveness probe: Check Tomcat is responding (every 20s for faster failure detection)
+          livenessProbe:
+            tcpSocket:
+              port: web
+            initialDelaySeconds: 60
+            periodSeconds: 20
+            timeoutSeconds: 10
             failureThreshold: 3
 
+          # Readiness probe: Check webapp is deployed and responding
           readinessProbe:
-            tcpSocket:
-              port: game
-            initialDelaySeconds: 10
-            periodSeconds: 5
-            timeoutSeconds: 3
-            failureThreshold: 2
+            httpGet:
+              path: /freeciv-web/
+              port: web
+            initialDelaySeconds: 120  # Wait for webapp deployment
+            periodSeconds: 10
+            timeoutSeconds: 10
+            failureThreshold: 6
 
           volumeMounts:
             - name: game-data
@@ -173,16 +173,20 @@ spec:
             - name: game-logs
               mountPath: /var/log/freeciv
 
+          # SECURITY: Container runs as non-root (docker user, UID 1001)
+          # Dockerfile pre-creates directories with group-write permissions
+          # and uses Docker-specific startup script without sudo
           securityContext:
             runAsNonRoot: true
             runAsUser: 1001
+            runAsGroup: 1001
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: false
+            seccompProfile:
+              type: RuntimeDefault
             capabilities:
               drop:
                 - ALL
-            seccompProfile:
-              type: RuntimeDefault
 
       volumes:
         - name: game-data
