@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.2.2](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.2.1...freeciv3d-v0.2.2) (2025-12-25)
+
+
+### Bug Fixes
+
+* **ci:** Pull staging image before tagging for production ([77ac120](https://github.com/taso-ventures/freeciv3d/commit/77ac120ebd6b14696f6734a08296ed9c84780c68))
+
+
+### Code Refactoring
+
+* **ci:** Align with agent-clash pattern - gcrane for image promotion ([5ca52b8](https://github.com/taso-ventures/freeciv3d/commit/5ca52b88711c17c6d8c4bcbdc18794593a6a0724))
+
 ## [0.2.1](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.2.0...freeciv3d-v0.2.1) (2025-12-25)
 
 
