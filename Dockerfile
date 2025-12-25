@@ -193,9 +193,10 @@ COPY --from=tomcat-builder --chown=tomcat:tomcat /var/lib/tomcat10 /var/lib/tomc
 
 # Configure Tomcat directories for docker user (member of tomcat group)
 # This allows running Tomcat as docker user without sudo privilege escalation
-RUN mkdir -p /var/lib/tomcat10/conf/Catalina/localhost && \
-    chown -R tomcat:tomcat /var/lib/tomcat10/conf && \
-    chmod -R 775 /var/lib/tomcat10/conf && \
+# Note: /var/lib/tomcat10/conf is a symlink to /etc/tomcat10, so we configure both
+RUN mkdir -p /etc/tomcat10/Catalina/localhost && \
+    chown -R tomcat:tomcat /etc/tomcat10/Catalina && \
+    chmod -R 775 /etc/tomcat10/Catalina && \
     # Make logs, work, and cache writable by tomcat group (docker is in tomcat group)
     chmod 775 /var/log/tomcat10 && \
     chown tomcat:tomcat /var/log/tomcat10 && \
