@@ -173,19 +173,20 @@ spec:
             - name: game-logs
               mountPath: /var/log/freeciv
 
-          # SECURITY: Context relaxed - container startup script uses sudo
-          # Root cause: docker-entrypoint.sh uses sudo for Tomcat config setup
-          # TODO: Refactor to improve security:
-          #   1. Short-term: Add container scanning and Pod Security Standards
-          #   2. Medium-term: Refactor Dockerfile to pre-create dirs with correct perms
-          #   3. Long-term: Use init container for config, match cloud-sql-proxy pattern
-          # See cloud-sql-proxy sidecar above for best practice example
+          # SECURITY: Container runs as non-root (docker user, UID 1001)
+          # Dockerfile pre-creates directories with group-write permissions
+          # and uses Docker-specific startup script without sudo
           securityContext:
-            runAsNonRoot: false
-            allowPrivilegeEscalation: true
+            runAsNonRoot: true
+            runAsUser: 1001
+            runAsGroup: 1001
+            allowPrivilegeEscalation: false
             readOnlyRootFilesystem: false
             seccompProfile:
               type: RuntimeDefault
+            capabilities:
+              drop:
+                - ALL
 
       volumes:
         - name: game-data
