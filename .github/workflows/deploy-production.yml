@@ -16,7 +16,7 @@ env:
   GCP_PROJECT: clashai-production
   GKE_CLUSTER: clashai-production-gke
   GKE_REGION: us-central1
-  APP_NAMESPACE: freeciv3d
+  APP_NAMESPACE: freeciv
   REGISTRY: us-central1-docker.pkg.dev/clashai-production/clashai-production-registry
 
 permissions:
@@ -57,7 +57,7 @@ jobs:
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
         with:
-          workload_identity_provider: projects/123456789/locations/global/workloadIdentityPools/github/providers/github
+          workload_identity_provider: projects/364210626442/locations/global/workloadIdentityPools/github/providers/github
           service_account: github-actions-sa@clashai-production.iam.gserviceaccount.com
 
       - name: Set up Cloud SDK
@@ -81,7 +81,6 @@ jobs:
         run: |
           cd k8s/overlays/production
           kustomize edit set image fciv-net=${{ env.REGISTRY }}/fciv-net:${{ needs.validate.outputs.version }}
-          kustomize edit set image llm-gateway=${{ env.REGISTRY }}/llm-gateway:${{ needs.validate.outputs.version }}
 
       - name: Create namespace if not exists
         run: |
@@ -94,7 +93,6 @@ jobs:
       - name: Wait for rollout
         run: |
           kubectl rollout status deployment/fciv-net -n ${{ env.APP_NAMESPACE }} --timeout=600s
-          kubectl rollout status deployment/llm-gateway -n ${{ env.APP_NAMESPACE }} --timeout=300s
           kubectl rollout status deployment/redis -n ${{ env.APP_NAMESPACE }} --timeout=120s
 
       - name: Verify deployment
@@ -111,8 +109,5 @@ jobs:
       - name: Create deployment annotation
         run: |
           kubectl annotate deployment fciv-net -n ${{ env.APP_NAMESPACE }} \
-            kubernetes.io/change-cause="Deployed version ${{ needs.validate.outputs.version }} via GitHub Actions" \
-            --overwrite
-          kubectl annotate deployment llm-gateway -n ${{ env.APP_NAMESPACE }} \
             kubernetes.io/change-cause="Deployed version ${{ needs.validate.outputs.version }} via GitHub Actions" \
             --overwrite

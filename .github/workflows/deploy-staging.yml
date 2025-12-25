@@ -16,7 +16,7 @@ env:
   GCP_PROJECT: clashai-staging
   GKE_CLUSTER: clashai-staging-gke
   GKE_REGION: us-central1
-  APP_NAMESPACE: freeciv3d
+  APP_NAMESPACE: freeciv
   REGISTRY: us-central1-docker.pkg.dev/clashai-staging/clashai-staging-registry
 
 permissions:
@@ -70,7 +70,6 @@ jobs:
         run: |
           cd k8s/overlays/staging
           kustomize edit set image fciv-net=${{ env.REGISTRY }}/fciv-net:${{ steps.version.outputs.version }}
-          kustomize edit set image llm-gateway=${{ env.REGISTRY }}/llm-gateway:${{ steps.version.outputs.version }}
 
       - name: Create namespace if not exists
         run: |
@@ -83,7 +82,6 @@ jobs:
       - name: Wait for rollout
         run: |
           kubectl rollout status deployment/fciv-net -n ${{ env.APP_NAMESPACE }} --timeout=300s
-          kubectl rollout status deployment/llm-gateway -n ${{ env.APP_NAMESPACE }} --timeout=300s
           kubectl rollout status deployment/redis -n ${{ env.APP_NAMESPACE }} --timeout=120s
 
       - name: Verify deployment

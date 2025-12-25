@@ -75,6 +75,9 @@ spec:
             - name: proxy
               containerPort: 8002
               protocol: TCP
+            - name: llm-gateway
+              containerPort: 8003
+              protocol: TCP
 
           env:
             # Database connection via Cloud SQL Proxy
@@ -115,6 +118,23 @@ spec:
               value: "info"
             - name: ENABLE_BOT_API
               value: "true"
+
+            # LLM Gateway secrets (for integrated llm-gateway)
+            - name: CACHE_HMAC_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: llm-gateway-secrets
+                  key: cache-hmac-secret
+            - name: API_KEY_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: llm-gateway-secrets
+                  key: api-key-secret
+            - name: LLM_API_TOKENS
+              valueFrom:
+                secretKeyRef:
+                  name: llm-api-tokens
+                  key: tokens
 
           resources:
             requests:
