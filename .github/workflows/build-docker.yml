@@ -79,7 +79,12 @@ jobs:
         run: |
           gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
 
-      - name: Push fciv-net to production
+      - name: Pull image from staging for production push
+        if: steps.tag.outputs.push_production == 'true'
+        run: |
+          docker pull ${{ env.REGION }}-docker.pkg.dev/${{ env.STAGING_PROJECT }}/${{ env.STAGING_PROJECT }}-registry/fciv-net:${{ steps.tag.outputs.tag }}
+
+      - name: Tag and push fciv-net to production
         if: steps.tag.outputs.push_production == 'true'
         run: |
           docker tag ${{ env.REGION }}-docker.pkg.dev/${{ env.STAGING_PROJECT }}/${{ env.STAGING_PROJECT }}-registry/fciv-net:${{ steps.tag.outputs.tag }} \
