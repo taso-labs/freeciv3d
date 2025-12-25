@@ -1,110 +1,109 @@
 # FreeCiv3D Kubernetes Manifests
 
-This directory contains Kubernetes manifests for deploying FreeCiv3D services to GKE.
+Kubernetes manifests for deploying FreeCiv3D to GKE using Kustomize.
+
+## Architecture
+
+**Monolithic deployment**: The `fciv-net` container runs all services:
+
+- Tomcat webapp (freeciv-web) on port 8080
+- FreeCiv proxy for LLM on port 8002
+- LLM Gateway API on port 8003
+- Per-game proxies (7001-7009) managed by publite2
 
 ## Directory Structure
 
-```
+```text
 k8s/
-├── llm-gateway/        # LLM Gateway service (port 8003)
-│   ├── deployment.yaml
-│   ├── service.yaml
-│   ├── hpa.yaml
-│   └── configmap.yaml
-├── fciv-net/           # FreeCiv Network service (port 5556)
-│   ├── deployment.yaml
-│   ├── service.yaml
-│   ├── hpa.yaml
-│   └── configmap.yaml
-├── rbac/               # Service accounts with Workload Identity
-│   ├── llm-gateway-sa.yaml
-│   └── fciv-net-sa.yaml
-├── mariadb/            # MariaDB (placeholder - not yet implemented)
-├── nginx/              # Nginx (placeholder - not yet implemented)
-├── redis/              # Redis (placeholder - not yet implemented)
-└── secrets/            # External Secrets Operator config (placeholder)
+├── base/                    # Base manifests
+│   ├── namespace.yaml       # freeciv namespace
+│   ├── kustomization.yaml   # Kustomize base config
+│   ├── fciv-net/            # FreeCiv Network service
+│   │   ├── deployment.yaml  # Main container with Cloud SQL Proxy sidecar
+│   │   ├── service.yaml     # ClusterIP service (8080, 8002, 8003)
+│   │   ├── configmap.yaml   # Configuration
+│   │   └── hpa.yaml         # Horizontal Pod Autoscaler
+│   ├── redis/               # Redis cache
+│   ├── rbac/                # Service accounts with Workload Identity
+│   ├── network-policies/    # Network security policies
+│   ├── pdb.yaml             # Pod Disruption Budget
+│   ├── resource-quota.yaml  # Resource quotas
+│   └── external-secrets.yaml # External Secrets for GCP Secret Manager
+├── overlays/
+│   ├── staging/             # Staging environment patches
+│   └── production/          # Production environment patches
+└── README.md
 ```
 
 ## Services
 
-### LLM Gateway
-- **Purpose**: AI/LLM integration gateway for FreeCiv agents
-- **Port**: 8003
-- **Type**: ClusterIP (internal only)
-- **Scaling**: HPA with 1-4 replicas
-- **Resources**: 200m-500m CPU, 256Mi-512Mi memory
+### fciv-net
 
-### FreeCiv Network (fciv-net)
-- **Purpose**: FreeCiv game server network interface
-- **Port**: 5556
+- **Purpose**: FreeCiv 3D game server (Tomcat, proxies, LLM gateway)
+- **Ports**:
+  - 8080: Tomcat webapp (freeciv-web)
+  - 8002: FreeCiv proxy for LLM Gateway
+  - 8003: LLM Gateway API
 - **Type**: ClusterIP (internal only)
-- **Scaling**: HPA with 1-4 replicas
-- **Resources**: 200m-500m CPU, 256Mi-512Mi memory
+- **Scaling**: HPA with configurable replicas
+
+### redis
+
+- **Purpose**: Session cache and rate limiting
+- **Port**: 6379
+- **Type**: ClusterIP
 
 ## Deployment
 
-### Prerequisites
-- GKE cluster configured with Workload Identity
-- Namespace `freeciv3d` created
-- External Secrets Operator installed (for secrets)
-
-### Apply Manifests
+### Using Kustomize
 
 ```bash
-# Create namespace (if not exists)
-kubectl apply -f ../k8s/namespaces/freeciv3d-namespace.yaml
+# Preview staging manifests
+kubectl kustomize k8s/overlays/staging
 
-# Apply RBAC (service accounts)
-kubectl apply -f rbac/
+# Apply to staging
+kubectl apply -k k8s/overlays/staging
 
-# Apply ConfigMaps
-kubectl apply -f llm-gateway/configmap.yaml
-kubectl apply -f fciv-net/configmap.yaml
-
-# Apply Services
-kubectl apply -f llm-gateway/service.yaml
-kubectl apply -f fciv-net/service.yaml
-
-# Apply Deployments
-kubectl apply -f llm-gateway/deployment.yaml
-kubectl apply -f fciv-net/deployment.yaml
-
-# Apply HPAs
-kubectl apply -f llm-gateway/hpa.yaml
-kubectl apply -f fciv-net/hpa.yaml
+# Apply to production
+kubectl apply -k k8s/overlays/production
 ```
 
 ### Verify Deployment
 
 ```bash
 # Check deployments
-kubectl get deployments -n freeciv3d
+kubectl get deployments -n freeciv
 
-# Check pods
-kubectl get pods -n freeciv3d
+# Check pods (expect 2/2 containers: fciv-net + cloud-sql-proxy)
+kubectl get pods -n freeciv
 
 # Check services
-kubectl get services -n freeciv3d
+kubectl get services -n freeciv
 
 # Check logs
-kubectl logs -n freeciv3d -l app=llm-gateway --tail=100
-kubectl logs -n freeciv3d -l app=fciv-net --tail=100
+kubectl logs -n freeciv -l app=fciv-net -c fciv-net --tail=100
 ```
 
 ## Integration with AgentClash
 
-FreeCiv3D services are accessed internally by the AgentClash `freeciv-gateway` service via Kubernetes DNS:
+FreeCiv3D services are accessed internally by AgentClash via Kubernetes DNS:
 
-- `llm-gateway.freeciv3d.svc.cluster.local:8003`
-- `fciv-net.freeciv3d.svc.cluster.local:5556`
+- `fciv-net.freeciv.svc.cluster.local:8080` - Web interface
+- `fciv-net.freeciv.svc.cluster.local:8002` - FreeCiv proxy
+- `fciv-net.freeciv.svc.cluster.local:8003` - LLM Gateway API
 
 ## CI/CD
 
-FreeCiv3D services should have their own deployment workflow in this repository. See `.github/workflows/` for CI/CD pipelines.
+Deployment is automated via GitHub Actions:
 
-## Notes
+1. `build-docker.yml` - Builds and pushes to staging registry on release
+2. `deploy-staging.yml` - Deploys to staging after build succeeds
+3. `deploy-production.yml` - Promotes image to production on release publish
 
-- All services use **ClusterIP** (not LoadBalancer) - they are internal only
-- External access is routed through `freeciv-gateway` in the `agent-clash` namespace
-- Workload Identity Federation is used for GCP authentication (no service account keys)
-- Resources are auto-scaled based on CPU utilization via HPA
+## Security Notes
+
+- All services use **ClusterIP** (not LoadBalancer) - internal only
+- Network policies restrict traffic to allowed namespaces
+- Workload Identity Federation used for GCP authentication
+- Cloud SQL Proxy sidecar handles secure database connections
+- TODO: Refactor container to run as non-root (currently requires sudo)

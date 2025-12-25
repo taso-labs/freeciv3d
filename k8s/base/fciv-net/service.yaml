@@ -11,10 +11,6 @@ spec:
   selector:
     app: fciv-net
   ports:
-    - name: game
-      port: 5556
-      targetPort: game
-      protocol: TCP
     - name: web
       port: 8080
       targetPort: web
