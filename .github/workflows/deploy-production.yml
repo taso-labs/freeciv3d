@@ -18,6 +18,7 @@ env:
   GKE_REGION: us-central1
   APP_NAMESPACE: freeciv
   REGISTRY: us-central1-docker.pkg.dev/clashai-production/clashai-production-registry
+  STAGING_REGISTRY: us-central1-docker.pkg.dev/clashai-staging/clashai-staging-registry
 
 permissions:
   contents: read
@@ -30,6 +31,9 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
       - name: Determine version
         id: version
         run: |
@@ -44,6 +48,58 @@ jobs:
         run: |
           echo "::error::Production deployment requires confirmation. Please type 'DEPLOY' in the confirm field."
           exit 1
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: projects/364210626442/locations/global/workloadIdentityPools/github-pool/providers/github-provider
+          service_account: github-actions-sa@clashai-production.iam.gserviceaccount.com
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.GCP_PROJECT }}
+
+      - name: Promote Docker image from staging to production
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          PROD_IMAGE="${{ env.REGISTRY }}/fciv-net:${VERSION}"
+          STAGING_IMAGE="${{ env.STAGING_REGISTRY }}/fciv-net:${VERSION}"
+
+          echo "Checking if fciv-net image needs promotion..."
+          echo "Production image: $PROD_IMAGE"
+          echo "Staging image: $STAGING_IMAGE"
+          echo ""
+
+          # Check if image already exists in production (idempotent)
+          if gcloud artifacts docker images describe "$PROD_IMAGE" --project=${{ env.GCP_PROJECT }} &>/dev/null; then
+            echo "✓ Image already exists in production registry - skipping promotion"
+          else
+            echo "Image not found in production - promoting from staging using gcrane..."
+            echo ""
+
+            # Install gcrane (Google's official tool for copying container images)
+            echo "Installing gcrane..."
+            go install github.com/google/go-containerregistry/cmd/gcrane@latest
+            export PATH="$PATH:$(go env GOPATH)/bin"
+
+            # Authenticate gcrane with gcloud credentials
+            gcloud auth configure-docker us-central1-docker.pkg.dev --quiet
+
+            # Use gcrane to efficiently copy image from staging to production
+            # Benefits over docker pull/tag/push:
+            # - Skips layers already in destination (faster)
+            # - More efficient bandwidth usage
+            # - Google's recommended approach for Artifact Registry
+            echo "Copying image from staging to production..."
+            gcrane cp "$STAGING_IMAGE" "$PROD_IMAGE"
+
+            echo ""
+            echo "✓ Image promoted from staging to production using gcrane"
+          fi
+
+          echo ""
+          echo "✓ Production image ready: $PROD_IMAGE"
 
   deploy:
     runs-on: ubuntu-latest
@@ -111,3 +167,16 @@ jobs:
           kubectl annotate deployment fciv-net -n ${{ env.APP_NAMESPACE }} \
             kubernetes.io/change-cause="Deployed version ${{ needs.validate.outputs.version }} via GitHub Actions" \
             --overwrite
+
+      - name: Generate deployment summary
+        run: |
+          echo "## ✅ Production Deployment Successful" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Version:** \`${{ needs.validate.outputs.version }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Namespace:** \`${{ env.APP_NAMESPACE }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Cluster:** \`${{ env.GKE_CLUSTER }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Deployment Status" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          kubectl get deployment fciv-net -n ${{ env.APP_NAMESPACE }} -o wide >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY

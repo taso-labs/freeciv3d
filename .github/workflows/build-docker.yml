@@ -9,14 +9,9 @@ on:
         description: 'Image tag (e.g., 0.1.0 or latest)'
         required: true
         default: 'latest'
-      push_to_production:
-        description: 'Also push to production registry'
-        type: boolean
-        default: false
 
 env:
   STAGING_PROJECT: clashai-staging
-  PRODUCTION_PROJECT: clashai-production
   REGION: us-central1
 
 jobs:
@@ -33,14 +28,13 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Authenticate to Google Cloud (Staging)
-        id: auth-staging
+      - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
         with:
           workload_identity_provider: projects/978279426764/locations/global/workloadIdentityPools/github-pool/providers/github-provider
           service_account: github-actions-sa@clashai-staging.iam.gserviceaccount.com
 
-      - name: Configure Docker for Artifact Registry (Staging)
+      - name: Configure Docker for Artifact Registry
         run: |
           gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
 
@@ -49,10 +43,8 @@ jobs:
         run: |
           if [ "${{ github.event_name }}" = "release" ]; then
             echo "tag=${{ github.event.release.tag_name }}" >> $GITHUB_OUTPUT
-            echo "push_production=true" >> $GITHUB_OUTPUT
           else
             echo "tag=${{ github.event.inputs.tag }}" >> $GITHUB_OUTPUT
-            echo "push_production=${{ github.event.inputs.push_to_production }}" >> $GITHUB_OUTPUT
           fi
 
       - name: Build and push fciv-net to staging
@@ -67,27 +59,11 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Authenticate to Google Cloud (Production)
-        if: steps.tag.outputs.push_production == 'true'
-        uses: google-github-actions/auth@v2
-        with:
-          workload_identity_provider: projects/364210626442/locations/global/workloadIdentityPools/github-pool/providers/github-provider
-          service_account: github-actions-sa@clashai-production.iam.gserviceaccount.com
-
-      - name: Configure Docker for Artifact Registry (Production)
-        if: steps.tag.outputs.push_production == 'true'
+      - name: Output build summary
         run: |
-          gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
-
-      - name: Pull image from staging for production push
-        if: steps.tag.outputs.push_production == 'true'
-        run: |
-          docker pull ${{ env.REGION }}-docker.pkg.dev/${{ env.STAGING_PROJECT }}/${{ env.STAGING_PROJECT }}-registry/fciv-net:${{ steps.tag.outputs.tag }}
-
-      - name: Tag and push fciv-net to production
-        if: steps.tag.outputs.push_production == 'true'
-        run: |
-          docker tag ${{ env.REGION }}-docker.pkg.dev/${{ env.STAGING_PROJECT }}/${{ env.STAGING_PROJECT }}-registry/fciv-net:${{ steps.tag.outputs.tag }} \
-            ${{ env.REGION }}-docker.pkg.dev/${{ env.PRODUCTION_PROJECT }}/${{ env.PRODUCTION_PROJECT }}-registry/fciv-net:${{ steps.tag.outputs.tag }}
-          docker push ${{ env.REGION }}-docker.pkg.dev/${{ env.PRODUCTION_PROJECT }}/${{ env.PRODUCTION_PROJECT }}-registry/fciv-net:${{ steps.tag.outputs.tag }}
-
+          echo "## 🐳 Docker Build Complete" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Image:** \`fciv-net:${{ steps.tag.outputs.tag }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Registry:** \`${{ env.REGION }}-docker.pkg.dev/${{ env.STAGING_PROJECT }}/${{ env.STAGING_PROJECT }}-registry\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Image is available in staging registry. Production promotion happens during deploy-production workflow." >> $GITHUB_STEP_SUMMARY
