@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.2.3](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.2.2...freeciv3d-v0.2.3) (2025-12-25)
+
+
+### Bug Fixes
+
+* **ci:** Remove branches filter from deploy-staging workflow_run ([8ae5db5](https://github.com/taso-ventures/freeciv3d/commit/8ae5db5390f22ec7f573b47ee1131ba58cbe1710))
+* **k8s:** Fix fciv-net deployment probes, ports, and security context ([#21](https://github.com/taso-ventures/freeciv3d/issues/21)) ([6fcb60d](https://github.com/taso-ventures/freeciv3d/commit/6fcb60defb7578b84a02d5d214648cecfd96d86c))
+
 ## [0.2.2](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.2.1...freeciv3d-v0.2.2) (2025-12-25)
 
 
