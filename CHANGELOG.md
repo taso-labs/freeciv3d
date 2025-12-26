@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.5](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.2.4...freeciv3d-v0.2.5) (2025-12-26)
+
+
+### Bug Fixes
+
+* **ci:** Sync VERSION file and fix deploy workflows to use release tags ([#24](https://github.com/taso-ventures/freeciv3d/issues/24)) ([081f301](https://github.com/taso-ventures/freeciv3d/commit/081f301f27dca538b213766103aaf6e42eba69d6))
+
 ## [0.2.4](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.2.3...freeciv3d-v0.2.4) (2025-12-26)
 
 
