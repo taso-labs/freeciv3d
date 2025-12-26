@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.4](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.2.3...freeciv3d-v0.2.4) (2025-12-26)
+
+
+### Bug Fixes
+
+* **k8s:** Fix Cloud SQL connectivity and add public Ingress for observer mode ([#22](https://github.com/taso-ventures/freeciv3d/issues/22)) ([e173deb](https://github.com/taso-ventures/freeciv3d/commit/e173debec1eb3e180c67e874d303460b0f5fe992))
+
 ## [0.2.3](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.2.2...freeciv3d-v0.2.3) (2025-12-25)
 
 
