@@ -54,6 +54,7 @@ spec:
 
     # Allow metadata server access (for Workload Identity)
     # Note: Must use /16 range - Calico has issues with /32 for link-local addresses
+    # TODO: Revert to 169.254.169.254/32 when Calico link-local address bug is fixed
     - to:
         - ipBlock:
             cidr: 169.254.0.0/16

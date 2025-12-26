@@ -8,8 +8,9 @@ metadata:
 spec:
   customResponseHeaders:
     headers:
-      - "X-Frame-Options: ALLOW-FROM https://*.clashai.live"
-      - "Content-Security-Policy: frame-ancestors https://*.clashai.live"
+      # Note: X-Frame-Options ALLOW-FROM is deprecated and not supported in Chrome/Edge/Safari
+      # Using CSP frame-ancestors instead (modern standard, supported by all browsers)
+      - "Content-Security-Policy: frame-ancestors 'self' https://*.clashai.live"
   timeoutSec: 3600
   connectionDraining:
     drainingTimeoutSec: 60
