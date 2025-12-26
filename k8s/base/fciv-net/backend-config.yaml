@@ -1,0 +1,15 @@
+apiVersion: cloud.google.com/v1
+kind: BackendConfig
+metadata:
+  name: fciv-net-backend
+  namespace: freeciv
+  labels:
+    app: fciv-net
+spec:
+  customResponseHeaders:
+    headers:
+      - "X-Frame-Options: ALLOW-FROM https://*.clashai.live"
+      - "Content-Security-Policy: frame-ancestors https://*.clashai.live"
+  timeoutSec: 3600
+  connectionDraining:
+    drainingTimeoutSec: 60

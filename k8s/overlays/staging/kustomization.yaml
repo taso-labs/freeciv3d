@@ -64,6 +64,15 @@ patches:
         path: /spec/maxReplicas
         value: 3
 
+  # Patch Ingress for staging static IP
+  - target:
+      kind: Ingress
+      name: fciv-net-public
+    patch: |-
+      - op: replace
+        path: /metadata/annotations/kubernetes.io~1ingress.global-static-ip-name
+        value: "freeciv-staging-public-ip"
+
 # ConfigMap generator for staging-specific config
 configMapGenerator:
   - name: staging-config
