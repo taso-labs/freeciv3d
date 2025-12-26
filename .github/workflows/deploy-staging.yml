@@ -58,12 +58,26 @@ jobs:
 
       - name: Determine version
         id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
           else
-            # Get version from VERSION file
-            echo "version=$(cat VERSION)" >> $GITHUB_OUTPUT
+            # Get version from latest GitHub release tag (more reliable than VERSION file)
+            # Release tags are formatted as: freeciv3d-vX.Y.Z
+            LATEST_TAG=$(gh api repos/${{ github.repository }}/releases/latest --jq '.tag_name' 2>/dev/null || echo "")
+
+            if [ -n "$LATEST_TAG" ]; then
+              # Extract version number: freeciv3d-v0.2.4 -> 0.2.4
+              VERSION="${LATEST_TAG#freeciv3d-v}"
+              echo "Using version from release tag: $VERSION"
+              echo "version=$VERSION" >> $GITHUB_OUTPUT
+            else
+              # Fallback to latest if no release found
+              echo "No release found, using 'latest' tag"
+              echo "version=latest" >> $GITHUB_OUTPUT
+            fi
           fi
 
       - name: Update Kustomize images

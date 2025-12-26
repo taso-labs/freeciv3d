@@ -38,7 +38,11 @@ jobs:
         id: version
         run: |
           if [ "${{ github.event_name }}" = "release" ]; then
-            echo "version=${{ github.event.release.tag_name }}" >> $GITHUB_OUTPUT
+            # Extract version from release tag: freeciv3d-v0.2.4 -> 0.2.4
+            RELEASE_TAG="${{ github.event.release.tag_name }}"
+            VERSION="${RELEASE_TAG#freeciv3d-v}"
+            echo "Extracted version $VERSION from release tag $RELEASE_TAG"
+            echo "version=$VERSION" >> $GITHUB_OUTPUT
           else
             echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
           fi
