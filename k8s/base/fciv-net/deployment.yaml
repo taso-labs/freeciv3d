@@ -32,7 +32,7 @@ spec:
             - "--structured-logs"
             - "--port=3306"
             - "--private-ip"
-            - "--auto-iam-authn"
+            # Note: Using password auth (not --auto-iam-authn) since MySQL user is password-based
             - "--max-sigterm-delay=30s"
             - "--health-check"
             - "--http-address=0.0.0.0"
@@ -89,6 +89,16 @@ spec:
               value: "3306"
             - name: DB_NAME
               value: "freeciv_web"
+            - name: DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: db-credentials
+                  key: username
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: db-credentials
+                  key: password
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:

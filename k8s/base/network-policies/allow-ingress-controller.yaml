@@ -1,0 +1,25 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-from-ingress-controller
+  namespace: freeciv
+  labels:
+    app.kubernetes.io/part-of: freeciv
+  annotations:
+    description: "Allow ingress from GKE Ingress controller for public access to FreeCiv observer mode"
+spec:
+  podSelector:
+    matchLabels:
+      app: fciv-net
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        # GKE Ingress controller health check and traffic source ranges
+        - ipBlock:
+            cidr: 35.191.0.0/16
+        - ipBlock:
+            cidr: 130.211.0.0/22
+      ports:
+        - port: 8080
+          protocol: TCP

@@ -6,6 +6,8 @@ metadata:
   labels:
     app: fciv-net
     component: game-server
+  annotations:
+    cloud.google.com/backend-config: '{"default": "fciv-net-backend"}'
 spec:
   type: ClusterIP
   selector:

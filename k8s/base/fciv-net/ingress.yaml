@@ -1,0 +1,25 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: fciv-net-public
+  namespace: freeciv
+  labels:
+    app: fciv-net
+    component: game-server
+  annotations:
+    kubernetes.io/ingress.class: "gce"
+    kubernetes.io/ingress.global-static-ip-name: "freeciv-public-ip"
+    networking.gke.io/managed-certificates: "fciv-net-cert"
+    networking.gke.io/v1beta1.FrontendConfig: "fciv-net-frontend"
+spec:
+  rules:
+    - host: freeciv.clashai.live
+      http:
+        paths:
+          - path: /*
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: fciv-net
+                port:
+                  number: 8080

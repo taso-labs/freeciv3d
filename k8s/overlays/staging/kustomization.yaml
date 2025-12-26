@@ -31,7 +31,7 @@ patches:
       name: fciv-net
     patch: |-
       - op: replace
-        path: /spec/template/spec/initContainers/0/args/7
+        path: /spec/template/spec/initContainers/0/args/6
         value: "clashai-staging:us-central1:freeciv-staging-db-4e19c888"
 
   # Patch unified ServiceAccount for Workload Identity
@@ -63,6 +63,15 @@ patches:
       - op: replace
         path: /spec/maxReplicas
         value: 3
+
+  # Patch Ingress for staging static IP
+  - target:
+      kind: Ingress
+      name: fciv-net-public
+    patch: |-
+      - op: replace
+        path: /metadata/annotations/kubernetes.io~1ingress.global-static-ip-name
+        value: "freeciv-staging-public-ip"
 
 # ConfigMap generator for staging-specific config
 configMapGenerator:

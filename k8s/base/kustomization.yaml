@@ -21,12 +21,18 @@ resources:
   - fciv-net/service.yaml
   - fciv-net/configmap.yaml
   - fciv-net/hpa.yaml
+  # Public Ingress for observer mode (freeciv.clashai.live)
+  - fciv-net/ingress.yaml
+  - fciv-net/managed-certificate.yaml
+  - fciv-net/frontend-config.yaml
+  - fciv-net/backend-config.yaml
   # Redis (in-cluster)
   - redis/deployment.yaml
   - redis/service.yaml
   # Network Policies
   - network-policies/default-deny.yaml
   - network-policies/allow-agent-clash.yaml
+  - network-policies/allow-ingress-controller.yaml
   - network-policies/internal-allow.yaml
   - network-policies/allow-egress.yaml
   # Production hardening

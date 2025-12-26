@@ -1,0 +1,10 @@
+apiVersion: networking.gke.io/v1
+kind: ManagedCertificate
+metadata:
+  name: fciv-net-cert
+  namespace: freeciv
+  labels:
+    app: fciv-net
+spec:
+  domains:
+    - freeciv.clashai.live

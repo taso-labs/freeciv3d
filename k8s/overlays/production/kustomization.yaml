@@ -31,7 +31,7 @@ patches:
       name: fciv-net
     patch: |-
       - op: replace
-        path: /spec/template/spec/initContainers/0/args/7
+        path: /spec/template/spec/initContainers/0/args/6
         value: "clashai-production:us-central1:freeciv-production-db-9cc3ef1e"
 
   # Patch unified ServiceAccount for Workload Identity
@@ -51,6 +51,12 @@ patches:
       - op: replace
         path: /spec/data/0/remoteRef/key
         value: "freeciv-production-db-connection-string"
+      - op: replace
+        path: /spec/data/1/remoteRef/key
+        value: "freeciv-production-db-username"
+      - op: replace
+        path: /spec/data/2/remoteRef/key
+        value: "freeciv-production-db-password"
 
   # Patch HPA limits for production
   - target:
@@ -81,6 +87,15 @@ patches:
       - op: replace
         path: /spec/template/spec/containers/0/resources/limits/memory
         value: "4Gi"
+
+  # Patch Ingress for production static IP
+  - target:
+      kind: Ingress
+      name: fciv-net-public
+    patch: |-
+      - op: replace
+        path: /metadata/annotations/kubernetes.io~1ingress.global-static-ip-name
+        value: "freeciv-production-public-ip"
 
 # ConfigMap generator for production-specific config
 configMapGenerator:
