@@ -19,6 +19,7 @@ resources:
   # Core services
   - fciv-net/deployment.yaml
   - fciv-net/service.yaml
+  - fciv-net/flyway-job.yaml
   - fciv-net/configmap.yaml
   - fciv-net/hpa.yaml
   # Public Ingress for observer mode (freeciv.clashai.live)
