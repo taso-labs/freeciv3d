@@ -73,6 +73,15 @@ patches:
         path: /metadata/annotations/kubernetes.io~1ingress.global-static-ip-name
         value: "freeciv-staging-public-ip"
 
+  # Patch Flyway Job with Cloud SQL instance
+  - target:
+      kind: Job
+      name: flyway-migrate
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/initContainers/0/args/6
+        value: "clashai-staging:us-central1:freeciv-staging-db-4e19c888"
+
 # ConfigMap generator for staging-specific config
 configMapGenerator:
   - name: staging-config

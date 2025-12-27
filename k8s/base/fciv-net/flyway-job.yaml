@@ -1,0 +1,178 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: flyway-migrate
+  # Namespace is set by kustomize namespace transformer
+  labels:
+    app: flyway-migrate
+    app.kubernetes.io/part-of: freeciv
+  annotations:
+    description: "Run Flyway database migrations for FreeCiv"
+spec:
+  # Auto-cleanup after 5 minutes
+  ttlSecondsAfterFinished: 300
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        app: flyway-migrate
+    spec:
+      serviceAccountName: freeciv-sa
+      restartPolicy: Never
+
+      initContainers:
+        # Cloud SQL Proxy as native sidecar (K8s 1.28+)
+        # Must be first to match overlay patch index
+        - name: cloud-sql-proxy
+          image: gcr.io/cloud-sql-connectors/cloud-sql-proxy:2.14.3
+          restartPolicy: Always
+          args:
+            - "--structured-logs"
+            - "--port=3306"
+            - "--private-ip"
+            - "--max-sigterm-delay=30s"
+            - "--health-check"
+            - "--http-address=0.0.0.0"
+            # Instance connection name - patched by overlay (index 6)
+            - "PLACEHOLDER:us-central1:PLACEHOLDER"
+          ports:
+            - name: mysql
+              containerPort: 3306
+              protocol: TCP
+            - name: health
+              containerPort: 9801
+              protocol: TCP
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+
+        # Extract migrations from WAR file to shared volume
+        # WAR contains migrations at WEB-INF/classes/db/migration/
+        - name: copy-migrations
+          image: fciv-net
+          command:
+            - python3
+            - -c
+            - |
+              import zipfile
+              import os
+              import shutil
+              import sys
+
+              print("Extracting migrations from WAR file...")
+              war_path = "/var/lib/tomcat10/webapps/freeciv-web.war"
+              dest_dir = "/flyway/sql"
+              prefix = "WEB-INF/classes/db/migration/"
+
+              try:
+                  if not os.path.exists(war_path):
+                      print(f"ERROR: WAR file not found: {war_path}", file=sys.stderr)
+                      sys.exit(1)
+
+                  extracted = 0
+                  with zipfile.ZipFile(war_path, 'r') as war:
+                      for member in war.namelist():
+                          if member.startswith(prefix) and member.endswith('.sql'):
+                              filename = os.path.basename(member)
+                              dest_path = os.path.join(dest_dir, filename)
+                              with war.open(member) as src, open(dest_path, 'wb') as dst:
+                                  shutil.copyfileobj(src, dst)
+                              print(f"Extracted: {filename}")
+                              extracted += 1
+
+                  if extracted == 0:
+                      print("ERROR: No migration files found in WAR!", file=sys.stderr)
+                      sys.exit(1)
+
+                  print(f"\n✓ {extracted} migration files extracted:")
+                  for f in sorted(os.listdir(dest_dir)):
+                      print(f"  {f}")
+
+              except zipfile.BadZipFile as e:
+                  print(f"ERROR: Invalid WAR file: {e}", file=sys.stderr)
+                  sys.exit(1)
+              except Exception as e:
+                  print(f"ERROR: {e}", file=sys.stderr)
+                  sys.exit(1)
+          volumeMounts:
+            - name: migrations
+              mountPath: /flyway/sql
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1001
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+
+      containers:
+        - name: flyway
+          image: flyway/flyway:11-alpine
+          args:
+            - "-connectRetries=30"
+            - "-connectRetriesInterval=2"
+            - "migrate"
+          env:
+            # Use MySQL JDBC driver for Cloud SQL MySQL 8.0
+            - name: FLYWAY_URL
+              value: "jdbc:mysql://127.0.0.1:3306/freeciv_web?allowPublicKeyRetrieval=true&useSSL=false&serverTimezone=UTC"
+            - name: FLYWAY_USER
+              valueFrom:
+                secretKeyRef:
+                  name: db-credentials
+                  key: username
+            - name: FLYWAY_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: db-credentials
+                  key: password
+            - name: FLYWAY_LOCATIONS
+              value: "filesystem:/flyway/sql"
+            # Baseline on migrate for fresh databases
+            - name: FLYWAY_BASELINE_ON_MIGRATE
+              value: "true"
+            - name: FLYWAY_BASELINE_VERSION
+              value: "0"
+          volumeMounts:
+            - name: migrations
+              mountPath: /flyway/sql
+              readOnly: true
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          securityContext:
+            # Flyway alpine image runs as root by default
+            # We allow this for the migration job as it's short-lived
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+
+      volumes:
+        - name: migrations
+          emptyDir: {}
+
+      dnsPolicy: ClusterFirst
+      terminationGracePeriodSeconds: 30
