@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.6](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.2.5...freeciv3d-v0.2.6) (2025-12-27)
+
+
+### Features
+
+* **k8s:** Add Flyway database migrations to CI/CD ([#26](https://github.com/taso-ventures/freeciv3d/issues/26)) ([ca05c71](https://github.com/taso-ventures/freeciv3d/commit/ca05c71082eba7856997de6b1ec86b556124c1bb))
+
 ## [0.2.5](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.2.4...freeciv3d-v0.2.5) (2025-12-26)
 
 
