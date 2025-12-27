@@ -2,7 +2,7 @@ apiVersion: batch/v1
 kind: Job
 metadata:
   name: flyway-migrate
-  namespace: freeciv
+  # Namespace is set by kustomize namespace transformer
   labels:
     app: flyway-migrate
     app.kubernetes.io/part-of: freeciv
@@ -68,25 +68,43 @@ spec:
               import zipfile
               import os
               import shutil
+              import sys
 
               print("Extracting migrations from WAR file...")
               war_path = "/var/lib/tomcat10/webapps/freeciv-web.war"
               dest_dir = "/flyway/sql"
               prefix = "WEB-INF/classes/db/migration/"
 
-              with zipfile.ZipFile(war_path, 'r') as war:
-                  for member in war.namelist():
-                      if member.startswith(prefix) and member.endswith('.sql'):
-                          # Extract filename only
-                          filename = os.path.basename(member)
-                          dest_path = os.path.join(dest_dir, filename)
-                          with war.open(member) as src, open(dest_path, 'wb') as dst:
-                              shutil.copyfileobj(src, dst)
-                          print(f"Extracted: {filename}")
+              try:
+                  if not os.path.exists(war_path):
+                      print(f"ERROR: WAR file not found: {war_path}", file=sys.stderr)
+                      sys.exit(1)
 
-              print("\nMigration files extracted:")
-              for f in sorted(os.listdir(dest_dir)):
-                  print(f"  {f}")
+                  extracted = 0
+                  with zipfile.ZipFile(war_path, 'r') as war:
+                      for member in war.namelist():
+                          if member.startswith(prefix) and member.endswith('.sql'):
+                              filename = os.path.basename(member)
+                              dest_path = os.path.join(dest_dir, filename)
+                              with war.open(member) as src, open(dest_path, 'wb') as dst:
+                                  shutil.copyfileobj(src, dst)
+                              print(f"Extracted: {filename}")
+                              extracted += 1
+
+                  if extracted == 0:
+                      print("ERROR: No migration files found in WAR!", file=sys.stderr)
+                      sys.exit(1)
+
+                  print(f"\n✓ {extracted} migration files extracted:")
+                  for f in sorted(os.listdir(dest_dir)):
+                      print(f"  {f}")
+
+              except zipfile.BadZipFile as e:
+                  print(f"ERROR: Invalid WAR file: {e}", file=sys.stderr)
+                  sys.exit(1)
+              except Exception as e:
+                  print(f"ERROR: {e}", file=sys.stderr)
+                  sys.exit(1)
           volumeMounts:
             - name: migrations
               mountPath: /flyway/sql

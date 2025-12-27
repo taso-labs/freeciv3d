@@ -157,8 +157,8 @@ jobs:
           # Delete existing Job if it exists (Jobs are immutable)
           kubectl delete job flyway-migrate -n ${{ env.APP_NAMESPACE }} --ignore-not-found=true
 
-          # Wait a moment for deletion to complete
-          sleep 5
+          # Wait for deletion to complete (avoids race condition)
+          kubectl wait --for=delete job/flyway-migrate -n ${{ env.APP_NAMESPACE }} --timeout=60s 2>/dev/null || true
 
           # Re-apply just the Flyway Job to trigger a new run
           kubectl apply -k k8s/overlays/production
