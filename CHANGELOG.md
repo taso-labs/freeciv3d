@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.7](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.2.6...freeciv3d-v0.2.7) (2025-12-27)
+
+
+### Bug Fixes
+
+* **flyway:** Run repair before migrate to handle failed migrations ([#28](https://github.com/taso-ventures/freeciv3d/issues/28)) ([1ea723e](https://github.com/taso-ventures/freeciv3d/commit/1ea723ea1ac4b918cd3309e42fbc6f2e0f9617a0))
+
 ## [0.2.6](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.2.5...freeciv3d-v0.2.6) (2025-12-27)
 
 
