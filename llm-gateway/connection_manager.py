@@ -427,7 +427,9 @@ class ConnectionManager:
             List of dicts with player_id and agent_id, sorted by player_id
         """
         players = []
-        for conn_id, conn_info in self.connections.items():
+        # Take snapshot to avoid RuntimeError if connections change during iteration
+        connections_snapshot = list(self.connections.items())
+        for conn_id, conn_info in connections_snapshot:
             if (conn_info.connection_type == "agent"
                 and conn_info.game_id == game_id
                 and conn_info.authenticated

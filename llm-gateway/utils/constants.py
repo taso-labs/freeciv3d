@@ -84,12 +84,13 @@ MAX_RATE_LIMIT = 10000
 
 # Map size to dimensions mapping (FreeCiv map sizes)
 # Format: (width, height) for each map size
+# These values match the defaults in pubscript_multiplayer.serv
 MAP_SIZE_DIMENSIONS = {
-    "tiny": (40, 40),
-    "small": (60, 60),
+    "tiny": (50, 50),
+    "small": (64, 64),
     "medium": (80, 80),
-    "large": (110, 90),
-    "huge": (140, 90)
+    "large": (96, 96),
+    "huge": (128, 128),
 }
 
 # Default coordinate limits (when map size is unknown)

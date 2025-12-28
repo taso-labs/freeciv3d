@@ -32,6 +32,7 @@ try:
         ERROR_CODE_GAME_NOT_FOUND,
         ERROR_CODE_GAME_ALREADY_ENDED,
         ERROR_CODE_INTERNAL,
+        MAP_SIZE_DIMENSIONS,
     )
 except ImportError:
     from config import settings
@@ -43,6 +44,7 @@ except ImportError:
         ERROR_CODE_GAME_NOT_FOUND,
         ERROR_CODE_GAME_ALREADY_ENDED,
         ERROR_CODE_INTERNAL,
+        MAP_SIZE_DIMENSIONS,
     )
 
 # Gateway will be injected from main.py to avoid circular imports
@@ -82,16 +84,6 @@ def rate_limit(limit_string: str):
         def noop_decorator(func):
             return func
         return noop_decorator
-
-
-# Map size dimensions lookup
-MAP_SIZE_DIMENSIONS = {
-    "tiny": (50, 50),
-    "small": (64, 64),
-    "medium": (80, 80),
-    "large": (96, 96),
-    "huge": (128, 128),
-}
 
 
 # Pydantic models for request/response validation
