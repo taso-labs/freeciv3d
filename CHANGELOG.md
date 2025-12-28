@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.9](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.2.8...freeciv3d-v0.2.9) (2025-12-28)
+
+
+### Bug Fixes
+
+* **llm-gateway:** Add polling to observer-urls to fix race condition ([#32](https://github.com/taso-ventures/freeciv3d/issues/32)) ([68dbd54](https://github.com/taso-ventures/freeciv3d/commit/68dbd540b175d454d6096f7fce5104f6cdac0f9f))
+
 ## [0.2.8](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.2.7...freeciv3d-v0.2.8) (2025-12-28)
 
 
