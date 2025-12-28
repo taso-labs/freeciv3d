@@ -8,7 +8,7 @@ REST API endpoints for LLM Gateway
 import asyncio
 import logging
 import time
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Literal, Optional
 from urllib.parse import quote
 import uuid
 from fastapi import APIRouter, HTTPException, Query, Depends, Header, Request
@@ -29,6 +29,9 @@ try:
         OBSERVER_URL_MAX_RETRY_ATTEMPTS,
         OBSERVER_URL_RETRY_DELAY_SECONDS,
         is_valid_civserver_port,
+        ERROR_CODE_GAME_NOT_FOUND,
+        ERROR_CODE_GAME_ALREADY_ENDED,
+        ERROR_CODE_INTERNAL,
     )
 except ImportError:
     from config import settings
@@ -37,6 +40,9 @@ except ImportError:
         OBSERVER_URL_MAX_RETRY_ATTEMPTS,
         OBSERVER_URL_RETRY_DELAY_SECONDS,
         is_valid_civserver_port,
+        ERROR_CODE_GAME_NOT_FOUND,
+        ERROR_CODE_GAME_ALREADY_ENDED,
+        ERROR_CODE_INTERNAL,
     )
 
 # Gateway will be injected from main.py to avoid circular imports
@@ -78,20 +84,55 @@ def rate_limit(limit_string: str):
         return noop_decorator
 
 
+# Map size dimensions lookup
+MAP_SIZE_DIMENSIONS = {
+    "tiny": (50, 50),
+    "small": (64, 64),
+    "medium": (80, 80),
+    "large": (96, 96),
+    "huge": (128, 128),
+}
+
+
 # Pydantic models for request/response validation
 class GameConfig(BaseModel):
-    """Configuration for creating a new game"""
+    """Configuration for creating a new game
+
+    Map configuration options for reducing fragmentation:
+    - map_generator: FRACTAL creates large continents (recommended)
+    - startpos: SINGLE ensures one player per continent
+    - tinyisles: FALSE prevents 1x1 island fragments
+    - landmass: Higher values = more connected land
+    """
     ruleset: str = Field(default="classic", description="Game ruleset")
-    map_size: str = Field(default="small", description="Map size")
+    map_size: Literal["tiny", "small", "medium", "large", "huge"] = Field(
+        default="medium", description="Map size (tiny=50x50, small=64x64, medium=80x80, large=96x96, huge=128x128)"
+    )
+    map_generator: Literal["FRACTAL", "ISLAND", "FAIR", "CONTINENTS"] = Field(
+        default="FRACTAL", description="Map generation algorithm (FRACTAL=large continents, ISLAND=many islands, FAIR=identical islands per player)"
+    )
+    landmass: int = Field(default=45, ge=15, le=85, description="Percentage of map that is land (15-85)")
+    startpos: Literal["DEFAULT", "SINGLE", "2or3", "ALL", "VARIABLE"] = Field(
+        default="SINGLE", description="Player start position (SINGLE=one per continent recommended for 2-player)"
+    )
+    tinyisles: bool = Field(default=False, description="Allow 1x1 tile islands (False reduces fragmentation)")
+    steepness: int = Field(default=25, ge=0, le=100, description="Amount of hills/mountains (0-100)")
+    wetness: int = Field(default=30, ge=0, le=100, description="Amount of rivers/swamps (0-100)")
     max_players: int = Field(default=4, ge=2, le=8, description="Maximum players")
     ai_level: str = Field(default="easy", description="AI difficulty level")
-    turn_timeout: Optional[int] = Field(default=300, description="Turn timeout in seconds")
+    turn_timeout: Optional[int] = Field(default=300, ge=30, le=3600, description="Turn timeout in seconds")
 
     class Config:
         schema_extra = {
             "example": {
                 "ruleset": "classic",
-                "map_size": "small",
+                "map_size": "medium",
+                "map_generator": "FRACTAL",
+                "landmass": 45,
+                "startpos": "SINGLE",
+                "tinyisles": False,
+                "steepness": 25,
+                "wetness": 30,
                 "max_players": 4,
                 "ai_level": "easy",
                 "turn_timeout": 300
@@ -136,6 +177,30 @@ class BatchActions(BaseModel):
                 ]
             }
         }
+
+
+class StopGameRequest(BaseModel):
+    """Request body for stopping a game (admin operation)"""
+    reason: str = Field(
+        default="admin_stop",
+        description="Reason for stopping the game",
+        example="admin_stop"
+    )
+    message: Optional[str] = Field(
+        default=None,
+        description="Optional human-readable message",
+        example="Match stopped by administrator"
+    )
+
+
+class PlayerFinalStats(BaseModel):
+    """Final statistics for a player at game end"""
+    player_id: int = Field(description="Player ID (0-indexed)")
+    agent_id: str = Field(description="Agent identifier")
+    score: int = Field(default=0, description="Final score (cities*10 + units*2)")
+    gold: int = Field(default=0, description="Gold reserves")
+    cities: int = Field(default=0, description="Number of cities owned")
+    units: int = Field(default=0, description="Number of units owned")
 
 
 # Dependency for API key authentication
@@ -378,6 +443,162 @@ async def list_games(
     except Exception as e:
         logger.error(f"Error listing games: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
+
+
+# Game lifecycle endpoints
+async def _capture_final_state(
+    gw,
+    game_id: str,
+    session: Dict[str, Any],
+    request_body: StopGameRequest
+) -> Dict[str, Any]:
+    """
+    Capture final game state before cleanup.
+
+    Extracts player statistics from the cached last_state in the session.
+    Falls back to basic player info if no state is cached.
+    """
+    # Calculate duration
+    created_at = session.get("created_at", time.time())
+    duration_seconds = time.time() - created_at
+
+    # Get final turn from session
+    final_turn = session.get("current_turn", 1)
+
+    # Get connected players from connection manager
+    connected_players = await connection_manager.get_players_for_game(game_id)
+
+    # Try to get player stats from last cached state
+    last_state = session.get("last_state", {})
+    players_data = []
+
+    if last_state:
+        # Extract collections from cached state
+        cities = last_state.get("cities", {})
+        units = last_state.get("units", {})
+        players_raw = last_state.get("players", {})
+
+        # Convert to list if dict (state_extractor returns dicts keyed by ID)
+        cities_list = list(cities.values()) if isinstance(cities, dict) else (cities or [])
+        units_list = list(units.values()) if isinstance(units, dict) else (units or [])
+        players_list = list(players_raw.values()) if isinstance(players_raw, dict) else (players_raw or [])
+
+        for player in connected_players:
+            player_id = player["player_id"]
+            agent_id = player["agent_id"]
+
+            # Count cities and units for this player
+            player_cities = [c for c in cities_list if c.get("owner") == player_id]
+            player_units = [u for u in units_list if u.get("owner") == player_id]
+
+            # Get player gold from players data
+            player_info = next((p for p in players_list if p.get("id") == player_id), {})
+            gold = player_info.get("gold", 0)
+
+            # Simple score calculation (matches StateExtractor._calculate_player_score)
+            score = len(player_cities) * 10 + len(player_units) * 2
+
+            players_data.append({
+                "player_id": player_id,
+                "agent_id": agent_id,
+                "score": score,
+                "gold": gold,
+                "cities": len(player_cities),
+                "units": len(player_units)
+            })
+    else:
+        # Fallback: include connected players without stats
+        for player in connected_players:
+            players_data.append({
+                "player_id": player["player_id"],
+                "agent_id": player["agent_id"],
+                "score": 0,
+                "gold": 0,
+                "cities": 0,
+                "units": 0
+            })
+
+    return {
+        "success": True,
+        "final_turn": final_turn,
+        "duration_seconds": round(duration_seconds, 2),
+        "players": players_data,
+        "end_reason": request_body.reason,
+        "end_message": request_body.message
+    }
+
+
+@router.post("/games/{game_id}/stop")
+async def stop_game(
+    game_id: str,
+    request_body: StopGameRequest,
+    auth: Dict[str, Any] = Depends(verify_api_key)
+) -> Dict[str, Any]:
+    """
+    Stop a game session and return final state.
+
+    Called by AgentClash gateway when an admin stops a match.
+    Captures final game statistics before cleanup.
+
+    Error codes:
+    - E010: Game not found
+    - E011: Game already ended
+    - E500: Internal server error
+    """
+    try:
+        gw = get_gateway()
+
+        # Check if game exists
+        if game_id not in gw.game_sessions:
+            return {
+                "type": "error",
+                "data": {
+                    "code": ERROR_CODE_GAME_NOT_FOUND,
+                    "message": f"Game not found: {game_id}"
+                }
+            }
+
+        session = gw.game_sessions[game_id]
+
+        # Check if game is already ended
+        if session.get("status") == "ended":
+            return {
+                "type": "error",
+                "data": {
+                    "code": ERROR_CODE_GAME_ALREADY_ENDED,
+                    "message": f"Game {game_id} has already ended"
+                }
+            }
+
+        # Capture final state BEFORE cleanup
+        final_state = await _capture_final_state(gw, game_id, session, request_body)
+
+        # End the game (notifies spectators, cleans up sessions/agents/connections)
+        await gw.end_game(game_id, {
+            "reason": request_body.reason,
+            "message": request_body.message,
+            "final_state": final_state
+        })
+
+        logger.info(f"Game {game_id} stopped via API: reason={request_body.reason}")
+
+        return {
+            "type": "game_ended",
+            "game_id": game_id,
+            "data": final_state
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error stopping game {game_id}: {e}")
+        return {
+            "type": "error",
+            "data": {
+                "code": ERROR_CODE_INTERNAL,
+                "message": f"Internal error stopping game: {str(e)}"
+            }
+        }
 
 
 # Spectator endpoints

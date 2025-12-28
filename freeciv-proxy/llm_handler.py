@@ -464,6 +464,23 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 game_session.add_player(self.agent_id, self.player_id, self)
                 logger.info(f"Registered agent {self.agent_id} with game session {game_id} (server-assigned player_id={self.player_id})")
 
+                # Apply game configuration if provided (first player only)
+                # Must be done BEFORE nation selection to avoid resetting ready flags
+                game_config = msg_data.get('game_config', {})
+                config_applied = False
+                if game_config and not game_session.config_applied:
+                    logger.info(
+                        f"🎮 {self.agent_id}: Applying game configuration (first player)\n"
+                        f"   Config: {game_config}"
+                    )
+                    config_applied = await game_session.configure_game_settings(game_config, self.civcom)
+                elif game_config and game_session.config_applied:
+                    logger.info(
+                        f"🎮 {self.agent_id}: Game config ignored (already configured by first player)\n"
+                        f"   Requested: {game_config}\n"
+                        f"   Applied: {game_session.game_config}"
+                    )
+
                 # Get nation preference from message or use default
                 nation_name = msg_data.get('nation', 'random')
                 leader_name = msg_data.get('leader_name', self.agent_id)
@@ -541,6 +558,8 @@ class LLMWSHandler(websocket.WebSocketHandler):
                     'status': 'authenticated',
                     'auto_ready': auto_ready,  # Indicates if player was auto-marked ready
                     'game_ready': False,  # Game not started yet
+                    'game_config_applied': config_applied,  # True if this player's config was applied
+                    'game_config': game_session.game_config,  # The applied game config (from first player)
                 }
 
                 if auto_ready:

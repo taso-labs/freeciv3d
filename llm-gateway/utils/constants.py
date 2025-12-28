@@ -119,6 +119,10 @@ ERROR_CODE_INTERNAL = "E500"             # Internal server error
 ERROR_CODE_TIMEOUT = "E503"              # Query timeout
 ERROR_CODE_UNKNOWN = "E999"              # Unknown error
 
+# Game Management Errors (E0xx)
+ERROR_CODE_GAME_NOT_FOUND = "E010"       # Game not found
+ERROR_CODE_GAME_ALREADY_ENDED = "E011"   # Game already ended
+
 # Legacy aliases for backwards compatibility during migration
 ERROR_CODE_VALIDATION = ERROR_CODE_ACTION_VALIDATION  # Alias
 

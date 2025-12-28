@@ -13,8 +13,8 @@ set maxconnectionsperhost 256
 set threaded_save enabled
 set scorelog enabled
 set mapsize xysize
-set xsize 64
-set ysize 64
+set xsize 80
+set ysize 80
 
 set victories spacerace
 
@@ -22,24 +22,27 @@ set landm 50
 set minplayers 2
 set maxplayers 3
 set aifill 2
-## Map generator changed from ISLAND (high fragmentation & naval bias)
-## to CONTINENTS for more balanced LLM vs LLM play: larger landmasses,
-## clearer expansion paths, fewer early randomness swings.
-set generator CONTINENTS
-set landmass 30
+
+## Map generator settings for balanced LLM vs LLM play
+## FRACTAL creates large continents with scattered islands (Earth-like)
+## Better than ISLAND (too fragmented) or CONTINENTS (less predictable)
+set generator FRACTAL
+set landmass 45
+set tinyisles FALSE
 set separatepoles ENABLED
 
-# Starting units configuration
+# Starting units and position configuration
 set startunits cccwwwx
-set startpos DEFAULT
+set startpos SINGLE
 set dispersion 2
 set citymindist 3
 
-set wetness 25
+# Terrain settings - balanced for strategic gameplay
+set wetness 30
 set timeout 0
 set topology ""
 set wrap=
-set steepness 12
+set steepness 25
 
 # LLM agents automatically replace AI players when connecting
 # aifill 2 creates AI*1 and AI*2 that will be replaced by connecting agents

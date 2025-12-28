@@ -43,6 +43,16 @@ class PlayerInfo:
     connected_at: float = field(default_factory=time.time)
 
 
+# Map size name to (xsize, ysize) dimensions
+MAP_SIZE_DIMENSIONS = {
+    "tiny": (50, 50),
+    "small": (64, 64),
+    "medium": (80, 80),
+    "large": (96, 96),
+    "huge": (128, 128),
+}
+
+
 class GameSession:
     """Manages a single game session with multiple players"""
 
@@ -59,6 +69,10 @@ class GameSession:
         self.created_at = time.time()
         self._next_ai_slot = 1  # AI slot counter
         self._ai_slot_lock = threading.Lock()  # Lock for thread-safe AI slot allocation
+
+        # Game configuration (applied by first player)
+        self.config_applied = False
+        self.game_config: Optional[Dict[str, Any]] = None
 
     def allocate_ai_slot(self) -> int:
         """Thread-safe AI slot allocation for /take commands
@@ -87,6 +101,106 @@ class GameSession:
                 f"   Total players in session: {len(self.players)}"
             )
             return slot
+
+    async def configure_game_settings(self, config: Dict[str, Any], civcom: Any) -> bool:
+        """Apply game settings via chat commands BEFORE any player selects nation.
+
+        CRITICAL TIMING: This must be called:
+        1. AFTER civcom connection is established (need connection to send commands)
+        2. BEFORE nation selection (to avoid resetting ready flags that matter)
+        3. ONLY by first player (subsequent players' config is ignored)
+
+        The /set commands reset all is_ready flags, but that's fine if no player
+        has selected a nation or marked ready yet.
+
+        Args:
+            config: Game configuration dict with keys like map_size, map_generator, etc.
+            civcom: CivCom instance to send commands through
+
+        Returns:
+            True if config was applied, False if already configured or failed
+        """
+        if self.config_applied:
+            logger.info(
+                f"Game {self.game_id}: Configuration already applied, ignoring\n"
+                f"   Existing config: {self.game_config}"
+            )
+            return False
+
+        if not civcom:
+            logger.error(f"Game {self.game_id}: Cannot configure - no civcom connection")
+            return False
+
+        # Build list of /set commands from config
+        commands = []
+
+        # Map size
+        if 'map_size' in config:
+            dims = MAP_SIZE_DIMENSIONS.get(config['map_size'], (80, 80))
+            commands.append(f"/set xsize {dims[0]}")
+            commands.append(f"/set ysize {dims[1]}")
+
+        # Map generator
+        if 'map_generator' in config:
+            commands.append(f"/set generator {config['map_generator']}")
+
+        # Landmass percentage
+        if 'landmass' in config:
+            commands.append(f"/set landmass {config['landmass']}")
+
+        # Start position
+        if 'startpos' in config:
+            commands.append(f"/set startpos {config['startpos']}")
+
+        # Tiny isles
+        if 'tinyisles' in config:
+            value = "TRUE" if config['tinyisles'] else "FALSE"
+            commands.append(f"/set tinyisles {value}")
+
+        # Steepness (hills/mountains)
+        if 'steepness' in config:
+            commands.append(f"/set steepness {config['steepness']}")
+
+        # Wetness (rivers/swamps)
+        if 'wetness' in config:
+            commands.append(f"/set wetness {config['wetness']}")
+
+        # Turn timeout
+        if 'turn_timeout' in config:
+            commands.append(f"/set timeout {config['turn_timeout']}")
+
+        if not commands:
+            logger.info(f"Game {self.game_id}: No configuration changes requested")
+            self.config_applied = True
+            self.game_config = config
+            return True
+
+        # Send all /set commands
+        logger.info(
+            f"Game {self.game_id}: Applying {len(commands)} configuration commands:\n"
+            + "\n".join(f"   {cmd}" for cmd in commands)
+        )
+
+        for cmd in commands:
+            try:
+                civcom.queue_to_civserver(json.dumps({
+                    "pid": PACKET_CHAT_MSG_REQ,
+                    "message": cmd
+                }))
+            except Exception as e:
+                logger.error(f"Game {self.game_id}: Failed to send config command '{cmd}': {e}")
+                return False
+
+        # Flush all commands to civserver
+        civcom.send_packets_to_civserver()
+
+        # Brief delay to let civserver process settings
+        await asyncio.sleep(0.3)
+
+        self.config_applied = True
+        self.game_config = config
+        logger.info(f"Game {self.game_id}: ✅ Configuration applied successfully")
+        return True
 
     def add_player(self, agent_id: str, player_id: int, handler: Any) -> bool:
         """Add a player to the game session"""
