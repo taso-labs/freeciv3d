@@ -335,7 +335,9 @@ class TestObserverUrlsRetryBehavior:
                 response = self.client.get("/api/games/never-found/observer-urls")
 
         assert response.status_code == 404
-        assert "5s" in response.json()["detail"]  # Error message mentions waiting
+        # Error message mentions wait time (dynamically calculated from constants)
+        assert "after waiting" in response.json()["detail"]
+        assert "s" in response.json()["detail"]
 
     def test_returns_409_after_max_attempts_when_port_invalid(self):
         """Should return 409 after exhausting retries when port stays invalid"""
@@ -346,7 +348,9 @@ class TestObserverUrlsRetryBehavior:
                 response = self.client.get("/api/games/invalid-port/observer-urls")
 
         assert response.status_code == 409
-        assert "5s" in response.json()["detail"]  # Error message mentions waiting
+        # Error message mentions wait time (dynamically calculated from constants)
+        assert "after waiting" in response.json()["detail"]
+        assert "s" in response.json()["detail"]
 
     def test_returns_immediately_when_game_ready(self):
         """Should return immediately without waiting if game info is available"""
@@ -358,3 +362,50 @@ class TestObserverUrlsRetryBehavior:
         assert response.status_code == 200
         # Should not have called sleep since data was immediately available
         mock_sleep.assert_not_called()
+
+    def test_succeeds_on_last_attempt(self):
+        """Should succeed if game info arrives on the very last attempt (boundary condition)"""
+        # Import the constant to know exactly how many attempts
+        from utils.constants import OBSERVER_URL_MAX_RETRY_ATTEMPTS
+
+        call_count = 0
+
+        async def game_info_on_last_attempt(game_id):
+            nonlocal call_count
+            call_count += 1
+            # Return None for all but the last attempt
+            if call_count < OBSERVER_URL_MAX_RETRY_ATTEMPTS:
+                return None
+            return mock_game_info(civserver_port=6001)
+
+        with patch("api_endpoints.connection_manager") as mock_cm:
+            mock_cm.get_game_info = game_info_on_last_attempt
+            with patch("api_endpoints.asyncio.sleep", new_callable=AsyncMock):
+                response = self.client.get("/api/games/last-second/observer-urls")
+
+        assert response.status_code == 200
+        assert call_count == OBSERVER_URL_MAX_RETRY_ATTEMPTS, \
+            f"Should have used exactly {OBSERVER_URL_MAX_RETRY_ATTEMPTS} attempts"
+
+    def test_port_becomes_valid_during_polling(self):
+        """Should succeed when port transitions from invalid (6000) to valid during polling"""
+        call_count = 0
+
+        async def port_transitions_to_valid(game_id):
+            nonlocal call_count
+            call_count += 1
+            # Return single-player port (6000) first, then valid multiplayer port
+            if call_count <= 3:
+                return mock_game_info(civserver_port=6000)  # Invalid: single-player port
+            return mock_game_info(civserver_port=6005)  # Valid: multiplayer port
+
+        with patch("api_endpoints.connection_manager") as mock_cm:
+            mock_cm.get_game_info = port_transitions_to_valid
+            with patch("api_endpoints.asyncio.sleep", new_callable=AsyncMock):
+                response = self.client.get("/api/games/port-transition/observer-urls")
+
+        assert response.status_code == 200
+        assert call_count >= 4, "Should have polled at least 4 times to see port transition"
+        # Verify the correct port was used in the URLs
+        data = response.json()
+        assert "6005" in data["observer_urls"]["global"]

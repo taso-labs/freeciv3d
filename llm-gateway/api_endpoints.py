@@ -25,9 +25,19 @@ except ImportError:
 try:
     from .config import settings
     from .connection_manager import connection_manager
+    from .utils.constants import (
+        OBSERVER_URL_MAX_RETRY_ATTEMPTS,
+        OBSERVER_URL_RETRY_DELAY_SECONDS,
+        is_valid_civserver_port,
+    )
 except ImportError:
     from config import settings
     from connection_manager import connection_manager
+    from utils.constants import (
+        OBSERVER_URL_MAX_RETRY_ATTEMPTS,
+        OBSERVER_URL_RETRY_DELAY_SECONDS,
+        is_valid_civserver_port,
+    )
 
 # Gateway will be injected from main.py to avoid circular imports
 gateway = None
@@ -390,7 +400,7 @@ async def get_spectator_url(
         # LLM games always use multiplayer ports (6001-6009), never 6000
         game_port = game_session.get("port")
 
-        if game_port is None or not (6001 <= game_port <= 6009):
+        if not is_valid_civserver_port(game_port):
             # This shouldn't happen - indicates authentication bug or timing issue
             logger.warning(f"Game {game_id} has invalid port {game_port}. Status: {game_session.get('status')}")
             raise HTTPException(
@@ -443,9 +453,9 @@ async def get_observer_urls(
     try:
         # Poll for game info with timeout to handle race condition where
         # agent-clash requests observer URLs before auth_success is processed.
-        # Max wait: 5 seconds (10 attempts × 500ms)
-        max_attempts = 10
-        attempt_delay = 0.5  # 500ms between attempts
+        max_attempts = OBSERVER_URL_MAX_RETRY_ATTEMPTS
+        attempt_delay = OBSERVER_URL_RETRY_DELAY_SECONDS
+        max_wait_seconds = max_attempts * attempt_delay
 
         game_info = None
         game_port = None
@@ -455,11 +465,14 @@ async def get_observer_urls(
 
             if game_info is not None:
                 game_port = game_info.get("civserver_port")
-                if game_port is not None and 6001 <= game_port <= 6009:
+                if is_valid_civserver_port(game_port):
                     if attempt > 0:
                         logger.info(
-                            f"Observer URLs: Found game {game_id} after {attempt + 1} attempts"
+                            f"Observer URLs: Found game {game_id} after {attempt + 1} attempts "
+                            f"({attempt * attempt_delay:.1f}s)"
                         )
+                    else:
+                        logger.debug(f"Observer URLs: Game {game_id} immediately available")
                     break  # Got valid game info
 
             if attempt < max_attempts - 1:
@@ -473,18 +486,18 @@ async def get_observer_urls(
         if game_info is None:
             raise HTTPException(
                 status_code=404,
-                detail="Game not found after waiting 5s. "
+                detail=f"Game not found after waiting {max_wait_seconds:.0f}s. "
                        "Ensure agent has connected with this game_id."
             )
 
-        if game_port is None or not (6001 <= game_port <= 6009):
+        if not is_valid_civserver_port(game_port):
             logger.warning(
-                f"Game {game_id} has invalid port {game_port} after waiting 5s. "
+                f"Game {game_id} has invalid port {game_port} after waiting {max_wait_seconds:.0f}s. "
                 f"Agent may have disconnected."
             )
             raise HTTPException(
                 status_code=409,
-                detail="Game port not assigned after waiting 5s. "
+                detail=f"Game port not assigned after waiting {max_wait_seconds:.0f}s. "
                        "Agent may have disconnected or authentication failed."
             )
 
