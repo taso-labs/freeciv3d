@@ -140,6 +140,12 @@ spec:
                   name: llm-api-tokens
                   key: tokens
 
+            # Observer URL generation - base URL for FreeCiv web client
+            # This is used by LLM Gateway to generate observer iframe URLs
+            # Must be HTTPS public URL (not internal K8s DNS) for browser access
+            - name: GATEWAY_FREECIV_WEB_BASE_URL
+              value: "https://freeciv.clashai.live"
+
           resources:
             requests:
               cpu: 200m
