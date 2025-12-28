@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.8](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.2.7...freeciv3d-v0.2.8) (2025-12-28)
+
+
+### Bug Fixes
+
+* **k8s:** Configure public HTTPS URLs for observer iframes ([#30](https://github.com/taso-ventures/freeciv3d/issues/30)) ([1beaa2b](https://github.com/taso-ventures/freeciv3d/commit/1beaa2b377168364df42f7070b13ddbd2ce9c221))
+
 ## [0.2.7](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.2.6...freeciv3d-v0.2.7) (2025-12-27)
 
 
