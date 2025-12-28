@@ -5,6 +5,7 @@
 REST API endpoints for LLM Gateway
 """
 
+import asyncio
 import logging
 import time
 from typing import Dict, Any, List, Optional
@@ -440,24 +441,51 @@ async def get_observer_urls(
     All URLs include embed=1 and autojoin=1 for seamless iframe embedding.
     """
     try:
-        # Query connection_manager for game info (single source of truth for WebSocket connections)
-        game_info = await connection_manager.get_game_info(game_id)
+        # Poll for game info with timeout to handle race condition where
+        # agent-clash requests observer URLs before auth_success is processed.
+        # Max wait: 5 seconds (10 attempts × 500ms)
+        max_attempts = 10
+        attempt_delay = 0.5  # 500ms between attempts
 
+        game_info = None
+        game_port = None
+
+        for attempt in range(max_attempts):
+            game_info = await connection_manager.get_game_info(game_id)
+
+            if game_info is not None:
+                game_port = game_info.get("civserver_port")
+                if game_port is not None and 6001 <= game_port <= 6009:
+                    if attempt > 0:
+                        logger.info(
+                            f"Observer URLs: Found game {game_id} after {attempt + 1} attempts"
+                        )
+                    break  # Got valid game info
+
+            if attempt < max_attempts - 1:
+                logger.debug(
+                    f"Observer URLs: Waiting for game {game_id} auth "
+                    f"(attempt {attempt + 1}/{max_attempts})"
+                )
+                await asyncio.sleep(attempt_delay)
+
+        # After all attempts, raise appropriate error
         if game_info is None:
-            raise HTTPException(status_code=404, detail="Game not found")
-
-        # Get the game port from authenticated connection
-        game_port = game_info.get("civserver_port")
+            raise HTTPException(
+                status_code=404,
+                detail="Game not found after waiting 5s. "
+                       "Ensure agent has connected with this game_id."
+            )
 
         if game_port is None or not (6001 <= game_port <= 6009):
             logger.warning(
-                f"Game {game_id} has invalid port {game_port}. "
-                f"Agent may still be connecting."
+                f"Game {game_id} has invalid port {game_port} after waiting 5s. "
+                f"Agent may have disconnected."
             )
             raise HTTPException(
                 status_code=409,
-                detail="Game port not assigned. Agents may still be connecting. "
-                       "Wait a few seconds and try again."
+                detail="Game port not assigned after waiting 5s. "
+                       "Agent may have disconnected or authentication failed."
             )
 
         # Build observer URLs using configured base URL

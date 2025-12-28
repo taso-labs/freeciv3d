@@ -277,3 +277,84 @@ class TestObserverUrlsEdgeCases:
 
         assert response.status_code == 200
         assert response.json()["game_id"] == game_id
+
+
+class TestObserverUrlsRetryBehavior:
+    """Test retry/polling behavior for observer URLs endpoint (race condition fix)"""
+
+    def setup_method(self):
+        self.client = TestClient(app)
+
+    def test_waits_for_game_info_before_failing(self):
+        """Should poll for game info instead of immediately returning 404"""
+        call_count = 0
+
+        async def delayed_game_info(game_id):
+            nonlocal call_count
+            call_count += 1
+            # Return None for first 2 calls, then return valid data
+            if call_count <= 2:
+                return None
+            return mock_game_info(civserver_port=6001)
+
+        with patch("api_endpoints.connection_manager") as mock_cm:
+            mock_cm.get_game_info = delayed_game_info
+            # Also patch asyncio.sleep to speed up the test
+            with patch("api_endpoints.asyncio.sleep", new_callable=AsyncMock):
+                response = self.client.get("/api/games/delayed-game/observer-urls")
+
+        assert response.status_code == 200
+        assert call_count >= 3, "Should have polled at least 3 times"
+
+    def test_waits_for_valid_port_before_failing(self):
+        """Should poll until civserver_port is valid (not None or 6000)"""
+        call_count = 0
+
+        async def delayed_port_info(game_id):
+            nonlocal call_count
+            call_count += 1
+            # Return invalid port first, then valid port
+            if call_count <= 2:
+                return mock_game_info(civserver_port=None)
+            return mock_game_info(civserver_port=6001)
+
+        with patch("api_endpoints.connection_manager") as mock_cm:
+            mock_cm.get_game_info = delayed_port_info
+            with patch("api_endpoints.asyncio.sleep", new_callable=AsyncMock):
+                response = self.client.get("/api/games/delayed-port/observer-urls")
+
+        assert response.status_code == 200
+        assert call_count >= 3, "Should have polled at least 3 times"
+
+    def test_returns_404_after_max_attempts(self):
+        """Should return 404 after exhausting retry attempts"""
+        with patch("api_endpoints.connection_manager") as mock_cm:
+            # Always return None - game never found
+            mock_cm.get_game_info = AsyncMock(return_value=None)
+            with patch("api_endpoints.asyncio.sleep", new_callable=AsyncMock):
+                response = self.client.get("/api/games/never-found/observer-urls")
+
+        assert response.status_code == 404
+        assert "5s" in response.json()["detail"]  # Error message mentions waiting
+
+    def test_returns_409_after_max_attempts_when_port_invalid(self):
+        """Should return 409 after exhausting retries when port stays invalid"""
+        with patch("api_endpoints.connection_manager") as mock_cm:
+            # Return game info but with invalid port
+            mock_cm.get_game_info = AsyncMock(return_value=mock_game_info(civserver_port=6000))
+            with patch("api_endpoints.asyncio.sleep", new_callable=AsyncMock):
+                response = self.client.get("/api/games/invalid-port/observer-urls")
+
+        assert response.status_code == 409
+        assert "5s" in response.json()["detail"]  # Error message mentions waiting
+
+    def test_returns_immediately_when_game_ready(self):
+        """Should return immediately without waiting if game info is available"""
+        with patch("api_endpoints.connection_manager") as mock_cm:
+            mock_cm.get_game_info = AsyncMock(return_value=mock_game_info(civserver_port=6001))
+            with patch("api_endpoints.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+                response = self.client.get("/api/games/ready-game/observer-urls")
+
+        assert response.status_code == 200
+        # Should not have called sleep since data was immediately available
+        mock_sleep.assert_not_called()
