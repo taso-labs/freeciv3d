@@ -414,6 +414,33 @@ class ConnectionManager:
                 }
         return None
 
+    async def get_players_for_game(self, game_id: str) -> List[Dict[str, Any]]:
+        """Get all players for a game, sorted by player_id.
+
+        Returns a list of player info dicts containing player_id and agent_id
+        (the player name used for observe_player/follow parameters).
+
+        Args:
+            game_id: The game ID to get players for
+
+        Returns:
+            List of dicts with player_id and agent_id, sorted by player_id
+        """
+        players = []
+        # Take snapshot to avoid RuntimeError if connections change during iteration
+        connections_snapshot = list(self.connections.items())
+        for conn_id, conn_info in connections_snapshot:
+            if (conn_info.connection_type == "agent"
+                and conn_info.game_id == game_id
+                and conn_info.authenticated
+                and conn_info.player_id is not None):
+                players.append({
+                    "player_id": conn_info.player_id,
+                    "agent_id": conn_info.identifier,  # This is the player name
+                })
+        players.sort(key=lambda p: p["player_id"])
+        return players
+
     async def _heartbeat_loop(self):
         """Background task for connection maintenance"""
         while self._running:
