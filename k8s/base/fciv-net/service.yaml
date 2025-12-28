@@ -9,7 +9,7 @@ metadata:
   annotations:
     cloud.google.com/backend-config: '{"default": "fciv-net-backend"}'
 spec:
-  type: ClusterIP
+  type: NodePort  # Required for GKE Ingress (ClusterIP not supported)
   selector:
     app: fciv-net
   ports:
