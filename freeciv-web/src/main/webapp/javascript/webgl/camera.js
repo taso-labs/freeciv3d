@@ -39,7 +39,7 @@ var slide_init = false;
 var camera_presets = {
   'default':    { dx: 50,  dy: 410, dz: 242 },  // ~60° - standard view
   'strategic':  { dx: 50,  dy: 800, dz: 100 },  // ~83° - near top-down overview
-  'cinematic':  { dx: 50,  dy: 300, dz: 400 },  // ~37° - low dramatic angle
+  'cinematic':  { dx: 25,  dy: 150, dz: 200 },  // ~37° - close dramatic angle (2x zoom)
   'isometric':  { dx: 50,  dy: 500, dz: 500 },  // 45° - classic strategy game
 };
 
