@@ -40,6 +40,22 @@ def mock_game_info(civserver_port=6001, player_id=0, agent_id="test-agent"):
     }
 
 
+def mock_players_for_game(player1_name="Claude_Sonnet_45", player2_name="Gemini_3_Flash"):
+    """Helper to create mock players list for get_players_for_game"""
+    return [
+        {"player_id": 0, "agent_id": player1_name},
+        {"player_id": 1, "agent_id": player2_name},
+    ]
+
+
+def setup_mock_connection_manager(mock_cm, civserver_port=6001, players=None):
+    """Setup mock connection_manager with both get_game_info and get_players_for_game"""
+    mock_cm.get_game_info = AsyncMock(return_value=mock_game_info(civserver_port=civserver_port))
+    mock_cm.get_players_for_game = AsyncMock(
+        return_value=players if players is not None else mock_players_for_game()
+    )
+
+
 class TestObserverUrlsEndpoint:
     """Test GET /api/games/{game_id}/observer-urls endpoint"""
 
@@ -51,6 +67,7 @@ class TestObserverUrlsEndpoint:
         """Should return 404 when game_id doesn't exist in connection_manager"""
         with patch("api_endpoints.connection_manager") as mock_cm:
             mock_cm.get_game_info = AsyncMock(return_value=None)
+            mock_cm.get_players_for_game = AsyncMock(return_value=[])
 
             response = self.client.get("/api/games/nonexistent-game/observer-urls")
 
@@ -61,6 +78,7 @@ class TestObserverUrlsEndpoint:
         """Should return 409 Conflict when game exists but port is None"""
         with patch("api_endpoints.connection_manager") as mock_cm:
             mock_cm.get_game_info = AsyncMock(return_value=mock_game_info(civserver_port=None))
+            mock_cm.get_players_for_game = AsyncMock(return_value=mock_players_for_game())
 
             response = self.client.get("/api/games/game-123/observer-urls")
 
@@ -71,6 +89,7 @@ class TestObserverUrlsEndpoint:
         """Should return 409 when port is 6000 (singleplayer, invalid for LLM games)"""
         with patch("api_endpoints.connection_manager") as mock_cm:
             mock_cm.get_game_info = AsyncMock(return_value=mock_game_info(civserver_port=6000))
+            mock_cm.get_players_for_game = AsyncMock(return_value=mock_players_for_game())
 
             response = self.client.get("/api/games/game-123/observer-urls")
 
@@ -79,7 +98,7 @@ class TestObserverUrlsEndpoint:
     def test_returns_observer_urls_for_valid_game(self):
         """Should return observer URLs when game has valid port (6001-6009)"""
         with patch("api_endpoints.connection_manager") as mock_cm:
-            mock_cm.get_game_info = AsyncMock(return_value=mock_game_info(civserver_port=6001))
+            setup_mock_connection_manager(mock_cm, civserver_port=6001)
 
             response = self.client.get("/api/games/game-123/observer-urls")
 
@@ -97,7 +116,7 @@ class TestObserverUrlsEndpoint:
     def test_global_url_has_strategic_camera(self):
         """Global observer URL should use strategic camera preset for bird's eye view"""
         with patch("api_endpoints.connection_manager") as mock_cm:
-            mock_cm.get_game_info = AsyncMock(return_value=mock_game_info(civserver_port=6001))
+            setup_mock_connection_manager(mock_cm, civserver_port=6001)
 
             response = self.client.get("/api/games/game-123/observer-urls")
 
@@ -111,9 +130,9 @@ class TestObserverUrlsEndpoint:
         assert "action=observe" in global_url
 
     def test_player_urls_have_fog_of_war_attachment(self):
-        """Player observer URLs should include observe_player param for FOW"""
+        """Player observer URLs should include observe_player param with player names"""
         with patch("api_endpoints.connection_manager") as mock_cm:
-            mock_cm.get_game_info = AsyncMock(return_value=mock_game_info(civserver_port=6001))
+            setup_mock_connection_manager(mock_cm, civserver_port=6001)
 
             response = self.client.get("/api/games/game-123/observer-urls")
 
@@ -121,18 +140,18 @@ class TestObserverUrlsEndpoint:
         player1_url = data["observer_urls"]["player1"]
         player2_url = data["observer_urls"]["player2"]
 
-        # Player 1 should observe player 0 (first player)
-        assert "observe_player=0" in player1_url
-        assert "follow=0" in player1_url
+        # Player 1 should observe first player (by name, URL-encoded)
+        assert "observe_player=Claude_Sonnet_45" in player1_url
+        assert "follow=Claude_Sonnet_45" in player1_url
 
-        # Player 2 should observe player 1 (second player)
-        assert "observe_player=1" in player2_url
-        assert "follow=1" in player2_url
+        # Player 2 should observe second player (by name, URL-encoded)
+        assert "observe_player=Gemini_3_Flash" in player2_url
+        assert "follow=Gemini_3_Flash" in player2_url
 
     def test_player_urls_have_cinematic_camera(self):
         """Player observer URLs should use cinematic camera preset"""
         with patch("api_endpoints.connection_manager") as mock_cm:
-            mock_cm.get_game_info = AsyncMock(return_value=mock_game_info(civserver_port=6001))
+            setup_mock_connection_manager(mock_cm, civserver_port=6001)
 
             response = self.client.get("/api/games/game-123/observer-urls")
 
@@ -146,7 +165,7 @@ class TestObserverUrlsEndpoint:
     def test_urls_use_configured_base_url(self):
         """URLs should use GATEWAY_FREECIV_WEB_BASE_URL from config"""
         with patch("api_endpoints.connection_manager") as mock_cm:
-            mock_cm.get_game_info = AsyncMock(return_value=mock_game_info(civserver_port=6001))
+            setup_mock_connection_manager(mock_cm, civserver_port=6001)
 
             response = self.client.get("/api/games/game-123/observer-urls")
 
@@ -160,7 +179,7 @@ class TestObserverUrlsEndpoint:
     def test_urls_include_civserverport_parameter(self):
         """All URLs should include civserverport parameter matching game port"""
         with patch("api_endpoints.connection_manager") as mock_cm:
-            mock_cm.get_game_info = AsyncMock(return_value=mock_game_info(civserver_port=6003))
+            setup_mock_connection_manager(mock_cm, civserver_port=6003)
 
             response = self.client.get("/api/games/game-123/observer-urls")
 
@@ -173,7 +192,7 @@ class TestObserverUrlsEndpoint:
     def test_urls_include_unique_viewer_names(self):
         """Each view URL should have a unique viewer name to avoid conflicts"""
         with patch("api_endpoints.connection_manager") as mock_cm:
-            mock_cm.get_game_info = AsyncMock(return_value=mock_game_info(civserver_port=6001))
+            setup_mock_connection_manager(mock_cm, civserver_port=6001)
 
             response = self.client.get("/api/games/game-123/observer-urls")
 
@@ -193,7 +212,7 @@ class TestObserverUrlsEndpoint:
     def test_response_includes_civserver_port(self):
         """Response should include civserver_port for reference"""
         with patch("api_endpoints.connection_manager") as mock_cm:
-            mock_cm.get_game_info = AsyncMock(return_value=mock_game_info(civserver_port=6005))
+            setup_mock_connection_manager(mock_cm, civserver_port=6005)
 
             response = self.client.get("/api/games/game-123/observer-urls")
 
@@ -259,7 +278,7 @@ class TestObserverUrlsEdgeCases:
         """Should work with any valid multiplayer port (6001-6009)"""
         for port in [6001, 6002, 6005, 6009]:
             with patch("api_endpoints.connection_manager") as mock_cm:
-                mock_cm.get_game_info = AsyncMock(return_value=mock_game_info(civserver_port=port))
+                setup_mock_connection_manager(mock_cm, civserver_port=port)
 
                 response = self.client.get("/api/games/test-game/observer-urls")
 
@@ -271,7 +290,7 @@ class TestObserverUrlsEdgeCases:
         game_id = "game-with-dashes_and_underscores"
 
         with patch("api_endpoints.connection_manager") as mock_cm:
-            mock_cm.get_game_info = AsyncMock(return_value=mock_game_info(civserver_port=6001))
+            setup_mock_connection_manager(mock_cm, civserver_port=6001)
 
             response = self.client.get(f"/api/games/{game_id}/observer-urls")
 
@@ -299,6 +318,7 @@ class TestObserverUrlsRetryBehavior:
 
         with patch("api_endpoints.connection_manager") as mock_cm:
             mock_cm.get_game_info = delayed_game_info
+            mock_cm.get_players_for_game = AsyncMock(return_value=mock_players_for_game())
             # Also patch asyncio.sleep to speed up the test
             with patch("api_endpoints.asyncio.sleep", new_callable=AsyncMock):
                 response = self.client.get("/api/games/delayed-game/observer-urls")
@@ -320,6 +340,7 @@ class TestObserverUrlsRetryBehavior:
 
         with patch("api_endpoints.connection_manager") as mock_cm:
             mock_cm.get_game_info = delayed_port_info
+            mock_cm.get_players_for_game = AsyncMock(return_value=mock_players_for_game())
             with patch("api_endpoints.asyncio.sleep", new_callable=AsyncMock):
                 response = self.client.get("/api/games/delayed-port/observer-urls")
 
@@ -331,6 +352,7 @@ class TestObserverUrlsRetryBehavior:
         with patch("api_endpoints.connection_manager") as mock_cm:
             # Always return None - game never found
             mock_cm.get_game_info = AsyncMock(return_value=None)
+            mock_cm.get_players_for_game = AsyncMock(return_value=[])
             with patch("api_endpoints.asyncio.sleep", new_callable=AsyncMock):
                 response = self.client.get("/api/games/never-found/observer-urls")
 
@@ -344,6 +366,7 @@ class TestObserverUrlsRetryBehavior:
         with patch("api_endpoints.connection_manager") as mock_cm:
             # Return game info but with invalid port
             mock_cm.get_game_info = AsyncMock(return_value=mock_game_info(civserver_port=6000))
+            mock_cm.get_players_for_game = AsyncMock(return_value=mock_players_for_game())
             with patch("api_endpoints.asyncio.sleep", new_callable=AsyncMock):
                 response = self.client.get("/api/games/invalid-port/observer-urls")
 
@@ -355,7 +378,7 @@ class TestObserverUrlsRetryBehavior:
     def test_returns_immediately_when_game_ready(self):
         """Should return immediately without waiting if game info is available"""
         with patch("api_endpoints.connection_manager") as mock_cm:
-            mock_cm.get_game_info = AsyncMock(return_value=mock_game_info(civserver_port=6001))
+            setup_mock_connection_manager(mock_cm, civserver_port=6001)
             with patch("api_endpoints.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
                 response = self.client.get("/api/games/ready-game/observer-urls")
 
@@ -380,6 +403,7 @@ class TestObserverUrlsRetryBehavior:
 
         with patch("api_endpoints.connection_manager") as mock_cm:
             mock_cm.get_game_info = game_info_on_last_attempt
+            mock_cm.get_players_for_game = AsyncMock(return_value=mock_players_for_game())
             with patch("api_endpoints.asyncio.sleep", new_callable=AsyncMock):
                 response = self.client.get("/api/games/last-second/observer-urls")
 
@@ -401,6 +425,7 @@ class TestObserverUrlsRetryBehavior:
 
         with patch("api_endpoints.connection_manager") as mock_cm:
             mock_cm.get_game_info = port_transitions_to_valid
+            mock_cm.get_players_for_game = AsyncMock(return_value=mock_players_for_game())
             with patch("api_endpoints.asyncio.sleep", new_callable=AsyncMock):
                 response = self.client.get("/api/games/port-transition/observer-urls")
 

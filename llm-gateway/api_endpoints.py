@@ -505,11 +505,15 @@ async def get_observer_urls(
         base_url = settings.freeciv_web_base_url.rstrip("/")
         webclient_path = f"{base_url}/webclient/"
 
-        # Use player numbers (playerno) instead of names for reliability
-        # Player names can be customized (e.g., "GPT-5.2", "Sonnet 4.5"),
-        # but playerno is always 0 for first player, 1 for second player
-        player1_id = "0"
-        player2_id = "1"
+        # Get actual player names from connected agents
+        # The webclient expects player names (agent_id) for observe_player/follow params
+        players = await connection_manager.get_players_for_game(game_id)
+        player1_name = quote(players[0]["agent_id"], safe="") if len(players) > 0 else "0"
+        player2_name = quote(players[1]["agent_id"], safe="") if len(players) > 1 else "1"
+
+        logger.debug(
+            f"Observer URLs for game {game_id}: player1={player1_name}, player2={player2_name}"
+        )
 
         # Generate unique viewer names to prevent WebSocket conflicts
         # when multiple viewers connect to the same game
@@ -526,12 +530,12 @@ async def get_observer_urls(
             ),
             "player1": (
                 f"{webclient_path}?action=observe&civserverport={game_port}"
-                f"&observe_player={player1_id}&follow={player1_id}"
+                f"&observe_player={player1_name}&follow={player1_name}"
                 f"&embed=1&autojoin=1&name={player1_viewer_name}&camera=cinematic"
             ),
             "player2": (
                 f"{webclient_path}?action=observe&civserverport={game_port}"
-                f"&observe_player={player2_id}&follow={player2_id}"
+                f"&observe_player={player2_name}&follow={player2_name}"
                 f"&embed=1&autojoin=1&name={player2_viewer_name}&camera=cinematic"
             )
         }
