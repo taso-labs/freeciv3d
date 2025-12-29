@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.2.13](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.2.12...freeciv3d-v0.2.13) (2025-12-29)
+
+
+### Features
+
+* **k8s:** Add nginx sidecar for observer WebSocket support ([b97a65f](https://github.com/taso-ventures/freeciv3d/commit/b97a65f6eb13f1d773fc13b97462fccda754d546))
+
+
+### Bug Fixes
+
+* **k8s:** Add explicit health check path to BackendConfig for ROOT.war ([790269a](https://github.com/taso-ventures/freeciv3d/commit/790269a980b4d6ddb53950aa143f8799f51c06e2))
+* **k8s:** Use nginx-unprivileged image on port 8081 ([61e5746](https://github.com/taso-ventures/freeciv3d/commit/61e5746dc477bd2bce98fe64b6e9d976a4d3ad9b))
+* **nginx:** Use localhost instead of fciv-net for K8s compatibility ([e3f9d7a](https://github.com/taso-ventures/freeciv3d/commit/e3f9d7a493ea5f66f88a70beb43bb2168dd96afb))
+
 ## [0.2.12](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.2.11...freeciv3d-v0.2.12) (2025-12-29)
 
 
