@@ -225,18 +225,29 @@ spec:
             limits:
               cpu: 200m
               memory: 128Mi
+          # Startup probe: Give Tomcat time to deploy ROOT.war (60-90s)
+          # Nginx starts fast but proxies to Tomcat which is slow to start
+          # Without this, readiness/liveness fail while Tomcat is starting
+          startupProbe:
+            httpGet:
+              path: /
+              port: 8081
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 12    # 30s + (12 * 10s) = 150s max startup time
+            timeoutSeconds: 5
           readinessProbe:
             httpGet:
               path: /
               port: 8081
-            initialDelaySeconds: 5
+            initialDelaySeconds: 10   # Increased from 5s
             periodSeconds: 10
             timeoutSeconds: 5
           livenessProbe:
             httpGet:
               path: /
               port: 8081
-            initialDelaySeconds: 10
+            initialDelaySeconds: 30   # Increased from 10s
             periodSeconds: 30
             timeoutSeconds: 5
           securityContext:
