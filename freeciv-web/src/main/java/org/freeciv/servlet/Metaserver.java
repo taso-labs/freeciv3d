@@ -495,17 +495,31 @@ public class Metaserver extends HttpServlet {
                     }
                 }
 
-                // delete this variables that this server might have already set
-                try (PreparedStatement st = conn.prepareStatement("DELETE FROM variables WHERE hostport = ?")) {
-                    st.setString(1, hostPort);
-                    st.executeUpdate();
-                }
-
-                // variableNames / variableValues may be null when no variables were
-                // posted. Check for null before calling isEmpty() to avoid
-                // NullPointerException (which previously produced a 500 error).
+                // Upsert variables using INSERT ... ON DUPLICATE KEY UPDATE
+                // This replaces the old DELETE-then-INSERT pattern which had a race condition:
+                // concurrent requests could both DELETE (succeeding), then both INSERT (second fails with duplicate key)
+                // The upsert pattern is atomic and handles concurrent updates correctly.
                 if ((variableNames != null && !variableNames.isEmpty()) && (variableValues != null && !variableValues.isEmpty())) {
-                    try (PreparedStatement st = conn.prepareStatement("INSERT INTO variables (hostport, name, value) VALUES (?, ?, ?)")) {
+                    // First, delete variables that are no longer in the new set
+                    // Build a list of variable names to keep
+                    StringBuilder keepVars = new StringBuilder();
+                    for (int i = 0; i < variableNames.size(); i++) {
+                        if (i > 0) keepVars.append(',');
+                        keepVars.append('?');
+                    }
+                    String deleteOldSql = "DELETE FROM variables WHERE hostport = ? AND name NOT IN (" + keepVars + ")";
+                    try (PreparedStatement delSt = conn.prepareStatement(deleteOldSql)) {
+                        delSt.setString(1, hostPort);
+                        for (int i = 0; i < variableNames.size(); i++) {
+                            delSt.setString(2 + i, variableNames.get(i));
+                        }
+                        delSt.executeUpdate();
+                    }
+
+                    // Then upsert the new values (INSERT or UPDATE if exists)
+                    try (PreparedStatement st = conn.prepareStatement(
+                            "INSERT INTO variables (hostport, name, value) VALUES (?, ?, ?) " +
+                            "ON DUPLICATE KEY UPDATE value = VALUES(value)")) {
                         for (int i = 0; i < variableNames.size(); i++) {
                             st.setString(1, hostPort);
                             st.setString(2, variableNames.get(i));
@@ -513,48 +527,15 @@ public class Metaserver extends HttpServlet {
                             st.addBatch();
                         }
                         st.executeBatch();
-                    } catch (IndexOutOfBoundsException e) {
-                        try {
-                            String pd = (rawRequestBody != null && !rawRequestBody.isEmpty()) ? rawRequestBody : null;
-                            if ((pd == null || pd.isEmpty()) && !multipartParams.isEmpty()) {
-                                StringBuilder mp = new StringBuilder();
-                                for (Map.Entry<String, List<String>> me : multipartParams.entrySet()) {
-                                    mp.append(me.getKey()).append('=');
-                                    List<String> vals = me.getValue();
-                                    if (vals == null) {
-                                        mp.append("<null>");
-                                    } else if (vals.size() == 1) {
-                                        mp.append(vals.get(0));
-                                    } else {
-                                        mp.append('[');
-                                        for (int j = 0; j < vals.size(); j++) {
-                                            if (j > 0) {
-                                                mp.append(',');
-                                            }
-                                            mp.append(vals.get(j));
-                                        }
-                                        mp.append(']');
-                                    }
-                                    mp.append(';');
-                                }
-                                pd = mp.toString();
-                            }
-                            if (pd == null || pd.isEmpty()) {
-                                pd = dumpRequestParameters(request);
-                            }
-                            if (pd == null || pd.isEmpty()) {
-                                pd = dumpRequestBody(request);
-                            }
-                            LOGGER.log(Level.WARNING, "BAD_REQUEST (variables): {0}", new Object[]{pd});
-                        } catch (Exception ex) {
-                            LOGGER.log(Level.FINE, "Error logging BAD_REQUEST (variables)", ex);
-                        }
-                        response.setContentType(CONTENT_TYPE);
-                        response.setStatus(HttpServletResponse.SC_BAD_REQUEST);
-                        response.getOutputStream().print(BAD_REQUEST);
-                        return;
+                    }
+                } else {
+                    // No variables to set - delete all for this hostport
+                    try (PreparedStatement st = conn.prepareStatement("DELETE FROM variables WHERE hostport = ?")) {
+                        st.setString(1, hostPort);
+                        st.executeUpdate();
                     }
                 }
+
 
                 // Use an atomic upsert to avoid races between concurrent requests
                 // that can lead to Duplicate entry PRIMARY key errors. Ensure

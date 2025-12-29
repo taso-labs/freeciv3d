@@ -149,8 +149,8 @@ spec:
 
           resources:
             requests:
-              cpu: 200m
-              memory: 512Mi
+              cpu: 300m       # Increased from 200m for LLM game processing
+              memory: 768Mi   # Increased from 512Mi to handle state extraction, caching
             limits:
               cpu: 1000m
               memory: 2Gi

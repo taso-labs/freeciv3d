@@ -336,18 +336,40 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 self.write_message(error_response.to_json())
                 return
 
-            # Create session
-            self.session_info = session_manager.create_session(
-                self.agent_id,
-                api_token
-            )
+            # Check for existing suspended session to resume (reconnection support)
+            # This uses existing infrastructure that was built but never wired up
+            is_reconnecting = False
+            previous_player_id = None
+            existing_session = session_manager.get_session_by_agent(self.agent_id)
+            if existing_session and existing_session.state == SessionState.SUSPENDED:
+                if session_manager.resume_session(existing_session.session_id):
+                    self.session_info = existing_session
+                    self.session_id = existing_session.session_id
+                    is_reconnecting = True
+                    # Restore player_id from previous session for /take command
+                    previous_player_id = existing_session.player_id
+                    if previous_player_id is not None:
+                        self.player_id = previous_player_id
+                    logger.info(
+                        f"🔄 Resumed suspended session {self.session_id} for {self.agent_id}\n"
+                        f"   Restored player_id: {previous_player_id}"
+                    )
+                else:
+                    logger.info(f"Could not resume session for {self.agent_id} (expired?), creating new")
 
-            if not self.session_info:
-                error_response = error_handler.handle_authentication_error(
-                    self.agent_id, "Failed to create session - server capacity exceeded"
+            # Create new session if not reconnecting
+            if not is_reconnecting:
+                self.session_info = session_manager.create_session(
+                    self.agent_id,
+                    api_token
                 )
-                self.write_message(error_response.to_json())
-                return
+
+                if not self.session_info:
+                    error_response = error_handler.handle_authentication_error(
+                        self.agent_id, "Failed to create session - server capacity exceeded"
+                    )
+                    self.write_message(error_response.to_json())
+                    return
 
             self.session_id = self.session_info.session_id
 
@@ -389,6 +411,18 @@ class LLMWSHandler(websocket.WebSocketHandler):
             try:
                 self._connect_to_civserver(civserver_port, game_id)
                 logger.info(f"✓ Agent {self.agent_id} civcom connection established to port {civserver_port}")
+
+                # If reconnecting, send /take command to reclaim player slot from AI
+                # The civserver converts disconnected players to AI, so we need to take back our slot
+                # Use player number (0-indexed) which is more reliable than trying to guess the AI name
+                if is_reconnecting and previous_player_id is not None:
+                    take_command = f"/take {previous_player_id}"  # FreeCiv /take accepts player number
+                    take_packet = json.dumps({"pid": PACKET_CHAT_MSG_REQ, "message": take_command})
+                    self.civcom.queue_to_civserver(take_packet)
+                    logger.info(
+                        f"🔄 Sent '{take_command}' to reclaim player slot for {self.agent_id}\n"
+                        f"   Reclaiming player_id={previous_player_id}"
+                    )
             except Exception as e:
                 logger.error(
                     f"❌ Agent {self.agent_id}: failed to establish civserver connection: {e}\n"
@@ -3438,9 +3472,11 @@ class LLMWSHandler(websocket.WebSocketHandler):
             f"   Call stack:\n{''.join(traceback.format_stack())}"
         )
 
-        # Terminate session
+        # Suspend session to allow reconnection within timeout window
+        # (Uses existing suspend_session infrastructure that was never wired up)
         if self.session_id:
-            session_manager.terminate_session(self.session_id, "connection_closed")
+            session_manager.suspend_session(self.session_id, "connection_closed")
+            logger.info(f"Session {self.session_id} suspended for {self.agent_id} - reconnection allowed")
 
         # Clean up civcom connection
         if self.civcom:
