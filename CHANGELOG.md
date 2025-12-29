@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.12](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.2.11...freeciv3d-v0.2.12) (2025-12-29)
+
+
+### Bug Fixes
+
+* **docker:** Update startup scripts for ROOT.war context path ([#38](https://github.com/taso-ventures/freeciv3d/issues/38)) ([837e0e2](https://github.com/taso-ventures/freeciv3d/commit/837e0e256c8efe60771f02e06ed3899040c9cb17))
+
 ## [0.2.11](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.2.10...freeciv3d-v0.2.11) (2025-12-29)
 
 
