@@ -20,6 +20,10 @@ spec:
             cidr: 35.191.0.0/16
         - ipBlock:
             cidr: 130.211.0.0/22
+        # GKE node subnet - required because kube-proxy SNATs health check
+        # traffic when forwarding from nodePort to pod port
+        - ipBlock:
+            cidr: 10.0.0.0/20
       ports:
         - port: 8080
           protocol: TCP
