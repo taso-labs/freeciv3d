@@ -1,0 +1,87 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: fciv-net-nginx-config
+  namespace: freeciv
+  labels:
+    app: fciv-net
+    component: nginx
+data:
+  freeciv-web.conf: |
+    # WebSocket upgrade mapping
+    map $http_upgrade $connection_upgrade {
+        default upgrade;
+        ''      close;
+    }
+
+    server {
+        listen 80;
+        tcp_nodelay on;
+
+        # Compression
+        gzip on;
+        gzip_comp_level 4;
+        gzip_proxied any;
+        gzip_types text/css application/json application/javascript text/javascript text/xml application/xml;
+
+        # Common proxy headers
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+
+        # WebSocket proxy for publite2 game instances (ports 7000-7999)
+        # Each game gets its own proxy on ports 7001, 7002, etc.
+        location ~ ^/civsocket/7([0-9][0-9][0-9])$ {
+            proxy_pass http://localhost:7$1/civsocket/7$1;
+            proxy_http_version 1.1;
+            proxy_set_header Upgrade $http_upgrade;
+            proxy_set_header Connection $connection_upgrade;
+            proxy_buffering off;
+            proxy_connect_timeout 90s;
+            proxy_send_timeout 90s;
+            proxy_read_timeout 90s;
+        }
+
+        # Status endpoint for each proxy instance
+        location ~ ^/civsocket/7([0-9][0-9][0-9])/status$ {
+            proxy_pass http://localhost:7$1/status;
+            proxy_connect_timeout 90s;
+            proxy_send_timeout 90s;
+            proxy_read_timeout 90s;
+        }
+
+        # Static asset directories with caching
+        location ~ ^/(images|webfonts)/ {
+            proxy_pass http://localhost:8080;
+            expires 7d;
+        }
+
+        # Static files by extension with caching
+        location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot|dae)$ {
+            proxy_pass http://localhost:8080;
+            expires 7d;
+        }
+
+        # Publite2 status page
+        location /pubstatus {
+            proxy_pass http://localhost:4002;
+        }
+
+        # Metaserver endpoint (internal only for security)
+        location = /meta/metaserver {
+            allow 127.0.0.1;
+            allow ::1;
+            allow 10.0.0.0/8;  # K8s internal IPs
+            deny all;
+            proxy_pass http://localhost:8080;
+        }
+
+        # All requests to Tomcat webapp (ROOT.war at / context)
+        location / {
+            proxy_pass http://localhost:8080;
+            client_max_body_size 15m;
+            proxy_connect_timeout 90s;
+            proxy_send_timeout 90s;
+            proxy_read_timeout 90s;
+        }
+    }

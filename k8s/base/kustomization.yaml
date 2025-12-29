@@ -17,6 +17,7 @@ resources:
   # RBAC
   - rbac/freeciv-sa.yaml
   # Core services
+  - fciv-net/nginx-config.yaml  # nginx sidecar config for WebSocket routing
   - fciv-net/deployment.yaml
   - fciv-net/service.yaml
   - fciv-net/flyway-job.yaml

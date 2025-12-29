@@ -13,9 +13,11 @@ spec:
   selector:
     app: fciv-net
   ports:
+    # Route web traffic through nginx sidecar for WebSocket proxy support
+    # nginx proxies to Tomcat (localhost:8080) and game proxies (localhost:7XXX)
     - name: web
       port: 8080
-      targetPort: web
+      targetPort: 80  # nginx sidecar port (was: web/8080 Tomcat)
       protocol: TCP
     - name: proxy
       port: 8002

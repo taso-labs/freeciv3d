@@ -206,11 +206,59 @@ spec:
               drop:
                 - ALL
 
+        # Nginx sidecar for WebSocket routing
+        # Required because GKE Ingress routes directly to Tomcat, but observers
+        # need /civsocket/7XXX paths routed to per-game proxy ports (7001-7009)
+        - name: nginx
+          image: nginx:1.25-alpine
+          ports:
+            - name: http
+              containerPort: 80
+              protocol: TCP
+          volumeMounts:
+            - name: nginx-config
+              mountPath: /etc/nginx/conf.d
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 10
+            periodSeconds: 30
+            timeoutSeconds: 5
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 101  # nginx user in alpine image
+            runAsGroup: 101
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            seccompProfile:
+              type: RuntimeDefault
+            capabilities:
+              drop:
+                - ALL
+
       volumes:
         - name: game-data
           emptyDir: {}
         - name: game-logs
           emptyDir: {}
+        - name: nginx-config
+          configMap:
+            name: fciv-net-nginx-config
 
       dnsPolicy: ClusterFirst
       restartPolicy: Always
