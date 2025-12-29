@@ -143,8 +143,9 @@ spec:
             # Observer URL generation - base URL for FreeCiv web client
             # This is used by LLM Gateway to generate observer iframe URLs
             # Must be HTTPS public URL (not internal K8s DNS) for browser access
+            # Includes /freeciv-web context path since Tomcat deploys webapp there
             - name: GATEWAY_FREECIV_WEB_BASE_URL
-              value: "https://freeciv.clashai.live"
+              value: "https://freeciv.clashai.live/freeciv-web"
 
           resources:
             requests:

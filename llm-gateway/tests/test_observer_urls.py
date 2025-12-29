@@ -23,7 +23,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 # Disable API key for testing
 os.environ["GATEWAY_REQUIRE_API_KEY"] = "false"
-os.environ["GATEWAY_FREECIV_WEB_BASE_URL"] = "https://freeciv.agentclash.gg"
+# Includes /freeciv-web context path to match Tomcat webapp deployment
+os.environ["GATEWAY_FREECIV_WEB_BASE_URL"] = "https://freeciv.agentclash.gg/freeciv-web"
 
 from fastapi.testclient import TestClient
 from main import app
@@ -171,9 +172,9 @@ class TestObserverUrlsEndpoint:
 
         data = response.json()
 
-        # All URLs should start with configured base URL
+        # All URLs should start with configured base URL + /webclient/
         for view_type, url in data["observer_urls"].items():
-            assert url.startswith("https://freeciv.agentclash.gg/webclient/"), \
+            assert url.startswith("https://freeciv.agentclash.gg/freeciv-web/webclient/"), \
                 f"{view_type} URL should use configured base URL"
 
     def test_urls_include_civserverport_parameter(self):
@@ -246,8 +247,8 @@ class TestObserverUrlsConfig:
         settings = config.Settings()
         assert settings.freeciv_web_base_url == "https://custom.example.com"
 
-        # Restore original value
-        os.environ["GATEWAY_FREECIV_WEB_BASE_URL"] = "https://freeciv.agentclash.gg"
+        # Restore original value (includes /freeciv-web context path for Tomcat)
+        os.environ["GATEWAY_FREECIV_WEB_BASE_URL"] = "https://freeciv.agentclash.gg/freeciv-web"
 
     def test_freeciv_web_base_url_has_default(self):
         """Setting should have a default value when env var not set"""
