@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.1](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.0...freeciv3d-v0.3.1) (2025-12-29)
+
+
+### Bug Fixes
+
+* **k8s:** Add port 8081 to NetworkPolicy for nginx sidecar health checks ([d119353](https://github.com/taso-ventures/freeciv3d/commit/d119353c49745fa410581e13df405e4fa9c1fa61))
+* **ngix:** allow observer mode port forwarding ([669d1e7](https://github.com/taso-ventures/freeciv3d/commit/669d1e75aa04950a0d434270f79edf652300a9ab))
+
 ## [0.3.0](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.2.13...freeciv3d-v0.3.0) (2025-12-29)
 
 
