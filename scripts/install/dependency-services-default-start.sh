@@ -25,7 +25,8 @@ else
 fi
 
 # waiting for Tomcat to start, since it will take some time.
-until `curl --output /dev/null --silent --head --fail "http://localhost:8080/freeciv-web"`; do
+# ROOT.war deploys at / context, so check the root path
+until `curl --output /dev/null --silent --head --fail "http://localhost:8080/"`; do
     printf ".."
     sleep 3
 done
