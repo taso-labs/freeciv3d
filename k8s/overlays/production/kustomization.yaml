@@ -70,23 +70,23 @@ patches:
         path: /spec/maxReplicas
         value: 5
 
-  # Production resource limits
+  # Production resource limits (reduced to fit e2-small nodes)
   - target:
       kind: Deployment
       name: fciv-net
     patch: |-
       - op: replace
         path: /spec/template/spec/containers/0/resources/requests/cpu
-        value: "500m"
+        value: "200m"
       - op: replace
         path: /spec/template/spec/containers/0/resources/requests/memory
-        value: "1Gi"
+        value: "512Mi"
       - op: replace
         path: /spec/template/spec/containers/0/resources/limits/cpu
-        value: "2000m"
+        value: "1000m"
       - op: replace
         path: /spec/template/spec/containers/0/resources/limits/memory
-        value: "4Gi"
+        value: "2Gi"
 
   # Patch Ingress for production static IP
   - target:
