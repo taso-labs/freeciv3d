@@ -25,5 +25,9 @@ spec:
         - ipBlock:
             cidr: 10.0.0.0/20
       ports:
+        # Port 8081: nginx sidecar (handles HTTP and WebSocket routing)
+        - port: 8081
+          protocol: TCP
+        # Port 8080: Tomcat (direct access, kept for internal routing)
         - port: 8080
           protocol: TCP
