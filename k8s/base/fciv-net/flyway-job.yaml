@@ -71,7 +71,7 @@ spec:
               import sys
 
               print("Extracting migrations from WAR file...")
-              war_path = "/var/lib/tomcat10/webapps/freeciv-web.war"
+              war_path = "/var/lib/tomcat10/webapps/ROOT.war"
               dest_dir = "/flyway/sql"
               prefix = "WEB-INF/classes/db/migration/"
 

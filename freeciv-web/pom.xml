@@ -153,7 +153,9 @@
 	</dependencies>
 
 	<build>
-		<finalName>freeciv-web</finalName>
+		<!-- Deploy as ROOT.war so Tomcat serves at / context (not /freeciv-web/) -->
+		<!-- This matches HTML's absolute paths like /css/..., /javascript/... -->
+		<finalName>ROOT</finalName>
 		<!-- <pluginManagement> -->
 			<plugins>
 				<plugin>

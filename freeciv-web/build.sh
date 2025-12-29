@@ -32,5 +32,5 @@ fi
 echo "maven package"
 
 mvn ${BATCH_MODE} package && \
-	echo "Copying target/freeciv-web.war to ${TOMCATDIR}/webapps" && \
-	cp target/freeciv-web.war "${TOMCATDIR}/webapps/"
+	echo "Copying target/ROOT.war to ${TOMCATDIR}/webapps" && \
+	cp target/ROOT.war "${TOMCATDIR}/webapps/"
