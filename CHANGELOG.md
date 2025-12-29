@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.10](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.2.9...freeciv3d-v0.2.10) (2025-12-29)
+
+
+### Bug Fixes
+
+* **k8s:** Add /freeciv-web context path to observer URLs ([#34](https://github.com/taso-ventures/freeciv3d/issues/34)) ([7832b53](https://github.com/taso-ventures/freeciv3d/commit/7832b53331075f886a419ddaec4b02f9da16ff21))
+
 ## [0.2.9](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.2.8...freeciv3d-v0.2.9) (2025-12-28)
 
 
