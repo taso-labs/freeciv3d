@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.11](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.2.10...freeciv3d-v0.2.11) (2025-12-29)
+
+
+### Bug Fixes
+
+* **k8s:** Deploy WAR as ROOT.war to fix static resource 404s ([#36](https://github.com/taso-ventures/freeciv3d/issues/36)) ([7eda6b0](https://github.com/taso-ventures/freeciv3d/commit/7eda6b0d297d63878d7ba6d2badc97d7a0b5f7b9))
+
 ## [0.2.10](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.2.9...freeciv3d-v0.2.10) (2025-12-29)
 
 
