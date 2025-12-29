@@ -210,10 +210,10 @@ spec:
         # Required because GKE Ingress routes directly to Tomcat, but observers
         # need /civsocket/7XXX paths routed to per-game proxy ports (7001-7009)
         - name: nginx
-          image: nginx:1.25-alpine
+          image: nginxinc/nginx-unprivileged:1.25-alpine
           ports:
             - name: http
-              containerPort: 80
+              containerPort: 8081  # unprivileged nginx (8080 is used by Tomcat)
               protocol: TCP
           volumeMounts:
             - name: nginx-config
@@ -228,14 +228,14 @@ spec:
           readinessProbe:
             httpGet:
               path: /
-              port: 80
+              port: 8081
             initialDelaySeconds: 5
             periodSeconds: 10
             timeoutSeconds: 5
           livenessProbe:
             httpGet:
               path: /
-              port: 80
+              port: 8081
             initialDelaySeconds: 10
             periodSeconds: 30
             timeoutSeconds: 5

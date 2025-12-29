@@ -17,7 +17,7 @@ spec:
     # nginx proxies to Tomcat (localhost:8080) and game proxies (localhost:7XXX)
     - name: web
       port: 8080
-      targetPort: 80  # nginx sidecar port (was: web/8080 Tomcat)
+      targetPort: 8081  # nginx sidecar port (Tomcat uses 8080 internally)
       protocol: TCP
     - name: proxy
       port: 8002

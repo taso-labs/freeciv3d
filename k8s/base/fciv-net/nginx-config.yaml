@@ -15,7 +15,7 @@ data:
     }
 
     server {
-        listen 80;
+        listen 8081;  # unprivileged port (Tomcat uses 8080)
         tcp_nodelay on;
 
         # Compression
