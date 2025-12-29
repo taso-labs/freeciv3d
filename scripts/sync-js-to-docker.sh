@@ -4,7 +4,8 @@
 
 CONTAINER="fciv-net"
 SRC_DIR="freeciv-web/src/main/webapp/javascript"
-DEST_DIR="/var/lib/tomcat10/webapps/freeciv-web/javascript"
+# ROOT.war deploys at / context
+DEST_DIR="/var/lib/tomcat10/webapps/ROOT/javascript"
 
 # Check if container is running
 if ! docker ps --format '{{.Names}}' | grep -q "^${CONTAINER}$"; then

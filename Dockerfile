@@ -176,6 +176,9 @@ apt-get install -y --no-install-recommends \
     && :
 ## Add docker user to tomcat group for directory access
 usermod -a -G tomcat docker
+# Remove default Tomcat ROOT webapp - our ROOT.war will be copied from tomcat-builder
+# Without this, Docker COPY merges directories and the default ROOT/ takes precedence
+rm -rf /var/lib/tomcat10/webapps/ROOT
 # Remove documentation, saves 1691975 bytes
 rm -rf /usr/share/doc/* /usr/share/man/* /usr/share/locale/*
 EOF

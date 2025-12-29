@@ -496,8 +496,9 @@ class GameSessionManager:
             async with aiohttp.ClientSession(self.metaserver_url) as session:
                 # Make POST request with type=multiplayer to trigger allocation logic
                 # The endpoint queries: SELECT * FROM servers WHERE type='multiplayer' AND available != 0
+                # ROOT.war deploys at / context, so no /freeciv-web prefix
                 async with session.post(
-                    "/freeciv-web/meta/allocate",
+                    "/meta/allocate",
                     params={"type": "multiplayer"},
                     timeout=aiohttp.ClientTimeout(total=5),
                 ) as response:

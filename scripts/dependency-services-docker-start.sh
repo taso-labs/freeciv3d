@@ -16,8 +16,9 @@ echo "Starting up Tomcat (Docker mode, no sudo)"
 $CATALINA_HOME/bin/catalina.sh start
 
 # Wait for Tomcat to start
+# ROOT.war deploys at / context, so check the root path
 echo "Waiting for Tomcat to start..."
-until curl --output /dev/null --silent --head --fail "http://localhost:8080/freeciv-web" 2>/dev/null; do
+until curl --output /dev/null --silent --head --fail "http://localhost:8080/" 2>/dev/null; do
     printf ".."
     sleep 3
 done

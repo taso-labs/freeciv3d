@@ -71,7 +71,7 @@ function init_sprites()
     for (var i = 0; i < tileset_image_count; i++) {
       var tileset_image = new Image();
       tileset_image.onload = preload_check;
-      tileset_image.src = '/freeciv-web/tileset/freeciv-web-tileset-'
+      tileset_image.src = '/tileset/freeciv-web-tileset-'
                           + tileset_name + '-' + i + get_tileset_file_extention() + '?ts=' + ts;
       tileset_images[i] = tileset_image;
     }

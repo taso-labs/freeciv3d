@@ -29,7 +29,7 @@ if [ "${TOMCATMANAGER}" = "Y" ]; then
         read TOMCATMANAGER_PASSWORD
     fi
     curl -LsSg -K - << EOF
-url="http://${TOMCATMANAGER_USER}:${TOMCATMANAGER_PASSWORD}@localhost:8080/manager/text/start?path=/freeciv-web"
+url="http://${TOMCATMANAGER_USER}:${TOMCATMANAGER_PASSWORD}@localhost:8080/manager/text/start?path=/"
 EOF
 fi
 
