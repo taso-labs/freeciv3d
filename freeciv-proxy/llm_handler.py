@@ -337,25 +337,25 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 return
 
             # Check for existing suspended session to resume (reconnection support)
-            # This uses existing infrastructure that was built but never wired up
+            # Uses atomic try_resume_session_for_agent with proper locking and token verification
             is_reconnecting = False
             previous_player_id = None
-            existing_session = session_manager.get_session_by_agent(self.agent_id)
-            if existing_session and existing_session.state == SessionState.SUSPENDED:
-                if session_manager.resume_session(existing_session.session_id):
-                    self.session_info = existing_session
-                    self.session_id = existing_session.session_id
-                    is_reconnecting = True
-                    # Restore player_id from previous session for /take command
-                    previous_player_id = existing_session.player_id
-                    if previous_player_id is not None:
-                        self.player_id = previous_player_id
-                    logger.info(
-                        f"🔄 Resumed suspended session {self.session_id} for {self.agent_id}\n"
-                        f"   Restored player_id: {previous_player_id}"
-                    )
-                else:
-                    logger.info(f"Could not resume session for {self.agent_id} (expired?), creating new")
+            previous_civserver_port = None
+            resumed_session = session_manager.try_resume_session_for_agent(self.agent_id, api_token)
+            if resumed_session:
+                self.session_info = resumed_session
+                self.session_id = resumed_session.session_id
+                is_reconnecting = True
+                # Restore player_id and civserver_port from previous session
+                previous_player_id = resumed_session.player_id
+                previous_civserver_port = resumed_session.civserver_port
+                if previous_player_id is not None:
+                    self.player_id = previous_player_id
+                logger.info(
+                    f"Resumed suspended session {self.session_id} for {self.agent_id}\n"
+                    f"   Restored player_id: {previous_player_id}\n"
+                    f"   Restored civserver_port: {previous_civserver_port}"
+                )
 
             # Create new session if not reconnecting
             if not is_reconnecting:
@@ -383,22 +383,36 @@ class LLMWSHandler(websocket.WebSocketHandler):
             game_id = msg_data.get('game_id', f'game_{uuid.uuid4().hex[:8]}')
             self.game_id = game_id
 
-            # Allocate a multiplayer civserver port (6001-6009) for this game_id
-            # First player: allocates new port (e.g., 6001)
-            # Second player: reuses the same port (6001)
-            # Players are automatically assigned slots by civserver when they connect
-            civserver_port = await game_session_manager.allocate_civserver_port(game_id)
-            port_type = (
-                "MULTIPLAYER (6001-6009)" if 6001 <= civserver_port <= 6009
-                else "⚠️ SINGLEPLAYER (6000)" if civserver_port == 6000
-                else "⚠️ UNKNOWN PORT"
-            )
-            logger.info(
-                f"🎮 Agent {self.agent_id} assigned to civserver:\n"
-                f"   Game ID: {game_id}\n"
-                f"   Civserver Port: {civserver_port}\n"
-                f"   Port Type: {port_type}"
-            )
+            # Allocate or reuse civserver port for this game_id
+            # Reconnection: use stored port from session (game is still running there)
+            # New connection: allocate new port from pool
+            if is_reconnecting and previous_civserver_port is not None:
+                civserver_port = previous_civserver_port
+                logger.info(
+                    f"Agent {self.agent_id} reconnecting to existing civserver:\n"
+                    f"   Game ID: {game_id}\n"
+                    f"   Civserver Port: {civserver_port} (restored from session)"
+                )
+            else:
+                # First player: allocates new port (e.g., 6001)
+                # Second player: reuses the same port (6001)
+                # Players are automatically assigned slots by civserver when they connect
+                civserver_port = await game_session_manager.allocate_civserver_port(game_id)
+                port_type = (
+                    "MULTIPLAYER (6001-6009)" if 6001 <= civserver_port <= 6009
+                    else "SINGLEPLAYER (6000)" if civserver_port == 6000
+                    else "UNKNOWN PORT"
+                )
+                logger.info(
+                    f"Agent {self.agent_id} assigned to civserver:\n"
+                    f"   Game ID: {game_id}\n"
+                    f"   Civserver Port: {civserver_port}\n"
+                    f"   Port Type: {port_type}"
+                )
+
+            # Store civserver_port in session for reconnection
+            if self.session_info:
+                self.session_info.civserver_port = civserver_port
 
             # Enable packet buffering IMMEDIATELY before connecting to civserver
             # The civserver sends ~1.2MB of PACKET_RULESET_NATION packets as soon as we connect

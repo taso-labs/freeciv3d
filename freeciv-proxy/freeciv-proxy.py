@@ -215,13 +215,15 @@ if __name__ == "__main__":
         websocket_ping_timeout=60,   # Close connection if no pong received within 60 seconds
         )
 
-        # DEBUG: Verify WebSocket settings are configured correctly
+        # Log WebSocket settings at startup
         max_size = application.settings.get('websocket_max_message_size', 'NOT SET')
         ping_interval = application.settings.get('websocket_ping_interval', 'NOT SET')
         ping_timeout = application.settings.get('websocket_ping_timeout', 'NOT SET')
-        print(f'DEBUG: websocket_max_message_size = {max_size} bytes ({max_size / (1024*1024):.1f} MB)' if isinstance(max_size, int) else f'DEBUG: websocket_max_message_size = {max_size}')
-        print(f'DEBUG: websocket_ping_interval = {ping_interval}s, websocket_ping_timeout = {ping_timeout}s')
-        logger.info(f"WebSocket settings: max_size={max_size} bytes, ping_interval={ping_interval}s, ping_timeout={ping_timeout}s")
+        if isinstance(max_size, int):
+            logger.info(f"WebSocket max_message_size: {max_size} bytes ({max_size / (1024*1024):.1f} MB)")
+        else:
+            logger.info(f"WebSocket max_message_size: {max_size}")
+        logger.info(f"WebSocket keepalive: ping_interval={ping_interval}s, ping_timeout={ping_timeout}s")
 
         http_server = httpserver.HTTPServer(application)
         http_server.listen(PROXY_PORT)

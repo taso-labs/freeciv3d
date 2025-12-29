@@ -41,6 +41,7 @@ class SessionInfo:
     last_activity: float
     expires_at: float
     player_id: Optional[int] = None
+    civserver_port: Optional[int] = None  # Port of the civserver game (for reconnection)
     connection_count: int = 0
     state: SessionState = SessionState.ACTIVE
     metadata: Dict[str, Any] = field(default_factory=dict)
@@ -313,28 +314,83 @@ class SessionManager:
         }
 
     def suspend_session(self, session_id: str, reason: str = "admin") -> bool:
-        """Suspend a session temporarily"""
-        session = self.sessions.get(session_id)
-        if session and session.state == SessionState.ACTIVE:
-            session.state = SessionState.SUSPENDED
-            logger.info(f"Suspended session {session_id}: {reason}")
-            return True
-        return False
+        """Suspend a session temporarily, allowing reconnection within timeout window"""
+        with self._session_lock:
+            session = self.sessions.get(session_id)
+            if session and session.state == SessionState.ACTIVE:
+                session.state = SessionState.SUSPENDED
+                # Set expiry to 60s from now for reconnection window
+                session.expires_at = time.time() + 60
+                logger.info(f"Suspended session {session_id}: {reason} (expires in 60s)")
+                return True
+            return False
 
     def resume_session(self, session_id: str) -> bool:
         """Resume a suspended session"""
-        session = self.sessions.get(session_id)
-        if session and session.state == SessionState.SUSPENDED:
-            # Check if not expired
-            if time.time() <= session.expires_at:
-                session.state = SessionState.ACTIVE
-                session.last_activity = time.time()
-                logger.info(f"Resumed session {session_id}")
-                return True
-            else:
+        with self._session_lock:
+            session = self.sessions.get(session_id)
+            if session and session.state == SessionState.SUSPENDED:
+                # Check if not expired
+                if time.time() <= session.expires_at:
+                    session.state = SessionState.ACTIVE
+                    session.last_activity = time.time()
+                    logger.info(f"Resumed session {session_id}")
+                    return True
+                else:
+                    session.state = SessionState.EXPIRED
+                    logger.info(f"Cannot resume expired session {session_id}")
+            return False
+
+    def try_resume_session_for_agent(self, agent_id: str, api_token: str) -> Optional[SessionInfo]:
+        """
+        Atomically try to resume a suspended session for an agent.
+
+        This method performs lookup, token verification, and resume in a single
+        atomic operation to prevent race conditions.
+
+        Args:
+            agent_id: Agent identifier
+            api_token: API token to verify ownership
+
+        Returns:
+            SessionInfo if resumed successfully, None if no resumable session
+            or token mismatch
+        """
+        with self._session_lock:
+            session_id = self.agent_to_session.get(agent_id)
+            if not session_id:
+                return None
+
+            session = self.sessions.get(session_id)
+            if not session:
+                # Clean up stale mapping
+                del self.agent_to_session[agent_id]
+                return None
+
+            # Only resume SUSPENDED sessions
+            if session.state != SessionState.SUSPENDED:
+                logger.debug(f"Session {session_id} for agent {agent_id} is {session.state}, not SUSPENDED")
+                return None
+
+            # Check expiration
+            if time.time() > session.expires_at:
                 session.state = SessionState.EXPIRED
-                logger.info(f"Cannot resume expired session {session_id}")
-        return False
+                logger.info(f"Session {session_id} expired, cannot resume")
+                return None
+
+            # Verify API token matches the one used to create the session
+            if not self._verify_token(api_token, session.api_token_hash):
+                logger.warning(f"Token mismatch for session {session_id} - rejecting resume attempt")
+                self.stats['authentication_failures'] += 1
+                return None
+
+            # All checks passed - resume the session
+            session.state = SessionState.ACTIVE
+            session.last_activity = time.time()
+            session.connection_count += 1
+
+            logger.info(f"Resumed suspended session {session_id} for agent {agent_id} (connection #{session.connection_count})")
+            return session
 
     def _generate_session_id(self, agent_id: str) -> str:
         """Generate secure session ID"""
