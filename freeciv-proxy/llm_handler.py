@@ -428,13 +428,14 @@ class LLMWSHandler(websocket.WebSocketHandler):
 
                 # If reconnecting, send /take command to reclaim player slot from AI
                 # The civserver converts disconnected players to AI, so we need to take back our slot
-                # Use player number (0-indexed) which is more reliable than trying to guess the AI name
-                if is_reconnecting and previous_player_id is not None:
+                # Validate player_id is an integer to prevent command injection
+                if is_reconnecting and isinstance(previous_player_id, int) and previous_player_id >= 0:
                     take_command = f"/take {previous_player_id}"  # FreeCiv /take accepts player number
                     take_packet = json.dumps({"pid": PACKET_CHAT_MSG_REQ, "message": take_command})
                     self.civcom.queue_to_civserver(take_packet)
+                    self.civcom.send_packets_to_civserver()  # Actually send the /take command
                     logger.info(
-                        f"🔄 Sent '{take_command}' to reclaim player slot for {self.agent_id}\n"
+                        f"Sent '{take_command}' to reclaim player slot for {self.agent_id}\n"
                         f"   Reclaiming player_id={previous_player_id}"
                     )
             except Exception as e:
