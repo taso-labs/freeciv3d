@@ -41,8 +41,11 @@ class SessionInfo:
     last_activity: float
     expires_at: float
     player_id: Optional[int] = None
+    civserver_port: Optional[int] = None  # Port of the civserver game (for reconnection)
     connection_count: int = 0
     state: SessionState = SessionState.ACTIVE
+    resume_attempts: int = 0  # Track resume attempts for rate limiting
+    last_resume_attempt: float = 0.0  # Timestamp of last resume attempt
     metadata: Dict[str, Any] = field(default_factory=dict)
 
 class SessionManager:
@@ -313,28 +316,102 @@ class SessionManager:
         }
 
     def suspend_session(self, session_id: str, reason: str = "admin") -> bool:
-        """Suspend a session temporarily"""
-        session = self.sessions.get(session_id)
-        if session and session.state == SessionState.ACTIVE:
-            session.state = SessionState.SUSPENDED
-            logger.info(f"Suspended session {session_id}: {reason}")
-            return True
-        return False
+        """Suspend a session temporarily, allowing reconnection within timeout window"""
+        with self._session_lock:
+            session = self.sessions.get(session_id)
+            if session and session.state == SessionState.ACTIVE:
+                session.state = SessionState.SUSPENDED
+                # Set expiry for reconnection window (configurable via env var, default 60s)
+                suspension_timeout = int(os.getenv('SESSION_SUSPENSION_TIMEOUT_SECS', '60'))
+                session.expires_at = time.time() + suspension_timeout
+                logger.info(f"Suspended session {session_id}: {reason} (expires in {suspension_timeout}s)")
+                return True
+            return False
 
     def resume_session(self, session_id: str) -> bool:
         """Resume a suspended session"""
-        session = self.sessions.get(session_id)
-        if session and session.state == SessionState.SUSPENDED:
-            # Check if not expired
-            if time.time() <= session.expires_at:
-                session.state = SessionState.ACTIVE
-                session.last_activity = time.time()
-                logger.info(f"Resumed session {session_id}")
-                return True
-            else:
+        with self._session_lock:
+            session = self.sessions.get(session_id)
+            if session and session.state == SessionState.SUSPENDED:
+                # Check if not expired
+                if time.time() <= session.expires_at:
+                    session.state = SessionState.ACTIVE
+                    session.last_activity = time.time()
+                    logger.info(f"Resumed session {session_id}")
+                    return True
+                else:
+                    session.state = SessionState.EXPIRED
+                    logger.info(f"Cannot resume expired session {session_id}")
+            return False
+
+    def try_resume_session_for_agent(self, agent_id: str, api_token: str) -> Optional[SessionInfo]:
+        """
+        Atomically try to resume a suspended session for an agent.
+
+        This method performs lookup, token verification, and resume in a single
+        atomic operation to prevent race conditions.
+
+        Includes rate limiting: max 5 resume attempts per session within the
+        suspension window to prevent brute-force attacks.
+
+        Args:
+            agent_id: Agent identifier
+            api_token: API token to verify ownership
+
+        Returns:
+            SessionInfo if resumed successfully, None if no resumable session
+            or token mismatch
+        """
+        # Rate limit constants (max 5 attempts per session)
+        MAX_RESUME_ATTEMPTS = int(os.getenv('MAX_SESSION_RESUME_ATTEMPTS', '5'))
+
+        with self._session_lock:
+            session_id = self.agent_to_session.get(agent_id)
+            if not session_id:
+                return None
+
+            session = self.sessions.get(session_id)
+            if not session:
+                # Clean up stale mapping
+                del self.agent_to_session[agent_id]
+                return None
+
+            # Only resume SUSPENDED sessions
+            if session.state != SessionState.SUSPENDED:
+                logger.debug(f"Session {session_id} for agent {agent_id} is {session.state}, not SUSPENDED")
+                return None
+
+            # Check expiration
+            if time.time() > session.expires_at:
                 session.state = SessionState.EXPIRED
-                logger.info(f"Cannot resume expired session {session_id}")
-        return False
+                logger.info(f"Session {session_id} expired, cannot resume")
+                return None
+
+            # Rate limiting: check if too many resume attempts
+            session.resume_attempts += 1
+            session.last_resume_attempt = time.time()
+            if session.resume_attempts > MAX_RESUME_ATTEMPTS:
+                logger.warning(
+                    f"Rate limit exceeded for session {session_id}: "
+                    f"{session.resume_attempts} attempts (max {MAX_RESUME_ATTEMPTS})"
+                )
+                self.stats['authentication_failures'] += 1
+                return None
+
+            # Verify API token matches the one used to create the session
+            if not self._verify_token(api_token, session.api_token_hash):
+                logger.warning(f"Token mismatch for session {session_id} - rejecting resume attempt ({session.resume_attempts}/{MAX_RESUME_ATTEMPTS})")
+                self.stats['authentication_failures'] += 1
+                return None
+
+            # All checks passed - resume the session
+            session.state = SessionState.ACTIVE
+            session.last_activity = time.time()
+            session.connection_count += 1
+            session.resume_attempts = 0  # Reset on successful resume
+
+            logger.info(f"Resumed suspended session {session_id} for agent {agent_id} (connection #{session.connection_count})")
+            return session
 
     def _generate_session_id(self, agent_id: str) -> str:
         """Generate secure session ID"""

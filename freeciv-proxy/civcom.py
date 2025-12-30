@@ -1228,9 +1228,17 @@ class CivCom(Thread):
                     nation_name = self._get_nation_name(nation_raw)
 
                     # Add updated player
+                    # Note: PACKET_PLAYER_INFO has 'name' (leader name) and 'username' (connection name)
+                    # Use 'name' for display as it contains the agent/player name (e.g., "Claude_Sonnet_45")
+                    # 'username' is the WebSocket connection identifier which may differ
+                    player_name = packet.get('name')
+                    if player_name is None:
+                        # Log if name field is missing - helps debug protocol issues
+                        logger.warning(f"PACKET_PLAYER_INFO missing 'name' field for player {player_id}, using fallback")
+                        player_name = f'Player{player_id}'
                     self.all_players.append({
                         'id': player_id,
-                        'name': packet.get('username', f'Player{player_id}'),
+                        'name': player_name,
                         'nation': nation_name,  # String name (e.g., 'Romans', 'Americans')
                         'score': packet.get('score', 0),
                         'gold': packet.get('gold', 0)
