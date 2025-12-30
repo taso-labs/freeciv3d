@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.2](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.1...freeciv3d-v0.3.2) (2025-12-30)
+
+
+### Bug Fixes
+
+* **k8s:** Reduce production resource requests to fit e2-small nodes ([f39ea96](https://github.com/taso-ventures/freeciv3d/commit/f39ea968512575343551d8589a18d7c4225e9d57))
+* **proxy:** Enable agent session reconnection after WebSocket disconnect ([#45](https://github.com/taso-ventures/freeciv3d/issues/45)) ([f92de13](https://github.com/taso-ventures/freeciv3d/commit/f92de136e639cd35b6fb5dc4967584f332763f5c))
+
 ## [0.3.1](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.0...freeciv3d-v0.3.1) (2025-12-29)
 
 
