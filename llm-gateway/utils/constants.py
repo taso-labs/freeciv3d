@@ -40,6 +40,10 @@ WEBSOCKET_PING_INTERVAL = 20  # Send ping every 20 seconds to detect dead connec
 WEBSOCKET_PING_TIMEOUT = 10  # Wait up to 10 seconds for pong response
 WEBSOCKET_CLOSE_TIMEOUT = 10  # Timeout for graceful close handshake
 
+# Observer URL polling constants (for race condition handling)
+OBSERVER_URL_MAX_RETRY_ATTEMPTS = 10
+OBSERVER_URL_RETRY_DELAY_SECONDS = 0.5
+
 # Message and data size limits
 # Increased to 100MB to handle large FreeCiv game state packets
 # FreeCiv sends map data, player info, city data that can exceed the default 1MB limit
@@ -64,6 +68,10 @@ KEY_LENGTH = 32  # Derived key length in bytes
 MIN_PORT = 1
 MAX_PORT = 65535
 
+# Civserver port range (multiplayer ports only, 6000 is single-player)
+CIVSERVER_PORT_MIN = 6001
+CIVSERVER_PORT_MAX = 6009
+
 # Validation limits
 MIN_AGENT_TIMEOUT = 1
 MAX_AGENT_TIMEOUT = 3600
@@ -76,12 +84,13 @@ MAX_RATE_LIMIT = 10000
 
 # Map size to dimensions mapping (FreeCiv map sizes)
 # Format: (width, height) for each map size
+# These values match the defaults in pubscript_multiplayer.serv
 MAP_SIZE_DIMENSIONS = {
-    "tiny": (40, 40),
-    "small": (60, 60),
+    "tiny": (50, 50),
+    "small": (64, 64),
     "medium": (80, 80),
-    "large": (110, 90),
-    "huge": (140, 90)
+    "large": (96, 96),
+    "huge": (128, 128),
 }
 
 # Default coordinate limits (when map size is unknown)
@@ -111,6 +120,10 @@ ERROR_CODE_INTERNAL = "E500"             # Internal server error
 ERROR_CODE_TIMEOUT = "E503"              # Query timeout
 ERROR_CODE_UNKNOWN = "E999"              # Unknown error
 
+# Game Management Errors (E0xx)
+ERROR_CODE_GAME_NOT_FOUND = "E010"       # Game not found
+ERROR_CODE_GAME_ALREADY_ENDED = "E011"   # Game already ended
+
 # Legacy aliases for backwards compatibility during migration
 ERROR_CODE_VALIDATION = ERROR_CODE_ACTION_VALIDATION  # Alias
 
@@ -123,3 +136,16 @@ HTTP_NOT_FOUND = 404
 HTTP_TOO_MANY_REQUESTS = 429
 HTTP_INTERNAL_ERROR = 500
 HTTP_SERVICE_UNAVAILABLE = 503
+
+
+# Helper functions
+from typing import Optional
+
+
+def is_valid_civserver_port(port: Optional[int]) -> bool:
+    """Check if port is a valid multiplayer civserver port (6001-6009).
+
+    Port 6000 is reserved for single-player games and is not valid for LLM games.
+    LLM games always use multiplayer ports in the range 6001-6009.
+    """
+    return port is not None and CIVSERVER_PORT_MIN <= port <= CIVSERVER_PORT_MAX

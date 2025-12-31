@@ -32,8 +32,9 @@ import os.path
 
 metahost = "localhost"
 metaport = 8080
-metapath =  "/freeciv-web/meta/metaserver"
-statuspath =  "/freeciv-web/meta/status"
+# ROOT.war deploys at / context, so no /freeciv-web prefix
+metapath =  "/meta/metaserver"
+statuspath =  "/meta/status"
 settings_file = "settings.ini"
 game_types = ["singleplayer", "multiplayer"]
 

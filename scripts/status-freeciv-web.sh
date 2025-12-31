@@ -108,8 +108,8 @@ checkStatus () { # description, err_msg, <function and args...>
 printf "Checking that Freeciv-web is running correctly... (-v for verbose)\n\n"
 
 checkWebURL "Tomcat" "http://localhost:8080/" --head
-checkWebURL "freeciv-web on Tomcat" "http://localhost:8080/freeciv-web" --head
-checkWebURL "Tomcat DB connection" "http://localhost:8080/freeciv-web/game/list" --head
+checkWebURL "freeciv-web on Tomcat (ROOT.war)" "http://localhost:8080/" --head
+checkWebURL "Tomcat DB connection" "http://localhost:8080/game/list" --head
 
 checkWebURL "Pubstatus" "http://localhost:4002/pubstatus"
 
@@ -117,8 +117,8 @@ checkWebURL "freeciv-proxy directly" "http://localhost:7001/status"
 
 checkPID "freeciv-web (spawned by publite2)" "freeciv-web"
 
-checkWebURL "webclient.min.js generation" "http://localhost:8080/freeciv-web/javascript/webclient.min.js" --head
-checkWebURL "tileset generation" "http://localhost:8080/freeciv-web/tileset/freeciv-web-tileset-amplio2-0.png" --head
+checkWebURL "webclient.min.js generation" "http://localhost:8080/javascript/webclient.min.js" --head
+checkWebURL "tileset generation" "http://localhost:8080/tileset/freeciv-web-tileset-amplio2-0.png" --head
 
 printf "\n--------------------------------\n";
 echo "Check of FCIV.NET completed!"

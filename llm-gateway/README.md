@@ -56,13 +56,13 @@ FreeCiv3D uses a **dynamic server pool** pattern to support concurrent LLM games
 
 #### ServerAllocator Servlet
 
-**Endpoint**: `POST /freeciv-web/meta/allocate`
+**Endpoint**: `POST /meta/allocate`
 
 **Purpose**: Allocates an available game server from the pool for a new LLM game.
 
 **Request Parameters**:
 ```http
-POST /freeciv-web/meta/allocate?type=multiplayer HTTP/1.1
+POST /meta/allocate?type=multiplayer HTTP/1.1
 Host: localhost:8080
 Content-Type: application/x-www-form-urlencoded
 
@@ -113,13 +113,13 @@ int proxyPort = port + 1000;  // 6001 → 7001, 6002 → 7002, etc.
 
 #### ServerRelease Servlet
 
-**Endpoint**: `POST /freeciv-web/meta/release`
+**Endpoint**: `POST /meta/release`
 
 **Purpose**: Returns a game server to the available pool after an LLM game completes.
 
 **Request Parameters**:
 ```http
-POST /freeciv-web/meta/release HTTP/1.1
+POST /meta/release HTTP/1.1
 Host: localhost:8080
 Content-Type: application/x-www-form-urlencoded
 

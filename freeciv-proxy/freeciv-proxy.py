@@ -204,13 +204,26 @@ if __name__ == "__main__":
         # FreeCiv sends large game state packets (map data, player data, city data)
         # that can exceed Tornado's default 10MB limit, causing "frame exceeds limit" errors
         # See: https://www.tornadoweb.org/en/stable/websocket.html#tornado.websocket.WebSocketHandler.max_message_size
-        websocket_max_message_size=50 * 1024 * 1024  # 50MB for large game state packets
+        websocket_max_message_size=50 * 1024 * 1024,  # 50MB for large game state packets
+
+        # WebSocket keepalive to prevent idle connection timeouts
+        # GKE load balancer has 600s default idle timeout, nginx has 90s proxy_read_timeout
+        # Sending pings every 30s ensures connections stay alive through all proxies
+        # Agent-clash client also sends pings (5s interval), but server-side pings provide
+        # redundancy and ensure bidirectional keepalive
+        websocket_ping_interval=30,  # Send ping every 30 seconds
+        websocket_ping_timeout=60,   # Close connection if no pong received within 60 seconds
         )
 
-        # DEBUG: Verify websocket_max_message_size is set correctly
+        # Log WebSocket settings at startup
         max_size = application.settings.get('websocket_max_message_size', 'NOT SET')
-        print(f'DEBUG: websocket_max_message_size = {max_size} bytes ({max_size / (1024*1024):.1f} MB)' if isinstance(max_size, int) else f'DEBUG: websocket_max_message_size = {max_size}')
-        logger.info(f"WebSocket max message size configured: {max_size} bytes")
+        ping_interval = application.settings.get('websocket_ping_interval', 'NOT SET')
+        ping_timeout = application.settings.get('websocket_ping_timeout', 'NOT SET')
+        if isinstance(max_size, int):
+            logger.info(f"WebSocket max_message_size: {max_size} bytes ({max_size / (1024*1024):.1f} MB)")
+        else:
+            logger.info(f"WebSocket max_message_size: {max_size}")
+        logger.info(f"WebSocket keepalive: ping_interval={ping_interval}s, ping_timeout={ping_timeout}s")
 
         http_server = httpserver.HTTPServer(application)
         http_server.listen(PROXY_PORT)

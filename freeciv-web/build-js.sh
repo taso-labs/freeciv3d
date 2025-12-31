@@ -1,11 +1,12 @@
 #!/bin/bash
 # builds javascript files Freeciv-web and copies the resulting file to tomcat.
 
-FCW_DEST=/var/lib/tomcat10/webapps/freeciv-web
+# ROOT.war deploys at / context
+FCW_DEST=/var/lib/tomcat10/webapps/ROOT
 
 mvn compile && \
-echo "Copying target/freeciv-web/javascript/webclient.* to ${FCW_DEST}/javascript" && \
-  cp target/freeciv-web/javascript/webclient.* "${FCW_DEST}"/javascript/ 
+echo "Copying target/ROOT/javascript/webclient.* to ${FCW_DEST}/javascript" && \
+  cp target/ROOT/javascript/webclient.* "${FCW_DEST}"/javascript/ 
 
 # update timestamp to clear browser cache.
 sed -i.bak -e "s/ts=\"/ts=\"1/" -e "s/\?ts=/\?ts=1/" "${FCW_DEST}"/webclient/index.jsp

@@ -60,13 +60,13 @@ echo ""
 
 # Test 5: Metaserver is accessible
 echo "5. Checking metaserver..."
-docker exec fciv-net bash -c "curl -sf http://localhost:8080/freeciv-web/meta/status" > /dev/null
+docker exec fciv-net bash -c "curl -sf http://localhost:8080/meta/status" > /dev/null
 test_result $? "Metaserver status endpoint accessible"
 echo ""
 
 # Test 6: Servers are registered
 echo "6. Checking server registration..."
-STATUS=$(docker exec fciv-net bash -c "curl -s http://localhost:8080/freeciv-web/meta/status")
+STATUS=$(docker exec fciv-net bash -c "curl -s http://localhost:8080/meta/status")
 echo "   Metaserver status: $STATUS"
 
 SERVER_COUNT=$(echo "$STATUS" | cut -d';' -f2)
@@ -79,7 +79,7 @@ echo ""
 
 # Test 7: civclientlauncher servlet works
 echo "7. Checking civclientlauncher servlet..."
-LAUNCHER_RESULT=$(docker exec fciv-net bash -c "curl -s -X POST 'http://localhost:8080/freeciv-web/civclientlauncher' -d 'action=new&type=singleplayer'")
+LAUNCHER_RESULT=$(docker exec fciv-net bash -c "curl -s -X POST 'http://localhost:8080/civclientlauncher' -d 'action=new&type=singleplayer'")
 if echo "$LAUNCHER_RESULT" | grep -q "success"; then
     test_result 0 "civclientlauncher returns 'success'"
 else
@@ -89,7 +89,7 @@ echo ""
 
 # Test 8: Web interface is accessible
 echo "8. Checking web interface..."
-curl -sf "http://localhost:8080/freeciv-web/" | grep -iq "freeciv"
+curl -sf "http://localhost:8080/" | grep -iq "freeciv"
 test_result $? "Web interface loads successfully"
 echo ""
 

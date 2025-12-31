@@ -118,6 +118,102 @@ class TestBasicFunctionality:
         assert data["success"] is True
         assert data["action_id"] == "action-456"
 
+    def test_stop_game_success(self):
+        """Test successful game stop via admin API"""
+        client = TestClient(app)
+
+        stop_request = {
+            "reason": "admin_stop",
+            "message": "Match stopped by administrator"
+        }
+
+        # Mock the gateway's game_sessions and end_game
+        with patch("api_endpoints.get_gateway") as mock_get_gateway, \
+             patch("api_endpoints.connection_manager.get_players_for_game") as mock_get_players, \
+             patch("api_endpoints.settings") as mock_settings:
+
+            mock_settings.require_api_key = False
+
+            mock_gw = MagicMock()
+            mock_gw.game_sessions = {
+                "game-123": {
+                    "status": "active",
+                    "created_at": 1704067200.0,
+                    "current_turn": 42,
+                    "last_state": {
+                        "cities": {"1": {"id": 1, "owner": 0}},
+                        "units": {"10": {"id": 10, "owner": 0}, "11": {"id": 11, "owner": 0}},
+                        "players": {"0": {"id": 0, "gold": 500}}
+                    }
+                }
+            }
+            mock_gw.end_game = AsyncMock()
+            mock_get_gateway.return_value = mock_gw
+
+            mock_get_players.return_value = [
+                {"player_id": 0, "agent_id": "llm_gemini"}
+            ]
+
+            response = client.post("/api/games/game-123/stop", json=stop_request)
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["type"] == "game_ended"
+        assert data["game_id"] == "game-123"
+        assert data["data"]["success"] is True
+        assert data["data"]["final_turn"] == 42
+        assert data["data"]["end_reason"] == "admin_stop"
+        assert len(data["data"]["players"]) == 1
+        assert data["data"]["players"][0]["agent_id"] == "llm_gemini"
+        assert data["data"]["players"][0]["cities"] == 1
+        assert data["data"]["players"][0]["units"] == 2
+
+    def test_stop_game_not_found(self):
+        """Test stop game when game doesn't exist"""
+        client = TestClient(app)
+
+        with patch("api_endpoints.get_gateway") as mock_get_gateway, \
+             patch("api_endpoints.settings") as mock_settings:
+
+            mock_settings.require_api_key = False
+            mock_gw = MagicMock()
+            mock_gw.game_sessions = {}  # No games
+            mock_get_gateway.return_value = mock_gw
+
+            response = client.post(
+                "/api/games/nonexistent/stop",
+                json={"reason": "admin_stop"}
+            )
+
+        assert response.status_code == 200  # Returns 200 with error in body
+        data = response.json()
+        assert data["type"] == "error"
+        assert data["data"]["code"] == "E010"
+
+    def test_stop_game_already_ended(self):
+        """Test stop game when game already ended"""
+        client = TestClient(app)
+
+        with patch("api_endpoints.get_gateway") as mock_get_gateway, \
+             patch("api_endpoints.settings") as mock_settings:
+
+            mock_settings.require_api_key = False
+            mock_gw = MagicMock()
+            mock_gw.game_sessions = {
+                "game-123": {"status": "ended"}
+            }
+            mock_get_gateway.return_value = mock_gw
+
+            response = client.post(
+                "/api/games/game-123/stop",
+                json={"reason": "admin_stop"}
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["type"] == "error"
+        assert data["data"]["code"] == "E011"
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

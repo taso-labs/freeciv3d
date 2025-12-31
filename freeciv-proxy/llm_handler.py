@@ -336,18 +336,40 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 self.write_message(error_response.to_json())
                 return
 
-            # Create session
-            self.session_info = session_manager.create_session(
-                self.agent_id,
-                api_token
-            )
-
-            if not self.session_info:
-                error_response = error_handler.handle_authentication_error(
-                    self.agent_id, "Failed to create session - server capacity exceeded"
+            # Check for existing suspended session to resume (reconnection support)
+            # Uses atomic try_resume_session_for_agent with proper locking and token verification
+            is_reconnecting = False
+            previous_player_id = None
+            previous_civserver_port = None
+            resumed_session = session_manager.try_resume_session_for_agent(self.agent_id, api_token)
+            if resumed_session:
+                self.session_info = resumed_session
+                self.session_id = resumed_session.session_id
+                is_reconnecting = True
+                # Restore player_id and civserver_port from previous session
+                previous_player_id = resumed_session.player_id
+                previous_civserver_port = resumed_session.civserver_port
+                if previous_player_id is not None:
+                    self.player_id = previous_player_id
+                logger.info(
+                    f"Resumed suspended session {self.session_id} for {self.agent_id}\n"
+                    f"   Restored player_id: {previous_player_id}\n"
+                    f"   Restored civserver_port: {previous_civserver_port}"
                 )
-                self.write_message(error_response.to_json())
-                return
+
+            # Create new session if not reconnecting
+            if not is_reconnecting:
+                self.session_info = session_manager.create_session(
+                    self.agent_id,
+                    api_token
+                )
+
+                if not self.session_info:
+                    error_response = error_handler.handle_authentication_error(
+                        self.agent_id, "Failed to create session - server capacity exceeded"
+                    )
+                    self.write_message(error_response.to_json())
+                    return
 
             self.session_id = self.session_info.session_id
 
@@ -361,22 +383,36 @@ class LLMWSHandler(websocket.WebSocketHandler):
             game_id = msg_data.get('game_id', f'game_{uuid.uuid4().hex[:8]}')
             self.game_id = game_id
 
-            # Allocate a multiplayer civserver port (6001-6009) for this game_id
-            # First player: allocates new port (e.g., 6001)
-            # Second player: reuses the same port (6001)
-            # Players are automatically assigned slots by civserver when they connect
-            civserver_port = await game_session_manager.allocate_civserver_port(game_id)
-            port_type = (
-                "MULTIPLAYER (6001-6009)" if 6001 <= civserver_port <= 6009
-                else "⚠️ SINGLEPLAYER (6000)" if civserver_port == 6000
-                else "⚠️ UNKNOWN PORT"
-            )
-            logger.info(
-                f"🎮 Agent {self.agent_id} assigned to civserver:\n"
-                f"   Game ID: {game_id}\n"
-                f"   Civserver Port: {civserver_port}\n"
-                f"   Port Type: {port_type}"
-            )
+            # Allocate or reuse civserver port for this game_id
+            # Reconnection: use stored port from session (game is still running there)
+            # New connection: allocate new port from pool
+            if is_reconnecting and previous_civserver_port is not None:
+                civserver_port = previous_civserver_port
+                logger.info(
+                    f"Agent {self.agent_id} reconnecting to existing civserver:\n"
+                    f"   Game ID: {game_id}\n"
+                    f"   Civserver Port: {civserver_port} (restored from session)"
+                )
+            else:
+                # First player: allocates new port (e.g., 6001)
+                # Second player: reuses the same port (6001)
+                # Players are automatically assigned slots by civserver when they connect
+                civserver_port = await game_session_manager.allocate_civserver_port(game_id)
+                port_type = (
+                    "MULTIPLAYER (6001-6009)" if 6001 <= civserver_port <= 6009
+                    else "SINGLEPLAYER (6000)" if civserver_port == 6000
+                    else "UNKNOWN PORT"
+                )
+                logger.info(
+                    f"Agent {self.agent_id} assigned to civserver:\n"
+                    f"   Game ID: {game_id}\n"
+                    f"   Civserver Port: {civserver_port}\n"
+                    f"   Port Type: {port_type}"
+                )
+
+            # Store civserver_port in session for reconnection
+            if self.session_info:
+                self.session_info.civserver_port = civserver_port
 
             # Enable packet buffering IMMEDIATELY before connecting to civserver
             # The civserver sends ~1.2MB of PACKET_RULESET_NATION packets as soon as we connect
@@ -389,6 +425,19 @@ class LLMWSHandler(websocket.WebSocketHandler):
             try:
                 self._connect_to_civserver(civserver_port, game_id)
                 logger.info(f"✓ Agent {self.agent_id} civcom connection established to port {civserver_port}")
+
+                # If reconnecting, send /take command to reclaim player slot from AI
+                # The civserver converts disconnected players to AI, so we need to take back our slot
+                # Validate player_id is an integer to prevent command injection
+                if is_reconnecting and isinstance(previous_player_id, int) and previous_player_id >= 0:
+                    take_command = f"/take {previous_player_id}"  # FreeCiv /take accepts player number
+                    take_packet = json.dumps({"pid": PACKET_CHAT_MSG_REQ, "message": take_command})
+                    self.civcom.queue_to_civserver(take_packet)
+                    self.civcom.send_packets_to_civserver()  # Actually send the /take command
+                    logger.info(
+                        f"Sent '{take_command}' to reclaim player slot for {self.agent_id}\n"
+                        f"   Reclaiming player_id={previous_player_id}"
+                    )
             except Exception as e:
                 logger.error(
                     f"❌ Agent {self.agent_id}: failed to establish civserver connection: {e}\n"
@@ -463,6 +512,23 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 # Register player with game session using server-assigned player_id
                 game_session.add_player(self.agent_id, self.player_id, self)
                 logger.info(f"Registered agent {self.agent_id} with game session {game_id} (server-assigned player_id={self.player_id})")
+
+                # Apply game configuration if provided (first player only)
+                # Must be done BEFORE nation selection to avoid resetting ready flags
+                game_config = msg_data.get('game_config', {})
+                config_applied = False
+                if game_config and not game_session.config_applied:
+                    logger.info(
+                        f"🎮 {self.agent_id}: Applying game configuration (first player)\n"
+                        f"   Config: {game_config}"
+                    )
+                    config_applied = await game_session.configure_game_settings(game_config, self.civcom)
+                elif game_config and game_session.config_applied:
+                    logger.info(
+                        f"🎮 {self.agent_id}: Game config ignored (already configured by first player)\n"
+                        f"   Requested: {game_config}\n"
+                        f"   Applied: {game_session.game_config}"
+                    )
 
                 # Get nation preference from message or use default
                 nation_name = msg_data.get('nation', 'random')
@@ -541,6 +607,8 @@ class LLMWSHandler(websocket.WebSocketHandler):
                     'status': 'authenticated',
                     'auto_ready': auto_ready,  # Indicates if player was auto-marked ready
                     'game_ready': False,  # Game not started yet
+                    'game_config_applied': config_applied,  # True if this player's config was applied
+                    'game_config': game_session.game_config,  # The applied game config (from first player)
                 }
 
                 if auto_ready:
@@ -3419,9 +3487,11 @@ class LLMWSHandler(websocket.WebSocketHandler):
             f"   Call stack:\n{''.join(traceback.format_stack())}"
         )
 
-        # Terminate session
+        # Suspend session to allow reconnection within timeout window
+        # (Uses existing suspend_session infrastructure that was never wired up)
         if self.session_id:
-            session_manager.terminate_session(self.session_id, "connection_closed")
+            session_manager.suspend_session(self.session_id, "connection_closed")
+            logger.info(f"Session {self.session_id} suspended for {self.agent_id} - reconnection allowed")
 
         # Clean up civcom connection
         if self.civcom:

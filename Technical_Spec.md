@@ -221,11 +221,11 @@ sequenceDiagram
 
 **Purpose**: Allocates an available game server from the pool.
 
-**Endpoint**: `POST /freeciv-web/meta/allocate`
+**Endpoint**: `POST /meta/allocate`
 
 **Request**:
 ```http
-POST /freeciv-web/meta/allocate?type=multiplayer HTTP/1.1
+POST /meta/allocate?type=multiplayer HTTP/1.1
 ```
 
 **Response**:
@@ -260,11 +260,11 @@ WHERE host = ? AND port = ?
 
 **Purpose**: Returns a game server to the available pool after game completion.
 
-**Endpoint**: `POST /freeciv-web/meta/release`
+**Endpoint**: `POST /meta/release`
 
 **Request**:
 ```http
-POST /freeciv-web/meta/release?host=localhost&port=6001 HTTP/1.1
+POST /meta/release?host=localhost&port=6001 HTTP/1.1
 ```
 
 **Response**:

@@ -366,9 +366,9 @@ class LLMGateway:
                     f"player_id={response_data.get('player_id')}, port={civserver_port}"
                 )
 
-                # Warn if port is 6000 (single-player) - LLM games should use 6001-6009
-                if civserver_port == 6000:
-                    logger.warning(f"⚠️ Game {game_id} assigned single-player port 6000 - expected multiplayer port (6001-6009)")
+                # Warn if port is invalid - LLM games should use 6001-6009 (multiplayer ports)
+                if not is_valid_civserver_port(civserver_port):
+                    logger.warning(f"⚠️ Game {game_id} assigned invalid port {civserver_port} - expected multiplayer port (6001-6009)")
                 return {"success": True, "player_id": response_data.get("player_id")}
             else:
                 error_msg = response_data.get("message", "Authentication failed")

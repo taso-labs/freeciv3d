@@ -140,10 +140,17 @@ spec:
                   name: llm-api-tokens
                   key: tokens
 
+            # Observer URL generation - base URL for FreeCiv web client
+            # This is used by LLM Gateway to generate observer iframe URLs
+            # Must be HTTPS public URL (not internal K8s DNS) for browser access
+            # ROOT.war deploys at / context, so no path prefix needed
+            - name: GATEWAY_FREECIV_WEB_BASE_URL
+              value: "https://freeciv.clashai.live"
+
           resources:
             requests:
-              cpu: 200m
-              memory: 512Mi
+              cpu: 300m       # Increased from 200m for LLM game processing
+              memory: 768Mi   # Increased from 512Mi to handle state extraction, caching
             limits:
               cpu: 1000m
               memory: 2Gi
@@ -168,9 +175,10 @@ spec:
             failureThreshold: 3
 
           # Readiness probe: Check webapp is deployed and responding
+          # ROOT.war deploys at / context
           readinessProbe:
             httpGet:
-              path: /freeciv-web/
+              path: /
               port: web
             initialDelaySeconds: 120  # Wait for webapp deployment
             periodSeconds: 10
@@ -198,11 +206,70 @@ spec:
               drop:
                 - ALL
 
+        # Nginx sidecar for WebSocket routing
+        # Required because GKE Ingress routes directly to Tomcat, but observers
+        # need /civsocket/7XXX paths routed to per-game proxy ports (7001-7009)
+        - name: nginx
+          image: nginxinc/nginx-unprivileged:1.25-alpine
+          ports:
+            - name: http
+              containerPort: 8081  # unprivileged nginx (8080 is used by Tomcat)
+              protocol: TCP
+          volumeMounts:
+            - name: nginx-config
+              mountPath: /etc/nginx/conf.d
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+          # Startup probe: Give Tomcat time to deploy ROOT.war (60-90s)
+          # Nginx starts fast but proxies to Tomcat which is slow to start
+          # Without this, readiness/liveness fail while Tomcat is starting
+          startupProbe:
+            httpGet:
+              path: /
+              port: 8081
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 12    # 30s + (12 * 10s) = 150s max startup time
+            timeoutSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 8081
+            initialDelaySeconds: 10   # Increased from 5s
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 8081
+            initialDelaySeconds: 30   # Increased from 10s
+            periodSeconds: 30
+            timeoutSeconds: 5
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 101  # nginx user in alpine image
+            runAsGroup: 101
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            seccompProfile:
+              type: RuntimeDefault
+            capabilities:
+              drop:
+                - ALL
+
       volumes:
         - name: game-data
           emptyDir: {}
         - name: game-logs
           emptyDir: {}
+        - name: nginx-config
+          configMap:
+            name: fciv-net-nginx-config
 
       dnsPolicy: ClusterFirst
       restartPolicy: Always

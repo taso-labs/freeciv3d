@@ -9,13 +9,15 @@ metadata:
   annotations:
     cloud.google.com/backend-config: '{"default": "fciv-net-backend"}'
 spec:
-  type: ClusterIP
+  type: NodePort  # Required for GKE Ingress (ClusterIP not supported)
   selector:
     app: fciv-net
   ports:
+    # Route web traffic through nginx sidecar for WebSocket proxy support
+    # nginx proxies to Tomcat (localhost:8080) and game proxies (localhost:7XXX)
     - name: web
       port: 8080
-      targetPort: web
+      targetPort: 8081  # nginx sidecar port (Tomcat uses 8080 internally)
       protocol: TCP
     - name: proxy
       port: 8002

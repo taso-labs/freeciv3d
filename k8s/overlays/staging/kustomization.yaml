@@ -64,7 +64,7 @@ patches:
         path: /spec/maxReplicas
         value: 3
 
-  # Patch Ingress for staging static IP
+  # Patch Ingress for staging static IP and domain
   - target:
       kind: Ingress
       name: fciv-net-public
@@ -72,6 +72,38 @@ patches:
       - op: replace
         path: /metadata/annotations/kubernetes.io~1ingress.global-static-ip-name
         value: "freeciv-staging-public-ip"
+      - op: replace
+        path: /spec/rules/0/host
+        value: "freeciv-staging.clashai.live"
+
+  # Patch ManagedCertificate for staging domain
+  - target:
+      kind: ManagedCertificate
+      name: fciv-net-cert
+    patch: |-
+      - op: replace
+        path: /spec/domains/0
+        value: "freeciv-staging.clashai.live"
+
+  # Patch Deployment with staging FreeCiv web URL for observer iframes
+  # This URL is used by LLM Gateway to generate observer iframe URLs
+  # ROOT.war deploys at / context, so no path prefix needed
+  - target:
+      kind: Deployment
+      name: fciv-net
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/env/15/value
+        value: "https://freeciv-staging.clashai.live"
+
+  # Patch Flyway Job with Cloud SQL instance
+  - target:
+      kind: Job
+      name: flyway-migrate
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/initContainers/0/args/6
+        value: "clashai-staging:us-central1:freeciv-staging-db-4e19c888"
 
 # ConfigMap generator for staging-specific config
 configMapGenerator:

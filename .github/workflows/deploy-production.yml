@@ -150,6 +150,37 @@ jobs:
         run: |
           kubectl apply -k k8s/overlays/production
 
+      - name: Run database migrations
+        run: |
+          echo "=== Running Flyway Database Migrations ==="
+
+          # Delete existing Job if it exists (Jobs are immutable)
+          kubectl delete job flyway-migrate -n ${{ env.APP_NAMESPACE }} --ignore-not-found=true
+
+          # Wait for deletion to complete (avoids race condition)
+          kubectl wait --for=delete job/flyway-migrate -n ${{ env.APP_NAMESPACE }} --timeout=60s 2>/dev/null || true
+
+          # Re-apply just the Flyway Job to trigger a new run
+          kubectl apply -k k8s/overlays/production
+
+          # Wait for the Job to complete (timeout after 5 minutes)
+          echo "Waiting for Flyway migration to complete..."
+          if ! kubectl wait --for=condition=complete job/flyway-migrate -n ${{ env.APP_NAMESPACE }} --timeout=300s; then
+            echo "::error::Flyway migration failed or timed out"
+            echo ""
+            echo "=== Flyway Job Status ==="
+            kubectl get job flyway-migrate -n ${{ env.APP_NAMESPACE }} -o wide
+            echo ""
+            echo "=== Flyway Pod Logs ==="
+            kubectl logs -l app=flyway-migrate -n ${{ env.APP_NAMESPACE }} --all-containers=true --tail=100
+            exit 1
+          fi
+
+          echo "✓ Database migrations completed successfully"
+          echo ""
+          echo "=== Migration Job Status ==="
+          kubectl get job flyway-migrate -n ${{ env.APP_NAMESPACE }}
+
       - name: Wait for rollout
         run: |
           kubectl rollout status deployment/fciv-net -n ${{ env.APP_NAMESPACE }} --timeout=600s
