@@ -13,9 +13,14 @@ export DB_NAME="${DB_NAME:-freeciv_web}"
 # docker user is in tomcat group, so can write without sudo
 # ROOT.xml is for ROOT.war deployed at / context
 echo "Configuring Tomcat database connection..."
+
+# Escape special characters for sed replacement (& \ | need escaping)
+# This allows passwords with special characters like & # \ | etc.
+DB_PASSWORD_ESCAPED=$(printf '%s\n' "$DB_PASSWORD" | sed -e 's/[&\|]/\\&/g')
+
 sed -e "s|#DB_HOST#|${DB_HOST}|g" \
     -e "s|#DB_USER#|${DB_USER}|g" \
-    -e "s|#DB_PASSWORD#|${DB_PASSWORD}|g" \
+    -e "s|#DB_PASSWORD#|${DB_PASSWORD_ESCAPED}|g" \
     -e "s|#DB_NAME#|${DB_NAME}|g" \
     /docker/config/web.context.tmpl > /var/lib/tomcat10/conf/Catalina/localhost/ROOT.xml
 echo "✓ Tomcat database configuration ready"
