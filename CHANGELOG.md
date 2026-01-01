@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.3](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.2...freeciv3d-v0.3.3) (2026-01-01)
+
+
+### Bug Fixes
+
+* Password escaping + staging deployment strategy ([#46](https://github.com/taso-ventures/freeciv3d/issues/46)) ([08a76c4](https://github.com/taso-ventures/freeciv3d/commit/08a76c4210366d1e4c2e44b20f5207705f21076e))
+
 ## [0.3.2](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.1...freeciv3d-v0.3.2) (2025-12-30)
 
 
