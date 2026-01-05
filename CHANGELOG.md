@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.4](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.3...freeciv3d-v0.3.4) (2026-01-01)
+
+
+### Bug Fixes
+
+* **k8s:** Add apex domain to CSP frame-ancestors for iframe embedding ([5a1a4af](https://github.com/taso-ventures/freeciv3d/commit/5a1a4afd029dc16833b8fe8c6897a32e5a84abab))
+
 ## [0.3.3](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.2...freeciv3d-v0.3.3) (2026-01-01)
 
 
