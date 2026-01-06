@@ -176,7 +176,7 @@ jobs:
 
       # Slack thread reply on success (best-effort, won't fail deployment)
       - name: Notify Slack on success
-        if: success()
+        if: success() && steps.slack_start.outputs.ts
         continue-on-error: true
         uses: slackapi/slack-github-action@v2.0.0
         with:
@@ -208,7 +208,7 @@ jobs:
 
       # Slack thread reply on failure (best-effort, won't affect job status)
       - name: Notify Slack on failure
-        if: failure()
+        if: failure() && steps.slack_start.outputs.ts
         continue-on-error: true
         uses: slackapi/slack-github-action@v2.0.0
         with:
@@ -228,7 +228,7 @@ jobs:
                   - type: "mrkdwn"
                     text: "*Version:*\n`${{ steps.version.outputs.version }}`"
                   - type: "mrkdwn"
-                    text: "*Status:*\nRollback initiated"
+                    text: "*Status:*\nManual intervention required"
               - type: "section"
                 text:
                   type: "mrkdwn"
