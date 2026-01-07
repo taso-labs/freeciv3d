@@ -8,6 +8,7 @@ Handles headless LLM agent connections without browser requirements
 
 import json
 import logging
+import sys
 import time
 import uuid
 import asyncio
@@ -54,24 +55,35 @@ from activity_constants import *
 from order_constants import *
 from packet_converter import convert_action_to_packet
 
-logger = logging.getLogger("freeciv-proxy")
-
-# Add file handler for persistent debug logging
+# Configure logging to output to BOTH stdout (for GCloud) and file (for local debugging)
+# GCloud Logging captures stdout from containers, but not file logs
 import os
+
+# Set up root logger for freeciv-proxy with stdout handler
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout),  # GCloud captures stdout
+    ]
+)
+
+logger = logging.getLogger("freeciv-proxy")
+logger.setLevel(logging.DEBUG)  # Allow DEBUG level for file handler
+
+# Add file handler for detailed debug logging (if directory exists)
 try:
     debug_log_path = "/docker/logs/llm-handler-debug.log"
-    os.makedirs(os.path.dirname(debug_log_path), exist_ok=True)
-    file_handler = logging.FileHandler(debug_log_path)
-    file_handler.setLevel(logging.DEBUG)
-    file_handler.setFormatter(logging.Formatter(
-        '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-    ))
-    logger.addHandler(file_handler)
-    logger.info("=" * 80)
-    logger.info("LLM Handler debug logging initialized")
-    logger.info("=" * 80)
+    if os.path.exists(os.path.dirname(debug_log_path)):
+        file_handler = logging.FileHandler(debug_log_path)
+        file_handler.setLevel(logging.DEBUG)
+        file_handler.setFormatter(logging.Formatter(
+            '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+        ))
+        logger.addHandler(file_handler)
+        logger.info("LLM Handler file logging enabled: %s", debug_log_path)
 except Exception as e:
-    print(f"WARNING: Could not initialize file logging: {e}", flush=True)
+    logger.warning("Could not initialize file logging: %s", e)
 
 # Global registry for active LLM agents
 llm_agents = {}
@@ -116,7 +128,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
 
     This is the PRODUCTION WebSocket handler for LLM agents.
     Endpoint: /llmsocket/8002
-    Architecture: game_arena → llm-gateway (port 8003) → LLMWSHandler → GameSession
+    Architecture: agent-clash → llm-gateway (port 8003) → LLMWSHandler → GameSession
 
     Player ID assignment uses GameSession.allocate_ai_slot() for sequential, thread-safe
     allocation (see game_session_manager.py). This integrates with civserver via /take commands.
@@ -642,6 +654,10 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 self._flush_packet_buffer()
                 self.packet_buffer.clear()  # Ensure buffer is empty after flush
 
+                # CHECK IF GAME SHOULD BE RESUMED after successful reconnection
+                # This handles the case where both agents reconnect after a coordinated disconnect
+                self._check_and_resume_game()
+
             except Exception as e:
                 logger.exception(f"Error in player registration and nation selection: {e}")
 
@@ -851,17 +867,17 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 error_response['correlation_id'] = correlation_id
             self.write_message(json.dumps(error_response))
 
-    def _normalize_game_arena_action(self, action_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Normalize game_arena action format to proxy format.
+    def _normalize_agent_clash_action(self, action_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Normalize agent-clash action format to proxy format.
 
-        game_arena sends:
+        agent-clash sends:
             {"action_type": "tech_research", "actor_id": 1, "target": {"value": "Alphabet"}}
 
         Proxy expects:
             {"type": "tech_research", "tech_name": "alphabet", "player_id": 1}
 
         Args:
-            action_data: game_arena format action dict
+            action_data: agent-clash format action dict
 
         Returns:
             Normalized action dict for validation
@@ -873,13 +889,13 @@ class LLMWSHandler(websocket.WebSocketHandler):
         if not action_type:
             raise ValueError("Missing action_type field")
 
-        logger.debug(f"Normalizing game_arena action: {action_type}")
+        logger.debug(f"Normalizing agent-clash action: {action_type}")
 
         # Build normalized action
         normalized = {"type": action_type}
 
         # Map actor_id based on action type
-        # NOTE: game_arena uses actor_id for different meanings:
+        # NOTE: agent-clash uses actor_id for different meanings:
         # - unit actions: actor_id is a unit ID
         # - city actions: actor_id is a city ID
         # - player-level actions: actor_id is a player ID
@@ -984,7 +1000,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
         return normalized
 
     def _parse_canonical_action(self, action_str: str) -> Dict[str, Any]:
-        """Parse game_arena canonical format strings to JSON objects.
+        """Parse agent-clash canonical format strings to JSON objects.
 
         Canonical format: "action_type_param1(value1)_param2(value2)..."
 
@@ -1137,7 +1153,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 logger.info(f"🎯 action_data has 'action_type': {'action_type' in action_data}")
                 logger.info(f"🎯 action_data has 'type': {'type' in action_data}")
 
-            # NEW: Handle canonical string format from game_arena
+            # NEW: Handle canonical string format from agent-clash
             if isinstance(action_data, str):
                 logger.info(f"📝 Received canonical action string: {action_data}")
                 try:
@@ -1160,17 +1176,17 @@ class LLMWSHandler(websocket.WebSocketHandler):
                     self.write_message(json.dumps(error_response))
                     return
 
-            # NEW: Handle game_arena dict format with "action_type" instead of "type"
+            # NEW: Handle agent-clash dict format with "action_type" instead of "type"
             if isinstance(action_data, dict) and "action_type" in action_data and "type" not in action_data:
-                logger.info(f"📝 NORMALIZATION TRIGGERED: game_arena format detected")
+                logger.info(f"📝 NORMALIZATION TRIGGERED: agent-clash format detected")
                 logger.info(f"📝 Original action_data: {action_data}")
                 try:
-                    action_data = self._normalize_game_arena_action(action_data)
+                    action_data = self._normalize_agent_clash_action(action_data)
                     logger.info(f"✅ NORMALIZATION SUCCESS: {action_data}")
                     logger.info(f"✅ Normalized action has 'type': {'type' in action_data}")
                     logger.info(f"✅ Normalized action has 'tech_name': {'tech_name' in action_data if action_data.get('type') == 'tech_research' else 'N/A'}")
                 except Exception as e:
-                    logger.error(f"❌ Failed to normalize game_arena action: {e}")
+                    logger.error(f"❌ Failed to normalize agent-clash action: {e}")
                     error_response = {
                         'type': 'action_rejected',
                         'error_code': 'E135',
@@ -3466,6 +3482,136 @@ class LLMWSHandler(websocket.WebSocketHandler):
 
         return distributed_rate_limiter.check_limit(self.agent_id, 'legacy')
 
+    def _pause_and_suspend_partner(self):
+        """Pause game and suspend partner when this agent disconnects.
+
+        This prevents AI takeover by:
+        1. Sending /set timeout 0 to pause the game
+        2. Suspending the partner's session
+        3. Closing the partner's WebSocket to trigger coordinated reconnection
+
+        Both agents will be suspended and can reconnect within 60s.
+        When both reconnect, the game will resume with original timeout.
+        """
+        try:
+            # Get game session
+            game_session = game_session_manager.sessions.get(self.game_id)
+            if not game_session:
+                logger.warning(f"No game session found for {self.game_id} - skipping pause")
+                return
+
+            # Only pause if game has started (not in pregame/setup phase)
+            if not game_session.game_started:
+                logger.debug(f"Game {self.game_id} not started yet - skipping pause")
+                return
+
+            # Pause the game (prevents AI takeover by stopping turn timer)
+            game_session.pause_game(self.civcom, f"{self.agent_id} disconnected")
+
+            # Find and suspend partner(s)
+            for agent_id, player_info in game_session.players.items():
+                if agent_id == self.agent_id:
+                    continue  # Skip self
+
+                partner_handler = player_info.handler
+                if not partner_handler:
+                    continue
+
+                # Suspend partner's session
+                if partner_handler.session_id:
+                    session_manager.suspend_session(
+                        partner_handler.session_id,
+                        f"partner_{self.agent_id}_disconnected"
+                    )
+                    logger.info(
+                        f"Suspended partner {agent_id} session due to {self.agent_id} disconnect"
+                    )
+
+                # Close partner's WebSocket to trigger coordinated reconnection
+                # Use custom close code 4001 to indicate partner-triggered disconnect
+                try:
+                    # Check if WebSocket is already closing to prevent double-close issues
+                    # when both agents disconnect simultaneously
+                    ws_conn = getattr(partner_handler, 'ws_connection', None)
+                    is_closing = False
+                    if ws_conn:
+                        # Tornado WebSocketProtocol has is_closing() method
+                        is_closing_fn = getattr(ws_conn, 'is_closing', None)
+                        if callable(is_closing_fn):
+                            is_closing = is_closing_fn()
+
+                    if not is_closing:
+                        partner_handler.close(code=4001, reason="Partner disconnected - game paused")
+                        logger.info(f"Closed partner {agent_id} WebSocket for coordinated disconnect")
+                    else:
+                        logger.debug(f"Partner {agent_id} WebSocket already closing, skipping close")
+                except Exception as e:
+                    logger.warning(f"Failed to close partner {agent_id} WebSocket: {e}")
+
+        except Exception as e:
+            logger.error(f"Error in _pause_and_suspend_partner for {self.agent_id}: {e}")
+
+    def _check_and_resume_game(self):
+        """Check if game should be resumed after reconnection.
+
+        Called after successful authentication/reconnection. If the game
+        is paused and all players are now reconnected, resume the game
+        by restoring the original timeout.
+        """
+        if not self.game_id:
+            return
+
+        try:
+            game_session = game_session_manager.sessions.get(self.game_id)
+            if not game_session:
+                return
+
+            # Only proceed if game is paused
+            if not game_session.is_paused:
+                return
+
+            # Update handler reference and check all_connected under lock
+            # This prevents race conditions when multiple handlers reconnect simultaneously
+            all_connected = False
+            with game_session._players_lock:
+                # Update the player's handler reference in the game session
+                # (needed because handler is new after reconnection)
+                if self.agent_id in game_session.players:
+                    game_session.players[self.agent_id].handler = self
+                    logger.debug(f"Updated handler reference for {self.agent_id} in game session")
+
+                # Check if all players are now connected with valid handlers and civcom
+                all_connected = True
+                for agent_id, player_info in game_session.players.items():
+                    handler = player_info.handler
+                    if not handler:
+                        logger.debug(f"Player {agent_id} missing handler")
+                        all_connected = False
+                        break
+                    if not handler.civcom:
+                        logger.debug(f"Player {agent_id} missing civcom")
+                        all_connected = False
+                        break
+                    if handler.civcom.stopped:
+                        logger.debug(f"Player {agent_id} civcom is stopped")
+                        all_connected = False
+                        break
+
+            # Resume outside the lock (to avoid holding lock during I/O)
+            if all_connected:
+                logger.info(
+                    f"All players reconnected for game {self.game_id} - resuming game\n"
+                    f"   Players: {list(game_session.players.keys())}"
+                )
+                game_session.resume_game(self.civcom)
+            else:
+                logger.debug(
+                    f"Game {self.game_id} still paused - waiting for all players to reconnect"
+                )
+
+        except Exception as e:
+            logger.error(f"Error in _check_and_resume_game for {self.agent_id}: {e}")
+
     def on_close(self):
         """Handle WebSocket connection close"""
         # INVESTIGATION: Log detailed closure information
@@ -3486,6 +3632,11 @@ class LLMWSHandler(websocket.WebSocketHandler):
             f"   CivCom stopped: {self.civcom.stopped if self.civcom else 'N/A'}\n"
             f"   Call stack:\n{''.join(traceback.format_stack())}"
         )
+
+        # PAUSE GAME AND SUSPEND PARTNER before session cleanup
+        # This must happen while civcom is still valid to send /set timeout 0
+        if self.game_id and self.civcom and not self.civcom.stopped:
+            self._pause_and_suspend_partner()
 
         # Suspend session to allow reconnection within timeout window
         # (Uses existing suspend_session infrastructure that was never wired up)

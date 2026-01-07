@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import random
+import sys
 import time
 import uuid
 from typing import TYPE_CHECKING, Dict, Any
@@ -46,17 +47,16 @@ else:
     from utils.constants import *
     from validation import sanitize_for_logging
 
-# Configure logging
-import os
+# Configure logging to output to BOTH stdout (for GCloud) and file (for local debugging)
+# GCloud Logging captures stdout from containers
 os.makedirs("logs", exist_ok=True)
 
-# Configure both console and file logging
 logging.basicConfig(
     level=getattr(logging, settings.log_level.upper()),
     format=settings.log_format,
     handlers=[
-        logging.StreamHandler(),  # Console output
-        logging.FileHandler("logs/gateway.log"),  # File output
+        logging.StreamHandler(sys.stdout),  # GCloud captures stdout (not stderr)
+        logging.FileHandler("logs/gateway.log"),  # File for local debugging
     ]
 )
 logger = logging.getLogger("llm-gateway")
@@ -168,12 +168,12 @@ class LLMGateway:
             }
 
     async def route_message(self, source: str, target: str, message: Dict[str, Any]) -> Dict[str, Any]:
-        """Route message between Game Arena and FreeCiv"""
+        """Route message between agent-clash and FreeCiv"""
         try:
             if target == "freeciv":
                 return await self._route_to_freeciv(message)
-            elif target == "game_arena":
-                return await self._route_to_game_arena(message)
+            elif target == "agent_clash":
+                return await self._route_to_agent_clash(message)
             else:
                 return {
                     "success": False,
@@ -944,11 +944,11 @@ class LLMGateway:
 
         return {"success": True}
 
-    async def _route_to_game_arena(self, message: Dict[str, Any]) -> Dict[str, Any]:
-        """Route message to Game Arena (not implemented in this scope)"""
+    async def _route_to_agent_clash(self, message: Dict[str, Any]) -> Dict[str, Any]:
+        """Route message to agent-clash (not implemented in this scope)"""
         return {
             "success": False,
-            "error": "Game Arena routing not implemented in this scope"
+            "error": "agent-clash routing not implemented in this scope"
         }
 
 

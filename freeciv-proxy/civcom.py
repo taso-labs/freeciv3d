@@ -352,7 +352,8 @@ class CivCom(Thread):
         
         # Game settings from PACKET_GAME_INFO
         self.citymindist = DEFAULT_CITYMINDIST  # Minimum distance between cities
-        
+        self.game_timeout = None  # Turn timeout for pause/resume functionality
+
         # Tile data storage for terrain lookups
         self.tiles = {}  # {tile_index: {terrain, extras, ...}}
 
@@ -1177,7 +1178,7 @@ class CivCom(Thread):
                 }
                 logger.info(f"Stored map info: {self.map_info['width']}x{self.map_info['height']}")
 
-            # Game info packet (turn number, citymindist, etc)
+            # Game info packet (turn number, citymindist, timeout, etc)
             elif packet_type == PACKET_GAME_INFO:
                 self.game_turn = packet.get('turn', self.game_turn)
                 # Extract citymindist (minimum distance between cities) from game info
@@ -1186,6 +1187,12 @@ class CivCom(Thread):
                 if citymindist is not None:
                     self.citymindist = citymindist
                     logger.debug(f"Updated citymindist: {self.citymindist}")
+                # Capture timeout for pause/resume functionality
+                # Only store non-zero timeouts (0 means no timeout / paused)
+                timeout = packet.get('timeout')
+                if timeout is not None and timeout > 0:
+                    self.game_timeout = timeout
+                    logger.debug(f"Stored game timeout: {self.game_timeout}s")
                 logger.debug(f"Updated game turn: {self.game_turn}")
 
             # CRITICAL: Connection info packet - contains player_num assignment
@@ -1601,7 +1608,7 @@ class CivCom(Thread):
         game_turn = getattr(self, 'game_turn', 1)
         game_phase = getattr(self, 'game_phase', 'movement')
 
-        # CRITICAL: Always include 'game' dict at top level for game_arena compatibility
+        # CRITICAL: Always include 'game' dict at top level for agent-clash compatibility
         # This dict is REQUIRED by freeciv_state.py validation
         game_dict = {
             'turn': game_turn,
@@ -2023,7 +2030,7 @@ class CivCom(Thread):
         game_turn = getattr(self, 'game_turn', 1)
         game_phase = getattr(self, 'game_phase', 'movement')
 
-        # CRITICAL: Always include 'game' dict at top level for game_arena compatibility
+        # CRITICAL: Always include 'game' dict at top level for agent-clash compatibility
         # This dict is REQUIRED by freeciv_state.py validation
         game_dict = {
             'turn': game_turn,
