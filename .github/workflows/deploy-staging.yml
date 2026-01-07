@@ -80,6 +80,40 @@ jobs:
             fi
           fi
 
+      # Notify Slack that deployment is starting (best-effort, won't fail deployment)
+      - name: Notify Slack deployment started
+        id: slack_start
+        continue-on-error: true
+        uses: slackapi/slack-github-action@v2.0.0
+        with:
+          method: chat.postMessage
+          token: ${{ secrets.SLACK_BOT_TOKEN }}
+          payload: |
+            channel: "C09T4FTME8K"
+            text: "Staging deployment started"
+            blocks:
+              - type: "header"
+                text:
+                  type: "plain_text"
+                  text: "🚀 Staging Deployment Started"
+                  emoji: true
+              - type: "section"
+                fields:
+                  - type: "mrkdwn"
+                    text: "*Environment:*\nStaging"
+                  - type: "mrkdwn"
+                    text: "*Version:*\n`${{ steps.version.outputs.version }}`"
+              - type: "section"
+                fields:
+                  - type: "mrkdwn"
+                    text: "*Triggered by:*\n${{ github.actor }}"
+                  - type: "mrkdwn"
+                    text: "*Trigger:*\n${{ github.event_name == 'workflow_dispatch' && 'Manual' || 'Automatic' }}"
+              - type: "context"
+                elements:
+                  - type: "mrkdwn"
+                    text: "<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View Workflow Run>"
+
       - name: Update Kustomize images
         run: |
           cd k8s/overlays/staging
@@ -139,3 +173,72 @@ jobs:
           echo ""
           echo "=== Services ==="
           kubectl get services -n ${{ env.APP_NAMESPACE }}
+
+      # Slack thread reply on success (best-effort, won't fail deployment)
+      - name: Notify Slack on success
+        if: success() && steps.slack_start.outputs.ts
+        continue-on-error: true
+        uses: slackapi/slack-github-action@v2.0.0
+        with:
+          method: chat.postMessage
+          token: ${{ secrets.SLACK_BOT_TOKEN }}
+          payload: |
+            channel: "C09T4FTME8K"
+            thread_ts: "${{ steps.slack_start.outputs.ts }}"
+            text: "✅ Staging deployment successful"
+            blocks:
+              - type: "section"
+                text:
+                  type: "mrkdwn"
+                  text: "✅ *Deployment completed successfully!*"
+              - type: "section"
+                fields:
+                  - type: "mrkdwn"
+                    text: "*Version:*\n`${{ steps.version.outputs.version }}`"
+                  - type: "mrkdwn"
+                    text: "*URL:*\n<https://staging.agentclash.ai|staging.agentclash.ai>"
+              - type: "actions"
+                elements:
+                  - type: "button"
+                    text:
+                      type: "plain_text"
+                      text: "View Workflow Run"
+                      emoji: true
+                    url: "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+      # Slack thread reply on failure (best-effort, won't affect job status)
+      - name: Notify Slack on failure
+        if: failure() && steps.slack_start.outputs.ts
+        continue-on-error: true
+        uses: slackapi/slack-github-action@v2.0.0
+        with:
+          method: chat.postMessage
+          token: ${{ secrets.SLACK_BOT_TOKEN }}
+          payload: |
+            channel: "C09T4FTME8K"
+            thread_ts: "${{ steps.slack_start.outputs.ts }}"
+            text: "❌ Staging deployment failed"
+            blocks:
+              - type: "section"
+                text:
+                  type: "mrkdwn"
+                  text: "❌ *Deployment failed!*"
+              - type: "section"
+                fields:
+                  - type: "mrkdwn"
+                    text: "*Version:*\n`${{ steps.version.outputs.version }}`"
+                  - type: "mrkdwn"
+                    text: "*Status:*\nManual intervention required"
+              - type: "section"
+                text:
+                  type: "mrkdwn"
+                  text: "⚠️ Check the workflow run for details."
+              - type: "actions"
+                elements:
+                  - type: "button"
+                    text:
+                      type: "plain_text"
+                      text: "View Workflow Run"
+                      emoji: true
+                    url: "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+                    style: "danger"
