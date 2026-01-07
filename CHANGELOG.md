@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.3.5](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.4...freeciv3d-v0.3.5) (2026-01-07)
+
+
+### Features
+
+* **ci:** Add Slack CI/CD notifications to deployment workflows ([#49](https://github.com/taso-ventures/freeciv3d/issues/49)) ([f676661](https://github.com/taso-ventures/freeciv3d/commit/f67666187a25a4ee3f1a75cd91883f32b328f912))
+
+
+### Bug Fixes
+
+* **proxy:** Address code review blockers for pause/resume functionality ([#51](https://github.com/taso-ventures/freeciv3d/issues/51)) ([d5c9082](https://github.com/taso-ventures/freeciv3d/commit/d5c9082d5fbd60359b449b6e34c9ef5b77387450))
+
+
+### Documentation
+
+* Add CLAUDE.md development guidelines to repository ([#52](https://github.com/taso-ventures/freeciv3d/issues/52)) ([33cf2b3](https://github.com/taso-ventures/freeciv3d/commit/33cf2b3b4066f238002e04c223f370741cfad381))
+
 ## [0.3.4](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.3...freeciv3d-v0.3.4) (2026-01-01)
 
 
