@@ -148,17 +148,19 @@ class GameSession:
             pause_packet = json.dumps({"pid": PACKET_CHAT_MSG_REQ, "message": "/set timeout 0"})
             civcom.queue_to_civserver(pause_packet)
             civcom.send_packets_to_civserver()
-
+            # State update immediately after successful send (before logging)
             self.is_paused = True
-            logger.info(
-                f"⏸️ Game {self.game_id} PAUSED: {disconnect_reason}\n"
-                f"   Original timeout: {self.original_timeout}s\n"
-                f"   Players: {list(self.players.keys())}"
-            )
-            return True
         except Exception as e:
             logger.error(f"Game {self.game_id}: Failed to pause game: {e}")
             return False
+
+        # Logging outside try block - logging failure shouldn't affect return value
+        logger.info(
+            f"⏸️ Game {self.game_id} PAUSED: {disconnect_reason}\n"
+            f"   Original timeout: {self.original_timeout}s\n"
+            f"   Players: {list(self.players.keys())}"
+        )
+        return True
 
     def resume_game(self, civcom: Any) -> bool:
         """Resume the game by restoring original timeout.

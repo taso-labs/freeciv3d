@@ -74,7 +74,8 @@ logger.setLevel(logging.DEBUG)  # Allow DEBUG level for file handler
 # Add file handler for detailed debug logging (if directory exists)
 try:
     debug_log_path = "/docker/logs/llm-handler-debug.log"
-    if os.path.exists(os.path.dirname(debug_log_path)):
+    log_dir = os.path.dirname(debug_log_path)
+    if os.path.exists(log_dir):
         file_handler = logging.FileHandler(debug_log_path)
         file_handler.setLevel(logging.DEBUG)
         file_handler.setFormatter(logging.Formatter(
@@ -82,6 +83,8 @@ try:
         ))
         logger.addHandler(file_handler)
         logger.info("LLM Handler file logging enabled: %s", debug_log_path)
+    else:
+        logger.debug("File logging disabled: directory %s does not exist (using stdout only)", log_dir)
 except Exception as e:
     logger.warning("Could not initialize file logging: %s", e)
 

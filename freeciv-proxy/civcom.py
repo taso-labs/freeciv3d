@@ -1188,7 +1188,8 @@ class CivCom(Thread):
                     self.citymindist = citymindist
                     logger.debug(f"Updated citymindist: {self.citymindist}")
                 # Capture timeout for pause/resume functionality
-                # Only store non-zero timeouts (0 means no timeout / paused)
+                # Only store positive timeouts - zero means game is paused (no turn timer)
+                # We preserve the original positive timeout so we can restore it on resume
                 timeout = packet.get('timeout')
                 if timeout is not None and timeout > 0:
                     self.game_timeout = timeout
