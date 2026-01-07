@@ -73,14 +73,14 @@ sequenceDiagram
 
 ### 1.3 LLM Gateway Integration Architecture
 
-The llm-gateway component acts as a WebSocket pass-through layer between game_arena and freeciv-proxy, providing connection management, rate limiting, and message transformation.
+The llm-gateway component acts as a WebSocket pass-through layer between agent-clash and freeciv-proxy, providing connection management, rate limiting, and message transformation.
 
 #### Component Diagram
 
 ```mermaid
 graph TB
-    subgraph "game_arena (External)"
-        GA[Game Arena<br/>Agents]
+    subgraph "agent-clash (External)"
+        GA[agent-clash<br/>Agents]
     end
 
     subgraph "freeciv3d Docker Container"
@@ -138,7 +138,7 @@ The critical fix in commit d1083b2 corrected a Tornado IOLoop threading violatio
 
 ```mermaid
 sequenceDiagram
-    participant GA as game_arena
+    participant GA as agent-clash
     participant GW as LLM Gateway<br/>(Port 8003)
     participant LH as LLM Handler<br/>(Main Thread)
     participant CC as CivCom Thread<br/>(Worker)
@@ -172,7 +172,7 @@ sequenceDiagram
 - Packets queued to wrong IOLoop were never delivered → black screen
 - Caused code 1006 WebSocket disconnects after initial connection
 - **Fix**: Use `conn.io_loop` (captured during WebSocket setup, always main thread)
-- Result: Packets flow correctly from civserver → proxy → gateway → game_arena
+- Result: Packets flow correctly from civserver → proxy → gateway → agent-clash
 
 #### Port Mapping Reference
 
@@ -180,7 +180,7 @@ sequenceDiagram
 |---------|--------------|-----------------|---------|
 | nginx | 80 | `:8080` | Web UI, static assets |
 | Tomcat | 8080 | `:8080` (proxied) | Java servlets, JSP |
-| **LLM Gateway** | 8003 | `:8003` | **game_arena WebSocket API** |
+| **LLM Gateway** | 8003 | `:8003` | **agent-clash WebSocket API** |
 | **FreeCiv Proxy** | 8002 | `:8002` | **Main proxy for all connections** |
 | civserver | 6000-6009 | Internal only | Game server instances |
 | Proxy per-game | 7000-7009 | Internal only | Dedicated proxies (managed by publite2) |
@@ -195,7 +195,7 @@ The LLM Gateway integration includes a **dynamic server pool management system**
 
 ```mermaid
 sequenceDiagram
-    participant GA as game_arena
+    participant GA as agent-clash
     participant SA as ServerAllocator<br/>(Servlet)
     participant DB as MySQL<br/>(servers table)
     participant SR as ServerRelease<br/>(Servlet)
@@ -342,7 +342,7 @@ sequenceDiagram
 
 ```mermaid
 sequenceDiagram
-    participant GA as game_arena
+    participant GA as agent-clash
     participant GW as Gateway
     participant LH as LLM Handler
     participant CS as civserver
@@ -731,21 +731,21 @@ class ActionSpaceOptimizer:
 # tests/test_mvp_integration.py
 class TestMVPIntegration(unittest.TestCase):
     def setUp(self):
-        self.game_arena = GameArenaServer(MVP_CONFIG)
+        self.agent_clash = AgentClashServer(MVP_CONFIG)
         self.freeciv_server = FreeCiv3DServer(MVP_CONFIG)
 
     async def test_single_game_completion(self):
         """Test that a single game can complete successfully"""
         # Start servers
         await self.freeciv_server.start()
-        await self.game_arena.start()
+        await self.agent_clash.start()
 
         # Connect agents
         agent1 = MockLLMAgent("player1")
         agent2 = MockLLMAgent("player2")
 
         # Run game
-        result = await self.game_arena.run_game(agent1, agent2)
+        result = await self.agent_clash.run_game(agent1, agent2)
 
         self.assertIsNotNone(result.winner)
         self.assertLess(result.turns, 200)

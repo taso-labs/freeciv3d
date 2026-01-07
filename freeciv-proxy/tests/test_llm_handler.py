@@ -391,7 +391,7 @@ class TestActionValidatorErrorCodes(unittest.TestCase):
 class TestTechActionFormatNormalization(unittest.TestCase):
     """Regression tests for tech action format normalization bug fix.
 
-    Bug: _normalize_game_arena_action only handled target['value'] but
+    Bug: _normalize_agent_clash_action only handled target['value'] but
     actions came as target['tech'], causing all tech_research actions to fail.
 
     Fixed in llm_handler.py lines 844-853 by adding support for:
@@ -402,7 +402,7 @@ class TestTechActionFormatNormalization(unittest.TestCase):
 
     def setUp(self):
         """Set up test fixtures"""
-        # Import LLMHandler to test _normalize_game_arena_action
+        # Import LLMHandler to test _normalize_agent_clash_action
         from llm_handler import LLMWSHandler
         from unittest.mock import Mock
 
@@ -410,7 +410,7 @@ class TestTechActionFormatNormalization(unittest.TestCase):
         self.mock_request.remote_ip = '127.0.0.1'
         # Create handler with minimal mocking
         self.handler = Mock(spec=LLMWSHandler)
-        self.handler._normalize_game_arena_action = LLMWSHandler._normalize_game_arena_action.__get__(
+        self.handler._normalize_agent_clash_action = LLMWSHandler._normalize_agent_clash_action.__get__(
             self.handler, LLMWSHandler
         )
 
@@ -426,7 +426,7 @@ class TestTechActionFormatNormalization(unittest.TestCase):
             'target': {'tech': 'Advanced Flight'}
         }
 
-        result = self.handler._normalize_game_arena_action(action_data)
+        result = self.handler._normalize_agent_clash_action(action_data)
 
         self.assertEqual(result['type'], 'tech_research')
         self.assertEqual(result['tech_name'], 'advanced flight')  # lowercase
@@ -439,7 +439,7 @@ class TestTechActionFormatNormalization(unittest.TestCase):
             'target': {'tech_name': 'Bronze Working'}
         }
 
-        result = self.handler._normalize_game_arena_action(action_data)
+        result = self.handler._normalize_agent_clash_action(action_data)
 
         self.assertEqual(result['type'], 'tech_research')
         self.assertEqual(result['tech_name'], 'bronze working')
@@ -452,7 +452,7 @@ class TestTechActionFormatNormalization(unittest.TestCase):
             'target': {'value': 'Pottery'}
         }
 
-        result = self.handler._normalize_game_arena_action(action_data)
+        result = self.handler._normalize_agent_clash_action(action_data)
 
         self.assertEqual(result['type'], 'tech_research')
         self.assertEqual(result['tech_name'], 'pottery')
@@ -465,7 +465,7 @@ class TestTechActionFormatNormalization(unittest.TestCase):
             'target': 'Alphabet'
         }
 
-        result = self.handler._normalize_game_arena_action(action_data)
+        result = self.handler._normalize_agent_clash_action(action_data)
 
         self.assertEqual(result['type'], 'tech_research')
         self.assertEqual(result['tech_name'], 'alphabet')
@@ -479,7 +479,7 @@ class TestTechActionFormatNormalization(unittest.TestCase):
         }
 
         with self.assertRaises(ValueError) as context:
-            self.handler._normalize_game_arena_action(action_data)
+            self.handler._normalize_agent_clash_action(action_data)
 
         self.assertIn('Cannot extract tech_name', str(context.exception))
 
