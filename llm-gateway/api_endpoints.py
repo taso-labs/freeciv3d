@@ -755,16 +755,111 @@ async def get_observer_urls(
 
         logger.info(f"Generated observer URLs for game {game_id}: port={game_port}")
 
+        # Include YouTube URLs if streaming is active
+        youtube_urls = None
+        if gateway and game_id in gateway.game_sessions:
+            session = gateway.game_sessions[game_id]
+            youtube_urls = session.get("youtube_urls")
+
         return {
             "game_id": game_id,
             "civserver_port": game_port,
-            "observer_urls": observer_urls
+            "observer_urls": observer_urls,
+            "youtube_urls": youtube_urls
         }
 
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error getting observer URLs for game {game_id}: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+# Streaming endpoints
+@router.get("/games/{game_id}/stream/status")
+async def get_stream_status(
+    game_id: str,
+    auth: Dict[str, Any] = Depends(verify_api_key)
+) -> Dict[str, Any]:
+    """
+    Get the status of a YouTube stream for a game.
+
+    Returns stream information if active, or 404 if no stream exists.
+    """
+    try:
+        gw = get_gateway()
+
+        # Check if StreamManager exists
+        if not hasattr(gw, 'stream_manager') or gw.stream_manager is None:
+            raise HTTPException(
+                status_code=501,
+                detail="Streaming not enabled on this gateway instance"
+            )
+
+        status = await gw.stream_manager.get_stream_status(game_id)
+
+        if status is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No active stream for game {game_id}"
+            )
+
+        return {
+            "success": True,
+            **status
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting stream status for {game_id}: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+@router.post("/games/{game_id}/stream/stop")
+async def stop_stream(
+    game_id: str,
+    auth: Dict[str, Any] = Depends(verify_api_key)
+) -> Dict[str, Any]:
+    """
+    Manually stop streaming a game.
+
+    Stops the K8s Job and transitions the YouTube broadcast to complete.
+    The VOD will remain available at the same YouTube URL.
+    """
+    try:
+        gw = get_gateway()
+
+        # Check if StreamManager exists
+        if not hasattr(gw, 'stream_manager') or gw.stream_manager is None:
+            raise HTTPException(
+                status_code=501,
+                detail="Streaming not enabled on this gateway instance"
+            )
+
+        # Check if stream exists before stopping
+        status = await gw.stream_manager.get_stream_status(game_id)
+        if status is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No active stream for game {game_id}"
+            )
+
+        await gw.stream_manager.stop_stream(game_id)
+
+        logger.info(f"Stream manually stopped for game {game_id}")
+
+        return {
+            "success": True,
+            "game_id": game_id,
+            "message": "Stream stopped successfully",
+            "youtube_url": status.get("youtube_url")
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error stopping stream for {game_id}: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
 
 

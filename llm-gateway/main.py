@@ -37,6 +37,7 @@ if TYPE_CHECKING:
     from .utils.safe_access import get_agent_game_id
     from .utils.constants import *
     from .validation import sanitize_for_logging
+    from .stream_manager import StreamManager
 else:
     from config import settings, get_cors_origins, get_freeciv_proxy_url, validate_settings
     from connection_manager import connection_manager
@@ -46,6 +47,7 @@ else:
     from utils.safe_access import get_agent_game_id
     from utils.constants import *
     from validation import sanitize_for_logging
+    from stream_manager import StreamManager
 
 # Configure logging to output to BOTH stdout (for GCloud) and file (for local debugging)
 # GCloud Logging captures stdout from containers
@@ -112,6 +114,15 @@ class LLMGateway:
         # Referenced by health endpoint and session status queries
         self.game_sessions: Dict[str, Dict[str, Any]] = {}
         self._running = False
+
+        # YouTube streaming manager (optional - graceful degradation if unavailable)
+        self.stream_manager = None
+        if settings.streaming_enabled:
+            try:
+                self.stream_manager = StreamManager()
+                logger.info("StreamManager initialized for YouTube streaming")
+            except Exception as e:
+                logger.warning(f"StreamManager initialization failed (streaming disabled): {e}")
 
         # Note: Complex state management removed - gateway acts as pure pass-through
         # The proxy's LLM handler manages game state, authentication, and actions
@@ -594,6 +605,21 @@ class LLMGateway:
                 del self.game_sessions[game_id]
                 return proxy_result
 
+            # Start YouTube streaming (graceful degradation on failure)
+            if self.stream_manager:
+                try:
+                    # Get the civserver port from session (set during auth)
+                    civserver_port = self.game_sessions[game_id].get("port", 6001)
+                    stream_result = await self.stream_manager.start_stream(game_id, civserver_port)
+
+                    # Store YouTube URLs in session
+                    self.game_sessions[game_id]["youtube_urls"] = stream_result.get("youtube_urls", {})
+                    logger.info(f"Started YouTube streaming for game {game_id}")
+                except Exception as e:
+                    # Streaming failure should not block game creation
+                    logger.warning(f"Failed to start streaming for game {game_id}: {e}")
+                    self.game_sessions[game_id]["streaming_error"] = str(e)
+
             # Notify spectators that the game has started
             await self.notify_spectators_game_start(game_id)
 
@@ -817,8 +843,17 @@ class LLMGateway:
             end_result = result or {"reason": "Game ended", "winner": None}
             await self.notify_spectators_game_end(game_id, end_result)
 
-            # Clean up game session
+            # Stop YouTube streaming (graceful degradation on failure)
             session = self.game_sessions[game_id]
+            if self.stream_manager and session.get("youtube_urls"):
+                try:
+                    await self.stream_manager.stop_stream(game_id)
+                    logger.info(f"Stopped YouTube streaming for game {game_id}")
+                except Exception as e:
+                    # Streaming cleanup failure should not block game cleanup
+                    logger.warning(f"Failed to stop streaming for game {game_id}: {e}")
+
+            # Clean up game session
             logger.info(f"Ending game {game_id} after {time.time() - session.get('created_at', time.time()):.1f}s")
 
             # Remove from active sessions

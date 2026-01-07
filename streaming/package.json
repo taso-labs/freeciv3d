@@ -1,0 +1,33 @@
+{
+  "name": "fciv-streamer",
+  "version": "1.0.0",
+  "description": "FreeCiv game streaming container - captures WebGL and streams to YouTube",
+  "main": "stream.js",
+  "scripts": {
+    "start": "node stream.js",
+    "test": "jest --coverage",
+    "test:watch": "jest --watch"
+  },
+  "dependencies": {
+    "puppeteer": "21.11.0"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0"
+  },
+  "jest": {
+    "testEnvironment": "node",
+    "coverageDirectory": "coverage",
+    "collectCoverageFrom": [
+      "*.js",
+      "!jest.config.js"
+    ],
+    "testMatch": [
+      "**/tests/**/*.test.js"
+    ]
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "author": "ClashAI",
+  "license": "MIT"
+}

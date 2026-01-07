@@ -79,6 +79,7 @@ class Settings(BaseSettings):
     # Feature flags
     enable_batch_actions: bool = True
     enable_metrics: bool = True
+    streaming_enabled: bool = True  # YouTube streaming for matches
 
     # Observer streaming settings
     freeciv_web_base_url: str = "http://localhost:8080"  # Base URL for FreeCiv web client
