@@ -21,6 +21,10 @@ from packet_constants import PACKET_CHAT_MSG_REQ
 
 logger = logging.getLogger("freeciv-proxy")
 
+# Constants for timeout validation
+DEFAULT_GAME_TIMEOUT = 60  # seconds - default timeout if unknown
+MAX_GAME_TIMEOUT = 3600  # 1 hour max - prevents command injection via oversized values
+
 
 class GamePhase(Enum):
     """Game session phases"""
@@ -69,10 +73,15 @@ class GameSession:
         self.created_at = time.time()
         self._next_ai_slot = 1  # AI slot counter
         self._ai_slot_lock = threading.Lock()  # Lock for thread-safe AI slot allocation
+        self._players_lock = threading.Lock()  # Lock for thread-safe player handler mutations
 
         # Game configuration (applied by first player)
         self.config_applied = False
         self.game_config: Optional[Dict[str, Any]] = None
+
+        # Pause/resume state for coordinated disconnection handling
+        self.original_timeout: Optional[int] = None  # Store original timeout for resume
+        self.is_paused: bool = False  # Track if game is currently paused
 
     def allocate_ai_slot(self) -> int:
         """Thread-safe AI slot allocation for /take commands
@@ -101,6 +110,99 @@ class GameSession:
                 f"   Total players in session: {len(self.players)}"
             )
             return slot
+
+    def pause_game(self, civcom: Any, disconnect_reason: str = "agent_disconnected") -> bool:
+        """Pause the game by setting timeout to 0.
+
+        This prevents AI takeover when an agent disconnects mid-game.
+        The civserver's autotoggle feature won't trigger because no turn
+        timer is running.
+
+        Args:
+            civcom: CivCom instance to send the /set timeout command through
+            disconnect_reason: Reason for pausing (for logging)
+
+        Returns:
+            True if pause command was sent, False if already paused or failed
+        """
+        if self.is_paused:
+            logger.debug(f"Game {self.game_id} already paused")
+            return False
+
+        if not civcom:
+            logger.error(f"Game {self.game_id}: Cannot pause - no civcom connection")
+            return False
+
+        # Store original timeout if not already stored
+        if self.original_timeout is None:
+            timeout = getattr(civcom, 'game_timeout', None)
+            # Validate and sanitize timeout value
+            if timeout and isinstance(timeout, int) and 0 < timeout <= MAX_GAME_TIMEOUT:
+                self.original_timeout = timeout
+            else:
+                self.original_timeout = DEFAULT_GAME_TIMEOUT
+            logger.info(f"Game {self.game_id}: Captured original timeout: {self.original_timeout}s")
+
+        # Send /set timeout 0 to pause the game
+        try:
+            pause_packet = json.dumps({"pid": PACKET_CHAT_MSG_REQ, "message": "/set timeout 0"})
+            civcom.queue_to_civserver(pause_packet)
+            civcom.send_packets_to_civserver()
+            # State update immediately after successful send (before logging)
+            self.is_paused = True
+        except Exception as e:
+            logger.error(f"Game {self.game_id}: Failed to pause game: {e}")
+            return False
+
+        # Logging outside try block - logging failure shouldn't affect return value
+        logger.info(
+            f"⏸️ Game {self.game_id} PAUSED: {disconnect_reason}\n"
+            f"   Original timeout: {self.original_timeout}s\n"
+            f"   Players: {list(self.players.keys())}"
+        )
+        return True
+
+    def resume_game(self, civcom: Any) -> bool:
+        """Resume the game by restoring original timeout.
+
+        Called when all players have reconnected after a coordinated
+        disconnect.
+
+        Args:
+            civcom: CivCom instance to send the /set timeout command through
+
+        Returns:
+            True if resume command was sent, False if not paused or failed
+        """
+        if not self.is_paused:
+            logger.debug(f"Game {self.game_id} not paused, nothing to resume")
+            return False
+
+        if not civcom:
+            logger.error(f"Game {self.game_id}: Cannot resume - no civcom connection")
+            return False
+
+        timeout = self.original_timeout or DEFAULT_GAME_TIMEOUT
+
+        # Validate timeout is within bounds (security: prevents command injection)
+        if not isinstance(timeout, int) or timeout < 0 or timeout > MAX_GAME_TIMEOUT:
+            logger.warning(f"Game {self.game_id}: Invalid timeout {timeout}, using default {DEFAULT_GAME_TIMEOUT}")
+            timeout = DEFAULT_GAME_TIMEOUT
+
+        try:
+            resume_packet = json.dumps({"pid": PACKET_CHAT_MSG_REQ, "message": f"/set timeout {timeout}"})
+            civcom.queue_to_civserver(resume_packet)
+            civcom.send_packets_to_civserver()
+
+            self.is_paused = False
+            logger.info(
+                f"▶️ Game {self.game_id} RESUMED: timeout restored to {timeout}s\n"
+                f"   Players: {list(self.players.keys())}"
+            )
+            return True
+        except Exception as e:
+            logger.error(f"Game {self.game_id}: Failed to resume game: {e}")
+            return False
 
     async def configure_game_settings(self, config: Dict[str, Any], civcom: Any) -> bool:
         """Apply game settings via chat commands BEFORE any player selects nation.

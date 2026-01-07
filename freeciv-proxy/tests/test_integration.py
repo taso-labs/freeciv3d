@@ -164,12 +164,12 @@ class TestLLMIntegration(unittest.TestCase):
         self.assertEqual(result.error_code, 'E003')  # Unknown action type
 
     def test_normalize_actor_id_for_unit_and_player_actions(self):
-        """Ensure that game_arena actor_id is mapped correctly to unit_id or player_id"""
+        """Ensure that agent-clash actor_id is mapped correctly to unit_id or player_id"""
         handler = self.create_mock_handler()
 
         # Unit action example (settler building a city) - actor_id should map to unit_id
         unit_action = {'action_type': 'unit_build_city', 'actor_id': 101}
-        normalized = handler._normalize_game_arena_action(unit_action)
+        normalized = handler._normalize_agent_clash_action(unit_action)
         self.assertEqual(normalized.get('type'), 'unit_build_city')
         self.assertIn('unit_id', normalized)
         self.assertEqual(normalized['unit_id'], 101)
@@ -177,7 +177,7 @@ class TestLLMIntegration(unittest.TestCase):
 
         # Player-level action example (research) - actor_id should map to player_id
         player_action = {'action_type': 'tech_research', 'actor_id': 1, 'target': {'value': 'Alphabet'}}
-        normalized2 = handler._normalize_game_arena_action(player_action)
+        normalized2 = handler._normalize_agent_clash_action(player_action)
         self.assertEqual(normalized2.get('type'), 'tech_research')
         self.assertIn('player_id', normalized2)
         self.assertEqual(normalized2['player_id'], 1)
@@ -185,7 +185,7 @@ class TestLLMIntegration(unittest.TestCase):
 
         # City action example - actor_id should map to city_id
         city_action = {'action_type': 'city_production', 'actor_id': 42, 'target': {'value': 'warrior'}}
-        normalized3 = handler._normalize_game_arena_action(city_action)
+        normalized3 = handler._normalize_agent_clash_action(city_action)
         self.assertEqual(normalized3.get('type'), 'city_production')
         self.assertIn('city_id', normalized3)
         self.assertEqual(normalized3['city_id'], 42)
@@ -193,7 +193,7 @@ class TestLLMIntegration(unittest.TestCase):
 
         # When an explicit ID field is present, it should take precedence over actor_id
         explicit_unit_action = {'action_type': 'unit_move', 'actor_id': 200, 'unit_id': 5, 'target': {'x': 1, 'y': 2}}
-        normalized4 = handler._normalize_game_arena_action(explicit_unit_action)
+        normalized4 = handler._normalize_agent_clash_action(explicit_unit_action)
         self.assertEqual(normalized4.get('unit_id'), 5)
         self.assertNotEqual(normalized4.get('unit_id'), 200)
 

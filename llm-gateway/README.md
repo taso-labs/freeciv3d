@@ -1,14 +1,14 @@
 # LLM Gateway for FreeCiv3D
 
-A FastAPI-based WebSocket gateway that enables AI agents (via game_arena) to play FreeCiv through a standardized API. The gateway provides connection management, authentication, rate limiting, message transformation, and integration with FreeCiv's server allocation system.
+A FastAPI-based WebSocket gateway that enables AI agents (via agent-clash) to play FreeCiv through a standardized API. The gateway provides connection management, authentication, rate limiting, message transformation, and integration with FreeCiv's server allocation system.
 
 ## Architecture Overview
 
-The LLM Gateway acts as a **pass-through layer** between game_arena LLM agents and the FreeCiv proxy, transforming message formats while maintaining low latency.
+The LLM Gateway acts as a **pass-through layer** between agent-clash LLM agents and the FreeCiv proxy, transforming message formats while maintaining low latency.
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                        game_arena                                │
+│                        agent-clash                               │
 │                  (External LLM orchestrator)                     │
 └────────┬─────────────────────────────────────┬──────────────────┘
          │                                     │
@@ -188,7 +188,7 @@ status = await metaserver_client.get_server_status()
 
 ### 2. WebSocket Gateway (Port 8003)
 
-The FastAPI gateway connects game_arena agents to FreeCiv via WebSocket.
+The FastAPI gateway connects agent-clash agents to FreeCiv via WebSocket.
 
 #### Agent Endpoint
 
@@ -247,11 +247,11 @@ async with websockets.connect("ws://localhost:8003/ws/agent/my_agent") as ws:
 
 ### 3. Message Transformation
 
-The gateway transforms messages between game_arena format (nested `data` fields) and proxy format (flat fields).
+The gateway transforms messages between agent-clash format (nested `data` fields) and proxy format (flat fields).
 
 #### Agent → Proxy Transformation
 
-**Agent Format** (game_arena):
+**Agent Format** (agent-clash):
 ```json
 {
   "type": "action_submit",
@@ -349,7 +349,7 @@ See [freeciv-proxy/llm_handler.py](../freeciv-proxy/llm_handler.py) for complete
 |---------|------|---------|--------|
 | nginx | 8080 | Web interface | External (`:8080`) |
 | Tomcat | 8080 | Java servlets | Internal (via nginx) |
-| **LLM Gateway** | **8003** | **WebSocket API for game_arena** | **External (`:8003`)** |
+| **LLM Gateway** | **8003** | **WebSocket API for agent-clash** | **External (`:8003`)** |
 | **FreeCiv Proxy** | **8002** | **Main WebSocket proxy** | **External (`:8002`)** |
 | Game servers | 6000-6009 | FreeCiv C server instances | Internal only |
 | Proxy per-game | 7000-7009 | Dedicated per-game proxies | Internal only |
@@ -514,7 +514,7 @@ uvicorn main:app --log-level debug
 
 ```mermaid
 sequenceDiagram
-    participant GA as game_arena
+    participant GA as agent-clash
     participant SA as ServerAllocator
     participant GW as LLM Gateway
     participant FP as FreeCiv Proxy
@@ -614,4 +614,4 @@ cache_key = f"state:{game_id}:{player_id}:{turn}"
 - [Technical Specification](../Technical_Spec.md) - Full architecture documentation
 - [CLAUDE.md](../CLAUDE.md) - Developer guidance for AI assistants
 - [docker-compose.yml](../docker-compose.yml) - Service configuration
-- [game_arena Integration](https://github.com/Anthropic/game-arena) - External LLM orchestrator
+- [agent-clash Integration](https://github.com/anthropics/agent-clash) - External LLM orchestrator

@@ -1833,7 +1833,7 @@ class StateExtractor:
         economic = self._build_economic_view(raw_state, player_id)
 
         # ALWAYS construct game dict with all required fields - don't trust raw_state
-        # This ensures current_player is always present for game_arena
+        # This ensures current_player is always present for agent-clash
         game_dict = {
             'turn': raw_state.get('turn', 1),
             'phase': raw_state.get('phase', 'movement'),
@@ -1848,7 +1848,7 @@ class StateExtractor:
             'strategic': strategic,
             'tactical': tactical,
             'economic': economic,
-            # Required fields for game_arena FreeCivState compatibility
+            # Required fields for agent-clash FreeCivState compatibility
             'game': game_dict,
             'map': self._ensure_valid_map(raw_state.get('map', {})),
             'players': self._ensure_dict(raw_state.get('players')),

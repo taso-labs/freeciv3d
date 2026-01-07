@@ -152,31 +152,31 @@ else
 fi
 
 echo ""
-echo "Testing game_arena compatibility..."
+echo "Testing agent-clash compatibility..."
 
-# Check if game_arena directory exists
-if [ -d "../game_arena" ]; then
-    echo "Testing connection from game_arena client..."
+# Check if agent-clash directory exists
+if [ -d "../agent-clash" ]; then
+    echo "Testing connection from agent-clash client..."
 
-    # Try to run a simple connection test from game_arena
-    cd ../game_arena
+    # Try to run a simple connection test from agent-clash
+    cd ../agent-clash
     if python3 -c "
 import asyncio
 import sys
 import os
 sys.path.append('.')
-from game_arena.harness.freeciv_proxy_client import FreeCivLLMTester
+from agent_clash.harness.freeciv_proxy_client import FreeCivLLMTester
 
 async def test_connection():
     tester = FreeCivLLMTester('localhost', 8002)
     try:
         connected = await tester.connect()
         if connected:
-            print('✓ game_arena can connect to FreeCiv3D LLM Gateway')
+            print('✓ agent-clash can connect to FreeCiv3D LLM Gateway')
             await tester.disconnect()
             return True
         else:
-            print('✗ game_arena cannot connect to FreeCiv3D LLM Gateway')
+            print('✗ agent-clash cannot connect to FreeCiv3D LLM Gateway')
             return False
     except Exception as e:
         print(f'✗ Connection test failed: {e}')
@@ -185,14 +185,14 @@ async def test_connection():
 result = asyncio.run(test_connection())
 exit(0 if result else 1)
 " 2>/dev/null; then
-        print_status "ok" "game_arena integration test passed"
+        print_status "ok" "agent-clash integration test passed"
     else
-        print_status "warn" "game_arena integration test failed (may need game_arena setup)"
+        print_status "warn" "agent-clash integration test failed (may need agent-clash setup)"
     fi
 
     cd "$FREECIV_DIR"
 else
-    print_status "warn" "game_arena directory not found, skipping integration test"
+    print_status "warn" "agent-clash directory not found, skipping integration test"
 fi
 
 echo ""

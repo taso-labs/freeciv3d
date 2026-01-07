@@ -171,7 +171,7 @@ class InputSanitizer:
     def sanitize_action_data(cls, action: Dict[str, Any]) -> Dict[str, Any]:
         """Sanitize action data dictionary
 
-        DEFENSE-IN-DEPTH: Support both 'type' (normalized) and 'action_type' (game_arena format)
+        DEFENSE-IN-DEPTH: Support both 'type' (normalized) and 'action_type' (agent-clash format)
         to handle cases where normalization might not have run yet.
         """
         if not isinstance(action, dict):
@@ -179,7 +179,7 @@ class InputSanitizer:
 
         sanitized = {}
 
-        # Support both 'type' (normalized) and 'action_type' (game_arena format)
+        # Support both 'type' (normalized) and 'action_type' (agent-clash format)
         # The normalization should convert action_type → type, but this provides a fallback
         action_type = action.get('type') or action.get('action_type', '')
 
