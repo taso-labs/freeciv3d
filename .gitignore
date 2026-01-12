@@ -108,3 +108,7 @@ docs/
 streaming/node_modules/
 streaming/coverage/
 streaming/backup/
+
+.metals/**
+.metals/*
+.metals

@@ -29,9 +29,18 @@
 const puppeteer = require('puppeteer');
 const { spawn } = require('child_process');
 const path = require('path');
+const fs = require('fs');
+const { Storage } = require('@google-cloud/storage');
 
-// YouTube RTMPS ingestion URL
-const YOUTUBE_RTMPS_URL = 'rtmps://a.rtmps.youtube.com/live2';
+// GCS backup configuration (from environment)
+// If GCS_BACKUP_BUCKET is not set, GCS upload is disabled
+const GCS_BUCKET = process.env.GCS_BACKUP_BUCKET || '';
+const GCS_PREFIX = process.env.GCS_BACKUP_PREFIX || 'stream-backups';
+// Upload timeout to prevent blocking pod termination (default 5 min)
+const GCS_UPLOAD_TIMEOUT_MS = parseInt(process.env.GCS_UPLOAD_TIMEOUT_MS, 10) || 300000;
+
+// YouTube RTMPS ingestion URL (configurable for testing or region-specific endpoints)
+const YOUTUBE_RTMPS_URL = process.env.YOUTUBE_RTMPS_URL || 'rtmps://a.rtmps.youtube.com/live2';
 
 // Security: Allowed characters for file paths (prevents command injection in FFmpeg)
 const SAFE_PATH_REGEX = /^[a-zA-Z0-9/_.-]+$/;
@@ -55,6 +64,53 @@ function isValidPath(filePath) {
     return false;
   }
   return true;
+}
+
+/**
+ * Validate observer URL to prevent malicious redirects.
+ * Only allows http/https to known FreeCiv web hosts.
+ *
+ * @param {string} url - URL to validate
+ * @returns {boolean} - True if URL is safe
+ */
+function isValidObserverUrl(url) {
+  if (!url || typeof url !== 'string') {
+    return false;
+  }
+
+  try {
+    const parsed = new URL(url);
+
+    // Only allow http/https protocols
+    if (!['http:', 'https:'].includes(parsed.protocol)) {
+      console.error(`[Security] Observer URL uses disallowed protocol: ${parsed.protocol}`);
+      return false;
+    }
+
+    // Whitelist of allowed hostnames (configurable via env)
+    // Default includes common FreeCiv hosting domains and local development
+    const allowedHostsEnv = process.env.ALLOWED_OBSERVER_HOSTS ||
+      'localhost,host.docker.internal,freeciv.clashai.live,freeciv.agentclash.gg,127.0.0.1';
+    const allowedHosts = allowedHostsEnv.split(',').map(h => h.trim().toLowerCase());
+
+    // Check if hostname matches allowed list (exact match or subdomain)
+    const hostname = parsed.hostname.toLowerCase();
+    const isAllowed = allowedHosts.some(allowed =>
+      hostname === allowed || hostname.endsWith('.' + allowed)
+    );
+
+    if (!isAllowed) {
+      console.error(`[Security] Observer URL hostname not in allowlist: ${hostname}`);
+      console.error(`[Security] Allowed hosts: ${allowedHosts.join(', ')}`);
+      console.error('[Security] TIP: Set ALLOWED_OBSERVER_HOSTS to add custom hosts');
+      return false;
+    }
+
+    return true;
+  } catch (e) {
+    console.error(`[Security] Invalid URL format: ${e.message}`);
+    return false;
+  }
 }
 
 /**
@@ -101,6 +157,10 @@ class StreamCapture {
       retryDelay: config.retryDelay || 5000,
     };
 
+    // Time-based progress logging (deterministic, every 10 seconds)
+    this.lastProgressLog = 0;
+    this.progressLogIntervalMs = 10000;
+
     this.browser = null;
     this.page = null;
     this.ffmpegProcess = null;
@@ -123,19 +183,30 @@ class StreamCapture {
       args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
-        '--disable-gpu',
+        // SwiftShader WebGL configuration
         '--use-gl=swiftshader',
+        '--use-angle=swiftshader',
         '--enable-webgl',
-        '--window-size=' + this.config.resolution.replace('x', ','),
+        '--enable-webgl2',
+        // Memory and stability optimizations
         '--disable-dev-shm-usage',
-        '--disable-accelerated-2d-canvas',
-        '--no-first-run',
-        '--no-zygote',
         '--disable-background-networking',
         '--disable-default-apps',
         '--disable-extensions',
         '--disable-sync',
         '--disable-translate',
+        '--disable-backgrounding-occluded-windows',
+        '--disable-renderer-backgrounding',
+        '--disable-features=TranslateUI',
+        '--disable-ipc-flooding-protection',
+        // Reduce memory pressure
+        '--renderer-process-limit=1',
+        '--single-process',
+        '--memory-pressure-off',
+        '--max-gum-fps=30',
+        // Window settings
+        '--window-size=' + this.config.resolution.replace('x', ','),
+        '--no-first-run',
         '--mute-audio',
       ],
       defaultViewport: null, // Use window size
@@ -171,15 +242,18 @@ class StreamCapture {
       try {
         console.log(`[StreamCapture] Navigating to game (attempt ${attempt}/${this.config.maxRetries})...`);
 
+        // Use 'domcontentloaded' instead of 'networkidle2' because WebSocket
+        // reconnection attempts (from web-llm HMR) can block networkidle2 indefinitely.
+        // We rely on the explicit canvas wait below instead.
         await this.page.goto(this.config.observerUrl, {
-          waitUntil: 'networkidle2',
+          waitUntil: 'domcontentloaded',
           timeout: 60000,
         });
 
-        // Wait for WebGL canvas to be present
+        // Wait for WebGL canvas to be present (this is the real readiness check)
         console.log('[StreamCapture] Waiting for WebGL canvas...');
         await this.page.waitForSelector('canvas', {
-          timeout: 30000,
+          timeout: 90000, // Allow more time for game to initialize
         });
 
         // Verify WebGL is working
@@ -228,23 +302,28 @@ class StreamCapture {
 
     if (devMode === 'local') {
       // Local RTMP mode: stream to MediaMTX + backup
+      // Key options for reliable RTMP streaming:
+      // - flvflags=no_duration_filesize: prevents FFmpeg from seeking back to update headers
+      // - bsfs/v=dump_extra: CRITICAL - adds H264 SPS/PPS to every keyframe
+      //   This fixes "unable to parse H264 config: invalid size 1" errors in MediaMTX
       return {
         args: [
           '-f', 'tee',
           '-map', '0:v',
-          `[f=flv]${localRtmpUrl}|[f=mp4]${backupPath}`,
+          `[f=flv:flvflags=no_duration_filesize:bsfs/v=dump_extra]${localRtmpUrl}|[f=mp4]${backupPath}`,
         ],
         streamTarget: localRtmpUrl,
       };
     }
 
     // Production mode: YouTube RTMPS + backup
+    // bsfs/v=dump_extra adds H264 SPS/PPS to every keyframe for robust RTMP streaming
     const rtmpsOutput = `${YOUTUBE_RTMPS_URL}/${streamKey}`;
     return {
       args: [
         '-f', 'tee',
         '-map', '0:v',
-        `[f=flv]${rtmpsOutput}|[f=mp4]${backupPath}`,
+        `[f=flv:bsfs/v=dump_extra]${rtmpsOutput}|[f=mp4]${backupPath}`,
       ],
       streamTarget: `${YOUTUBE_RTMPS_URL}/***`,
     };
@@ -277,8 +356,16 @@ class StreamCapture {
           '-b:v', this.config.bitrate,
           '-maxrate', this.config.bitrate,
           '-bufsize', this.config.bitrate.replace('k', '') * 2 + 'k',
+
+          // Keyframe settings: fixed 2-second GOP for RTMP compatibility
+          // -sc_threshold 0 disables scene change detection for predictable keyframes
+          // -keyint_min should match -g for consistent GOP structure
           '-g', String(this.config.fps * 2), // Keyframe every 2 seconds
-          '-keyint_min', String(this.config.fps),
+          '-keyint_min', String(this.config.fps * 2),
+          '-sc_threshold', '0',
+
+          // Global header ensures SPS/PPS stored in extradata for FLV container
+          '-flags', '+global_header',
 
           // Pixel format for compatibility
           '-pix_fmt', 'yuv420p',
@@ -303,9 +390,11 @@ class StreamCapture {
           // FFmpeg outputs most info to stderr
           const msg = data.toString().trim();
           if (msg.includes('frame=') || msg.includes('fps=')) {
-            // Progress update - log less frequently
-            if (Math.random() < 0.1) {
+            // Progress update - use time-based throttling (deterministic, every 10 seconds)
+            const now = Date.now();
+            if (now - this.lastProgressLog > this.progressLogIntervalMs) {
               console.log(`[FFmpeg Progress] ${msg.substring(0, 80)}`);
+              this.lastProgressLog = now;
             }
           } else {
             console.log(`[FFmpeg] ${msg}`);
@@ -346,6 +435,79 @@ class StreamCapture {
   }
 
   /**
+   * Upload backup recording to Google Cloud Storage.
+   *
+   * Uses Workload Identity in GKE for authentication (no explicit credentials needed).
+   * If GCS_BACKUP_BUCKET is not set, upload is silently skipped.
+   *
+   * This is a best-effort operation - upload failures are logged but don't
+   * prevent graceful shutdown (YouTube still has the recording).
+   */
+  async uploadBackupToGCS() {
+    if (!GCS_BUCKET) {
+      console.log('[GCS] Backup upload disabled (GCS_BACKUP_BUCKET not set)');
+      return;
+    }
+
+    const backupPath = this.config.backupPath;
+    if (!fs.existsSync(backupPath)) {
+      console.warn(`[GCS] Backup file not found: ${backupPath}`);
+      return;
+    }
+
+    // Get file size for logging
+    const stats = fs.statSync(backupPath);
+    const fileSizeMB = (stats.size / (1024 * 1024)).toFixed(2);
+
+    // Storage client uses Workload Identity automatically in GKE
+    const storage = new Storage();
+    const bucket = storage.bucket(GCS_BUCKET);
+
+    // Derive destination path: {prefix}/{filename}
+    // backupPath format: /backup/{game_id}-{view}.mp4
+    const fileName = path.basename(backupPath); // e.g., "game123-global.mp4"
+    const destination = `${GCS_PREFIX}/${fileName}`;
+
+    const timeoutSec = (GCS_UPLOAD_TIMEOUT_MS / 1000).toFixed(0);
+    console.log(`[GCS] Uploading ${backupPath} (${fileSizeMB} MB) to gs://${GCS_BUCKET}/${destination} (timeout: ${timeoutSec}s)`);
+
+    const startTime = Date.now();
+    try {
+      // Create upload promise
+      const uploadPromise = bucket.upload(backupPath, {
+        destination,
+        metadata: {
+          contentType: 'video/mp4',
+          metadata: {
+            uploadedBy: 'fciv-streamer',
+            uploadedAt: new Date().toISOString(),
+            resolution: this.config.resolution,
+            fps: String(this.config.fps),
+            bitrate: this.config.bitrate,
+          }
+        },
+        resumable: true, // For large files (>5MB) - supports resume on failure
+      });
+
+      // Create timeout promise to prevent blocking pod termination
+      const timeoutPromise = new Promise((_, reject) => {
+        setTimeout(() => reject(new Error(`Upload timed out after ${timeoutSec}s`)), GCS_UPLOAD_TIMEOUT_MS);
+      });
+
+      // Race upload against timeout
+      await Promise.race([uploadPromise, timeoutPromise]);
+
+      const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+      console.log(`[GCS] Upload complete: gs://${GCS_BUCKET}/${destination} (${elapsed}s)`);
+    } catch (error) {
+      const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+      console.error(`[GCS] Upload failed after ${elapsed}s: ${error.message}`);
+      // Don't throw - backup upload failure shouldn't prevent clean shutdown
+      // YouTube still has the recording, and the local file persists for 30 min
+    }
+  }
+
+  /**
    * Gracefully shutdown streaming.
    */
   async shutdown() {
@@ -376,6 +538,10 @@ class StreamCapture {
         });
       });
     }
+
+    // Upload backup to GCS before closing browser
+    // This happens after FFmpeg finishes to ensure the MP4 is complete
+    await this.uploadBackupToGCS();
 
     // Close browser
     if (this.browser) {
@@ -430,6 +596,13 @@ async function main() {
     process.exit(1);
   }
 
+  // Security: Validate observer URL before using it
+  if (!isValidObserverUrl(config.observerUrl)) {
+    console.error('ERROR: OBSERVER_URL is invalid or uses a disallowed hostname');
+    console.error('TIP: Set ALLOWED_OBSERVER_HOSTS environment variable to add custom hosts');
+    process.exit(1);
+  }
+
   // Validate stream key requirement based on mode
   if (!config.devMode && !config.streamKey) {
     console.error('ERROR: STREAM_KEY environment variable is required for YouTube streaming');
@@ -462,7 +635,7 @@ async function main() {
 }
 
 // Export for testing
-module.exports = { StreamCapture, getConfigFromEnv, isValidPath };
+module.exports = { StreamCapture, getConfigFromEnv, isValidPath, isValidObserverUrl };
 
 // Run if executed directly
 if (require.main === module) {

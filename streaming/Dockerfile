@@ -8,27 +8,21 @@
 #   docker build -t fciv-streamer .
 #   docker run -e OBSERVER_URL=... -e STREAM_KEY=... fciv-streamer
 
-# Stage 1: Get static FFmpeg binary
-FROM mwader/static-ffmpeg:7.1 AS ffmpeg
-
-# Stage 2: Build streaming container
 FROM ghcr.io/puppeteer/puppeteer:23.11.1
 
 # Switch to root to install additional packages
 USER root
 
-# Copy static ffmpeg from first stage (no apt needed!)
-COPY --from=ffmpeg /ffmpeg /usr/local/bin/ffmpeg
-COPY --from=ffmpeg /ffprobe /usr/local/bin/ffprobe
-
-# Install only Xvfb (minimal apt usage)
+# Install Xvfb and FFmpeg with x11grab support
+# Note: We use apt FFmpeg instead of static binary because x11grab requires libxcb
 RUN apt-get update && apt-get install -y --no-install-recommends \
     xvfb \
+    ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 # Create directories and set permissions (as root)
+RUN mkdir -p /app /backup && chown -R pptruser:pptruser /app /backup
 WORKDIR /app
-RUN mkdir -p /backup && chown -R pptruser:pptruser /app /backup
 
 # Copy entrypoint script (as root for execute permissions)
 COPY docker-entrypoint.sh /docker-entrypoint.sh

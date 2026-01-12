@@ -194,6 +194,13 @@ TC_OCEAN = 1  # Ocean terrain
 # Default citymindist (minimum distance between cities)
 DEFAULT_CITYMINDIST = 2
 
+# Packet size limits for large packet handling
+# Packets above WARNING_PACKET_SIZE get logged
+# Packets above CRITICAL_PACKET_SIZE trigger rate limiting (delay between sends)
+WARNING_PACKET_SIZE = 500 * 1024     # 500KB - warn about large packets
+CRITICAL_PACKET_SIZE = 1000 * 1024   # 1MB - add rate limiting delay
+LARGE_PACKET_DELAY_MS = 50           # 50ms delay after critical-size packets
+
 HOST = '127.0.0.1'
 logger = logging.getLogger("freeciv-proxy")
 
@@ -384,6 +391,29 @@ class CivCom(Thread):
 
         if keys_to_remove:
             logger.debug(f"Invalidated {len(keys_to_remove)} action cache entries for player={player_id}, type={cache_type}")
+
+    def _safe_write_message(self, conn, packet: str, packet_size: int):
+        """Safely write a message to the WebSocket with error tracking.
+
+        This wrapper catches write failures and reports them to the handler's
+        connection health monitoring, enabling proactive pause before full disconnect.
+
+        Args:
+            conn: The WebSocket connection (civwebserver)
+            packet: The packet string to send
+            packet_size: Size of packet in bytes (pre-calculated for efficiency)
+        """
+        try:
+            conn.write_message(packet)
+            # Reset failure count on successful send if handler supports it
+            if hasattr(conn, '_reset_send_failure_count'):
+                conn._reset_send_failure_count()
+        except Exception as e:
+            logger.error(f"❌ WebSocket write failed for {self.username}: {e} (packet size: {packet_size:,} bytes)")
+            # Track failure for connection health monitoring
+            if hasattr(conn, '_track_send_failure'):
+                conn._track_send_failure(e)
+            # Don't re-raise - the error is tracked and handler will take action if needed
 
     def get_unit_tile(self, unit_id: int) -> int:
         """Return the tile index of a unit by id. Returns -1 if unknown.
@@ -1044,19 +1074,37 @@ class CivCom(Thread):
                 return  # Don't send, just buffer
 
             # Normal flow: send packet immediately
-            # Log large packet sizes to track what's being blocked
+            # Log large packet sizes and apply rate limiting for critical-size packets
             packet_size = len(packet.encode('utf-8'))
-            if packet_size > 1_000_000:  # Log if >1MB
+
+            # Rate limiting and logging based on packet size
+            if packet_size > CRITICAL_PACKET_SIZE:
                 logger.warning(
-                    f"📦 LARGE PACKET: Sending {packet_size:,} bytes ({packet_size/(1024*1024):.2f}MB) "
-                    f"to {self.username}"
+                    f"📦 CRITICAL PACKET SIZE: Sending {packet_size:,} bytes ({packet_size/(1024*1024):.2f}MB) "
+                    f"to {self.username} - applying {LARGE_PACKET_DELAY_MS}ms rate limit"
                 )
                 # Log first 200 chars to see packet type
                 logger.debug(f"   Packet preview: {packet[:200]}...")
+            elif packet_size > WARNING_PACKET_SIZE:
+                logger.info(
+                    f"📦 Large packet: Sending {packet_size:,} bytes ({packet_size/(1024*1024):.2f}MB) "
+                    f"to {self.username}"
+                )
 
             # Calls the write_message callback on the next Tornado I/O loop iteration (thread safely).
+            # Uses _safe_write_message for error tracking and proactive pause capability.
             conn = self.civwebserver
-            conn.io_loop.add_callback(lambda: conn.write_message(packet))
+            # Capture packet and size for the lambda closure
+            p, ps = packet, packet_size
+
+            # Apply rate limiting for critical-size packets to prevent WebSocket buffer overflow
+            if packet_size > CRITICAL_PACKET_SIZE:
+                # Schedule send with delay to give client time to process
+                delay_seconds = LARGE_PACKET_DELAY_MS / 1000.0
+                conn.io_loop.call_later(delay_seconds, lambda: self._safe_write_message(conn, p, ps))
+            else:
+                # Normal send - no delay
+                conn.io_loop.add_callback(lambda: self._safe_write_message(conn, p, ps))
 
     def get_client_result_string(self):
         result = ""

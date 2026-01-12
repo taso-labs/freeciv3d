@@ -127,6 +127,18 @@ patches:
         path: /spec/template/spec/containers/0/resources/requests/memory
         value: "512Mi"
 
+  # Disable YouTube streaming until feature is complete
+  # Observer mode continues to work normally without streaming
+  - target:
+      kind: Deployment
+      name: fciv-net
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: STREAMING_MODE
+          value: "disabled"
+
 # ConfigMap generator for staging-specific config
 configMapGenerator:
   - name: staging-config

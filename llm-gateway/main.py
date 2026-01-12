@@ -14,7 +14,7 @@ import random
 import sys
 import time
 import uuid
-from typing import TYPE_CHECKING, Dict, Any
+from typing import TYPE_CHECKING, Dict, Any, Optional, Union
 import websockets
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -37,7 +37,7 @@ if TYPE_CHECKING:
     from .utils.safe_access import get_agent_game_id
     from .utils.constants import *
     from .validation import sanitize_for_logging
-    from .stream_manager import StreamManager
+    from .stream_manager import StreamManager, LocalStreamManager
 else:
     from config import settings, get_cors_origins, get_freeciv_proxy_url, validate_settings
     from connection_manager import connection_manager
@@ -47,7 +47,73 @@ else:
     from utils.safe_access import get_agent_game_id
     from utils.constants import *
     from validation import sanitize_for_logging
-    from stream_manager import StreamManager
+    from stream_manager import StreamManager, LocalStreamManager
+
+
+# Streaming mode configuration
+# "k8s" = use K8s StreamManager (production)
+# "local" = use LocalStreamManager with Docker (development)
+# "auto" = try K8s first, fall back to Docker
+# "disabled" = no streaming
+STREAMING_MODE = os.environ.get("STREAMING_MODE", "auto")
+
+
+def create_stream_manager() -> Optional[Union[StreamManager, LocalStreamManager]]:
+    """
+    Create appropriate stream manager based on environment.
+
+    Auto-detects K8s vs Docker environment and returns the appropriate manager.
+    Returns None if streaming is disabled or no container runtime is available.
+    """
+    # Note: We use print() here because logging may not be configured yet at module load time
+    # These messages will still appear in container logs via stdout
+
+    if STREAMING_MODE == "disabled":
+        print(f"[StreamManager] Streaming disabled via STREAMING_MODE=disabled")
+        return None
+
+    if STREAMING_MODE == "local":
+        print(f"[StreamManager] Using LocalStreamManager (forced via STREAMING_MODE=local)")
+        return LocalStreamManager()
+
+    if STREAMING_MODE == "k8s":
+        print(f"[StreamManager] Using StreamManager (forced via STREAMING_MODE=k8s)")
+        return StreamManager()
+
+    # Auto-detect: try K8s first, fall back to Docker
+    try:
+        import kubernetes
+        try:
+            kubernetes.config.load_incluster_config()
+            print(f"[StreamManager] Detected in-cluster K8s, using StreamManager")
+            return StreamManager()
+        except kubernetes.config.ConfigException as e:
+            print(f"[StreamManager] K8s in-cluster config not available: {e}")
+
+        try:
+            kubernetes.config.load_kube_config()
+            print(f"[StreamManager] Detected kubeconfig, using StreamManager")
+            return StreamManager()
+        except kubernetes.config.ConfigException as e:
+            print(f"[StreamManager] K8s kubeconfig not available: {e}")
+    except ImportError:
+        print(f"[StreamManager] kubernetes package not installed, skipping K8s detection")
+
+    # No K8s available, check if Docker is available via SDK
+    try:
+        import docker
+        client = docker.from_env()
+        client.ping()  # Verify connection to Docker daemon
+        version = client.version().get('Version', 'unknown')
+        print(f"[StreamManager] Docker SDK connected (version {version}), using LocalStreamManager")
+        return LocalStreamManager()
+    except Exception as e:
+        print(f"[StreamManager] Docker SDK not available: {e}")
+
+    # No container runtime available
+    print(f"[StreamManager] No container runtime available, streaming disabled")
+    return None
+
 
 # Configure logging to output to BOTH stdout (for GCloud) and file (for local debugging)
 # GCloud Logging captures stdout from containers
@@ -115,12 +181,21 @@ class LLMGateway:
         self.game_sessions: Dict[str, Dict[str, Any]] = {}
         self._running = False
 
-        # YouTube streaming manager (optional - graceful degradation if unavailable)
+        # Streaming manager (optional - graceful degradation if unavailable)
+        # Uses factory function to auto-detect K8s vs Docker environment
         self.stream_manager = None
-        if settings.streaming_enabled:
+        if not settings.streaming_enabled:
+            logger.info("Streaming disabled via GATEWAY_STREAMING_ENABLED=false")
+        elif STREAMING_MODE == "disabled":
+            logger.info("Streaming disabled via STREAMING_MODE=disabled")
+        else:
             try:
-                self.stream_manager = StreamManager()
-                logger.info("StreamManager initialized for YouTube streaming")
+                self.stream_manager = create_stream_manager()
+                if self.stream_manager:
+                    manager_type = type(self.stream_manager).__name__
+                    logger.info(f"{manager_type} initialized (mode={STREAMING_MODE})")
+                else:
+                    logger.info(f"Streaming disabled - no container runtime available (mode={STREAMING_MODE})")
             except Exception as e:
                 logger.warning(f"StreamManager initialization failed (streaming disabled): {e}")
 
@@ -605,20 +680,9 @@ class LLMGateway:
                 del self.game_sessions[game_id]
                 return proxy_result
 
-            # Start YouTube streaming (graceful degradation on failure)
-            if self.stream_manager:
-                try:
-                    # Get the civserver port from session (set during auth)
-                    civserver_port = self.game_sessions[game_id].get("port", 6001)
-                    stream_result = await self.stream_manager.start_stream(game_id, civserver_port)
-
-                    # Store YouTube URLs in session
-                    self.game_sessions[game_id]["youtube_urls"] = stream_result.get("youtube_urls", {})
-                    logger.info(f"Started YouTube streaming for game {game_id}")
-                except Exception as e:
-                    # Streaming failure should not block game creation
-                    logger.warning(f"Failed to start streaming for game {game_id}: {e}")
-                    self.game_sessions[game_id]["streaming_error"] = str(e)
+            # NOTE: Streaming is started on-demand when agents authenticate via WebSocket
+            # See websocket_handlers.py -> AgentWebSocketHandler -> auth_success handler
+            # This ensures streaming starts only when the game is actually ready (agents connected)
 
             # Notify spectators that the game has started
             await self.notify_spectators_game_start(game_id)
@@ -843,15 +907,16 @@ class LLMGateway:
             end_result = result or {"reason": "Game ended", "winner": None}
             await self.notify_spectators_game_end(game_id, end_result)
 
-            # Stop YouTube streaming (graceful degradation on failure)
+            # Stop streaming (graceful degradation on failure)
+            # Streaming may have been started via WebSocket auth_success handler
             session = self.game_sessions[game_id]
-            if self.stream_manager and session.get("youtube_urls"):
+            if self.stream_manager:
                 try:
                     await self.stream_manager.stop_stream(game_id)
-                    logger.info(f"Stopped YouTube streaming for game {game_id}")
+                    logger.info(f"🎬 Stopped streaming for game {game_id}")
                 except Exception as e:
                     # Streaming cleanup failure should not block game cleanup
-                    logger.warning(f"Failed to stop streaming for game {game_id}: {e}")
+                    logger.debug(f"Streaming cleanup for game {game_id}: {e}")
 
             # Clean up game session
             logger.info(f"Ending game {game_id} after {time.time() - session.get('created_at', time.time()):.1f}s")

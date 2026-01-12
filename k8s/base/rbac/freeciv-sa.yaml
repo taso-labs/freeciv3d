@@ -21,8 +21,12 @@ metadata:
   namespace: freeciv
 rules:
   - apiGroups: [""]
-    resources: ["configmaps", "secrets"]
+    resources: ["configmaps"]
     verbs: ["get", "list", "watch"]
+  # Secrets: read existing secrets + create/delete for stream key secrets
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list", "watch", "create", "delete"]
   - apiGroups: [""]
     resources: ["pods", "services"]
     verbs: ["get", "list"]

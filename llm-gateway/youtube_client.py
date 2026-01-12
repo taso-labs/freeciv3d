@@ -101,26 +101,38 @@ class YouTubeClient:
             self.youtube = build("youtube", "v3", credentials=self.credentials)
             logger.info("OAuth token refreshed successfully")
 
-    async def _execute_api_call(self, api_request):
+    async def _execute_api_call(self, api_request, timeout: float = 30.0):
         """
         Execute a YouTube API request in a thread pool to avoid blocking the event loop.
 
         Args:
             api_request: The API request object (from youtube.liveBroadcasts(), etc.)
+            timeout: Maximum time to wait for the API call (default 30 seconds)
 
         Returns:
             The API response
 
         Raises:
             HttpError: If the API call fails
+            asyncio.TimeoutError: If the API call exceeds timeout
+            RuntimeError: Wrapper for timeout with helpful message
         """
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
 
         # Refresh credentials before making the call (synchronous, but fast)
         self._refresh_credentials_if_needed()
 
-        # Execute the blocking .execute() call in a thread pool
-        return await loop.run_in_executor(None, api_request.execute)
+        # Execute the blocking .execute() call in a thread pool with timeout
+        try:
+            return await asyncio.wait_for(
+                loop.run_in_executor(None, api_request.execute),
+                timeout=timeout
+            )
+        except asyncio.TimeoutError:
+            raise RuntimeError(
+                f"YouTube API call timed out after {timeout}s. "
+                "This may indicate network issues or YouTube API slowness."
+            )
 
     async def create_broadcast(self, title: str, description: str) -> dict:
         """

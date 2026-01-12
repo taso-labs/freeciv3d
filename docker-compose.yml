@@ -28,12 +28,21 @@ services:
       # Redis Configuration
       - REDIS_HOST=redis
       - REDIS_PORT=6379
+      # Local streaming configuration (used by LocalStreamManager)
+      - STREAMING_MODE=local
+      - STREAMER_IMAGE_LOCAL=freeciv3d-streaming
+      - DOCKER_NETWORK=freeciv3d_default
+      - LOCAL_RTMP_BASE_URL=rtmp://mediamtx:1935
+      - LOCAL_FREECIV_WEB_URL=http://host.docker.internal:8080
     volumes:
       - ./freeciv-web:/docker/freeciv-web-shared
       # Development only: Enable hot-reload for freeciv-proxy changes
       # Remove or make read-only (:ro) in production deployments
       - ./freeciv-proxy:/docker/freeciv-proxy
+      - ./llm-gateway:/docker/llm-gateway
       - ./logs:/docker/logs
+      # Docker socket for LocalStreamManager to create streaming containers on-demand
+      - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
       flyway:
         condition: service_completed_successfully
@@ -44,8 +53,12 @@ services:
       truncate_servers_table:
         condition: service_completed_successfully
     user: docker
-      # Check both the webapp and an example freeciv-proxy instance so the
-      # container is considered healthy only after proxy endpoints are ready.
+    # Add docker user to root group for Docker socket access (LocalStreamManager)
+    # The Docker socket is owned by root:root, so we need group access
+    group_add:
+      - "root"
+    # Check both the webapp and an example freeciv-proxy instance so the
+    # container is considered healthy only after proxy endpoints are ready.
     healthcheck:
       test: [ "CMD", "curl", "-o", "/dev/null", "-sf", "http://localhost:8080/about", "http://localhost:7001/status" ]
       interval: 30s
@@ -146,6 +159,40 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  # =============================================================================
+  # Local Streaming Services
+  # =============================================================================
+  # Streaming containers are created ON-DEMAND by llm-gateway's LocalStreamManager
+  # when a game is ready (agent authenticates successfully). This mirrors production
+  # where K8s Jobs are created dynamically.
+  #
+  # View streams at (once a game is active):
+  #   Global:  http://localhost:8890/stream/global/index.m3u8 (HLS)
+  #   Player1: http://localhost:8890/stream/player1/index.m3u8 (HLS)
+  #   Player2: http://localhost:8890/stream/player2/index.m3u8 (HLS)
+  # Or use VLC: vlc http://localhost:8890/stream/global/index.m3u8
+  #
+  # To disable streaming, set STREAMING_MODE=disabled in fciv-net environment
+
+  # Build-only service - creates the image used by LocalStreamManager
+  # This service never runs, it just ensures `docker compose build` builds the image
+  streamer-image:
+    build: ./streaming
+    image: freeciv3d-streaming
+    platform: linux/amd64  # Puppeteer image is AMD64-only
+    profiles: ["build-only"]  # Excluded from `docker compose up`, included in `docker compose build`
+
+  # Local RTMP/HLS server - receives streams from on-demand containers
+  mediamtx:
+    image: bluenviron/mediamtx:1.4.0
+    container_name: fciv-mediamtx
+    ports:
+      - "1935:1935"   # RTMP input
+      - "8890:8888"   # HLS output (8890 to avoid conflict with web-llm on 8888)
+      - "8891:8889"   # WebRTC output
+    restart: unless-stopped
+
 volumes:
   mysql_data:
   redis_data:
+  streaming_backup:  # Used by on-demand streaming containers for local backups

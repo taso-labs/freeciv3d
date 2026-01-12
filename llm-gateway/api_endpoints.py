@@ -721,6 +721,19 @@ async def get_observer_urls(
         # Get actual player names from connected agents
         # The webclient expects player names (agent_id) for observe_player/follow params
         players = await connection_manager.get_players_for_game(game_id)
+
+        # Log player discovery for debugging observer URL issues
+        if len(players) < 2:
+            logger.warning(
+                f"Observer URLs: Only found {len(players)} player(s) for game {game_id}. "
+                f"Players: {players}. Expected 2 players for proper observer views."
+            )
+        else:
+            logger.info(
+                f"Observer URLs: Found {len(players)} players for game {game_id}: "
+                f"{[p['agent_id'] for p in players]}"
+            )
+
         player1_name = quote(players[0]["agent_id"], safe="") if len(players) > 0 else "0"
         player2_name = quote(players[1]["agent_id"], safe="") if len(players) > 1 else "1"
 
@@ -757,15 +770,41 @@ async def get_observer_urls(
 
         # Include YouTube URLs if streaming is active
         youtube_urls = None
+        local_stream_urls = None
+
         if gateway and game_id in gateway.game_sessions:
             session = gateway.game_sessions[game_id]
             youtube_urls = session.get("youtube_urls")
+
+        # Provide local MediaMTX URLs only when:
+        # 1. YouTube streaming is not active (no youtube_urls)
+        # 2. Streaming is enabled (stream_manager exists)
+        # 3. Local stream base URL is configured
+        # This ensures observer mode works even when STREAMING_MODE=disabled
+        if (youtube_urls is None and
+                gateway and gateway.stream_manager and
+                settings.local_stream_base_url):
+            base = settings.local_stream_base_url.rstrip("/")
+            # WebRTC is on port 8891 (one port higher than HLS 8890)
+            webrtc_base = base.replace(":8890", ":8891")
+            local_stream_urls = {
+                "global": f"{base}/stream/global/index.m3u8",
+                "player1": f"{base}/stream/player1/index.m3u8",
+                "player2": f"{base}/stream/player2/index.m3u8",
+                "webrtc": {
+                    "global": f"{webrtc_base}/stream/global",
+                    "player1": f"{webrtc_base}/stream/player1",
+                    "player2": f"{webrtc_base}/stream/player2",
+                },
+                "note": "Local streams via MediaMTX (STREAMING_MODE=local)"
+            }
 
         return {
             "game_id": game_id,
             "civserver_port": game_port,
             "observer_urls": observer_urls,
-            "youtube_urls": youtube_urls
+            "youtube_urls": youtube_urls,
+            "local_stream_urls": local_stream_urls
         }
 
     except HTTPException:
@@ -893,6 +932,45 @@ async def get_metrics(auth: Dict[str, Any] = Depends(verify_api_key)) -> Dict[st
     except Exception as e:
         logger.error(f"Error getting metrics: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
+
+
+# Debug endpoints
+@router.get("/debug/connections")
+async def debug_connections() -> Dict[str, Any]:
+    """
+    Debug endpoint to inspect connection manager state.
+
+    Returns detailed information about all connections for troubleshooting
+    why observer-urls can't find game_id.
+    """
+    connections_data = []
+    for conn_id, conn_info in connection_manager.connections.items():
+        connections_data.append({
+            "connection_id": conn_id,
+            "type": conn_info.connection_type,
+            "identifier": conn_info.identifier,
+            "game_id": conn_info.game_id,
+            "player_id": conn_info.player_id,
+            "civserver_port": conn_info.civserver_port,
+            "authenticated": conn_info.authenticated,
+            "session_id": conn_info.session_id,
+            "connected_at": conn_info.connected_at,
+            "last_seen": conn_info.last_seen,
+        })
+
+    return {
+        "total_connections": len(connection_manager.connections),
+        "agent_connections_by_id": {
+            agent_id: list(conn_ids)
+            for agent_id, conn_ids in connection_manager.agent_connections.items()
+        },
+        "spectator_connections_by_game": {
+            game_id: list(conn_ids)
+            for game_id, conn_ids in connection_manager.spectator_connections.items()
+        },
+        "disconnected_sessions": list(connection_manager.disconnected_sessions.keys()),
+        "connections": connections_data,
+    }
 
 
 # Helper functions
