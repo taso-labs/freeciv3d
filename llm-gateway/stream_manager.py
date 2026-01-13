@@ -390,24 +390,31 @@ class StreamManager:
         logger.info(f"Rolling back {len(created_resources)} created resources")
 
         # Rollback in reverse order (jobs before secrets before streams)
+        # Note: No logging inside loop to avoid CodeQL taint analysis flags
+        # (variables used with stream_key are considered sensitive)
+        rollback_counts = {"stream": 0, "job": 0, "secret": 0, "failed": 0}
         for resource_type, view, resource_id in reversed(created_resources):
             try:
                 if resource_type == "stream":
                     await self.youtube_clients[view].delete_stream(resource_id)
-                    logger.info(f"Rolled back {view} YouTube stream: {resource_id}")
+                    rollback_counts["stream"] += 1
                 elif resource_type == "job":
                     await self._delete_job(resource_id)
-                    logger.info(f"Rolled back {view} K8s job: {resource_id}")
+                    rollback_counts["job"] += 1
                 elif resource_type == "secret":
-                    # Extract game_id and view from secret name: stream-key-{game_id}-{view}
+                    # Extract game_id and view from secret name pattern
                     parts = resource_id.split("-")
                     if len(parts) >= 4:
                         secret_game_id = "-".join(parts[2:-1])
                         secret_view = parts[-1]
                         await self._delete_stream_key_secret(secret_game_id, secret_view)
-                        logger.info(f"Rolled back {view} K8s secret: {resource_id}")
-            except Exception as e:
-                logger.warning(f"Rollback failed for {resource_type} {resource_id}: {e}")
+                        rollback_counts["secret"] += 1
+            except Exception:
+                rollback_counts["failed"] += 1
+        # Log summary only (no tainted variables)
+        logger.info(f"Rollback complete: {rollback_counts['stream']} streams, "
+                    f"{rollback_counts['job']} jobs, {rollback_counts['secret']} secrets, "
+                    f"{rollback_counts['failed']} failed")
 
     async def _create_stream_key_secret(
         self, game_id: str, view: str, stream_key: str
@@ -450,11 +457,15 @@ class StreamManager:
                 namespace=self.namespace, body=secret
             ),
         )
-        logger.info(f"Created stream key secret: {secret_name}")
+        # Note: No logging here to avoid CodeQL taint tracking (game_id/view used with stream_key)
         return secret_name
 
     async def _delete_stream_key_secret(self, game_id: str, view: str) -> None:
-        """Delete the stream key secret for a view."""
+        """Delete the stream key secret for a view.
+
+        Note: No logging in this function to avoid CodeQL taint tracking
+        (game_id/view are considered sensitive when used in secret context).
+        """
         secret_name = f"stream-key-{game_id}-{view}"
         loop = asyncio.get_running_loop()
 
@@ -465,10 +476,9 @@ class StreamManager:
                     name=secret_name, namespace=self.namespace
                 ),
             )
-            logger.info(f"Deleted stream key secret: {secret_name}")
         except ApiException as e:
             if e.status != 404:
-                logger.warning(f"Failed to delete secret {secret_name}: {e}")
+                raise  # Re-raise non-404 errors for caller to handle
 
     async def _create_job_with_retry(
         self,
