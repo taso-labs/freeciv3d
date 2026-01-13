@@ -394,20 +394,21 @@ class StreamManager:
             try:
                 if resource_type == "stream":
                     await self.youtube_clients[view].delete_stream(resource_id)
-                    logger.info(f"Rolled back {view} YouTube stream: {resource_id}")
+                    logger.info(f"Rolled back {view} YouTube stream")
                 elif resource_type == "job":
                     await self._delete_job(resource_id)
-                    logger.info(f"Rolled back {view} K8s job: {resource_id}")
+                    logger.info(f"Rolled back {view} K8s job")
                 elif resource_type == "secret":
-                    # Extract game_id and view from secret name: stream-key-{game_id}-{view}
+                    # Extract game_id and view from secret name pattern
                     parts = resource_id.split("-")
                     if len(parts) >= 4:
                         secret_game_id = "-".join(parts[2:-1])
                         secret_view = parts[-1]
                         await self._delete_stream_key_secret(secret_game_id, secret_view)
-                        logger.info(f"Rolled back {view} K8s secret: {resource_id}")
+                        logger.info(f"Rolled back {view} K8s secret")
             except Exception as e:
-                logger.warning(f"Rollback failed for {resource_type} {resource_id}: {e}")
+                # Avoid logging resource IDs that may contain sensitive identifiers
+                logger.warning(f"Rollback failed for {resource_type} ({view}): {type(e).__name__}")
 
     async def _create_stream_key_secret(
         self, game_id: str, view: str, stream_key: str
@@ -450,7 +451,7 @@ class StreamManager:
                 namespace=self.namespace, body=secret
             ),
         )
-        logger.info(f"Created stream key secret: {secret_name}")
+        logger.info(f"Created K8s secret for {view} stream ({game_id})")
         return secret_name
 
     async def _delete_stream_key_secret(self, game_id: str, view: str) -> None:
@@ -465,10 +466,11 @@ class StreamManager:
                     name=secret_name, namespace=self.namespace
                 ),
             )
-            logger.info(f"Deleted stream key secret: {secret_name}")
+            logger.info(f"Deleted K8s secret for {view} stream ({game_id})")
         except ApiException as e:
             if e.status != 404:
-                logger.warning(f"Failed to delete secret {secret_name}: {e}")
+                # Log error type only, not full details which may contain secret names
+                logger.warning(f"Failed to delete secret for {view} ({game_id}): HTTP {e.status}")
 
     async def _create_job_with_retry(
         self,
