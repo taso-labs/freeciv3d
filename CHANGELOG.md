@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.6](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.5...freeciv3d-v0.3.6) (2026-01-13)
+
+
+### Features
+
+* **streaming:** Add YouTube Live streaming for FreeCiv AI matches ([#53](https://github.com/taso-ventures/freeciv3d/issues/53)) ([bef2d0c](https://github.com/taso-ventures/freeciv3d/commit/bef2d0c525b301597c43d67ad8bd24660ee8ecee))
+
 ## [0.3.5](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.4...freeciv3d-v0.3.5) (2026-01-07)
 
 
