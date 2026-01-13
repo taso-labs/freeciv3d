@@ -490,27 +490,40 @@ class LLMWSHandler(websocket.WebSocketHandler):
                     f"   Game started: {game_session.game_started}"
                 )
 
-                # Wait for PACKET_CONN_INFO from server to get assigned player_id
-                logger.info(f"⏳ Waiting for PACKET_CONN_INFO for {self.agent_id}...")
-                waited = 0.0
-                max_wait = 5.0
-                while (not hasattr(self.civcom, 'player_id') or self.civcom.player_id is None) and waited < max_wait:
-                    await asyncio.sleep(0.2)
-                    waited += 0.2
-                    if waited % 1.0 < 0.3:  # Log every ~1 second
-                        logger.info(f"   {self.agent_id}: Still waiting for PACKET_CONN_INFO... ({waited:.1f}s/{max_wait}s)")
-
-                if not hasattr(self.civcom, 'player_id') or self.civcom.player_id is None:
-                    logger.error(
-                        f"❌ {self.agent_id}: Failed to receive PACKET_CONN_INFO after {max_wait}s\n"
-                        f"   This usually means civserver is not responding or is overloaded\n"
-                        f"   Check civserver logs at /docker/logs/freeciv-web-log-{game_session.civserver_port}.log"
+                # For reconnection, use restored player_id directly
+                # For new connections, wait for PACKET_CONN_INFO from server
+                if is_reconnecting and isinstance(previous_player_id, int) and previous_player_id >= 0:
+                    # During reconnection, we already have player_id from suspended session
+                    # The /take command (sent earlier) reclaims the slot from AI
+                    # No need to wait for PACKET_CONN_INFO - it won't be sent after /take
+                    self.player_id = previous_player_id
+                    self.civcom.player_id = previous_player_id  # Sync civcom state for consistency
+                    logger.info(
+                        f"✅ Reconnecting with restored player_id: {self.agent_id} → player_id={self.player_id}\n"
+                        f"   Session resumed from suspended state"
                     )
-                    raise RuntimeError(f"Failed to receive PACKET_CONN_INFO - civserver not responding")
+                else:
+                    # New connection - wait for PACKET_CONN_INFO from server
+                    logger.info(f"⏳ Waiting for PACKET_CONN_INFO for {self.agent_id}...")
+                    waited = 0.0
+                    max_wait = 5.0
+                    while (not hasattr(self.civcom, 'player_id') or self.civcom.player_id is None) and waited < max_wait:
+                        await asyncio.sleep(0.2)
+                        waited += 0.2
+                        if waited % 1.0 < 0.3:  # Log every ~1 second
+                            logger.info(f"   {self.agent_id}: Still waiting for PACKET_CONN_INFO... ({waited:.1f}s/{max_wait}s)")
 
-                # Server automatically assigns player_id when we connect
-                self.player_id = self.civcom.player_id
-                logger.info(f"✅ Received player assignment: {self.agent_id} → player_id={self.player_id}")
+                    if not hasattr(self.civcom, 'player_id') or self.civcom.player_id is None:
+                        logger.error(
+                            f"❌ {self.agent_id}: Failed to receive PACKET_CONN_INFO after {max_wait}s\n"
+                            f"   This usually means civserver is not responding or is overloaded\n"
+                            f"   Check civserver logs at /docker/logs/freeciv-web-log-{game_session.civserver_port}.log"
+                        )
+                        raise RuntimeError(f"Failed to receive PACKET_CONN_INFO - civserver not responding")
+
+                    # Server automatically assigns player_id when we connect
+                    self.player_id = self.civcom.player_id
+                    logger.info(f"✅ Received player assignment: {self.agent_id} → player_id={self.player_id}")
 
                 # Verify we got a valid player slot (not observer)
                 if self.player_id >= 512:
