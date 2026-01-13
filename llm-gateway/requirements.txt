@@ -12,3 +12,8 @@ aiohttp>=3.9.0
 aioredis>=2.0.0
 slowapi>=0.1.9
 cryptography>=41.0.0
+# Streaming dependencies
+docker>=7.0.0  # Docker SDK for LocalStreamManager (uses socket, no CLI needed)
+kubernetes>=29.0.0
+google-api-python-client>=2.100.0
+google-auth>=2.25.0

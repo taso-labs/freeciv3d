@@ -106,6 +106,18 @@ patches:
         path: /spec/template/spec/initContainers/0/args/6
         value: "clashai-production:us-central1:freeciv-production-db-9cc3ef1e"
 
+  # Disable YouTube streaming until feature is complete
+  # Observer mode continues to work normally without streaming
+  - target:
+      kind: Deployment
+      name: fciv-net
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: STREAMING_MODE
+          value: "disabled"
+
 # ConfigMap generator for production-specific config
 configMapGenerator:
   - name: production-config

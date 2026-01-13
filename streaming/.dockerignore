@@ -1,0 +1,28 @@
+# Test files (not needed in production image)
+tests/
+*.test.js
+jest.config.js
+
+# Local development artifacts
+node_modules/
+backup/
+*.log
+.env*
+
+# Git files
+.git/
+.gitignore
+
+# Documentation
+README.md
+*.md
+
+# IDE/editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Docker build artifacts
+docker-compose.yml
+docker-compose*.yml

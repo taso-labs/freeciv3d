@@ -3554,6 +3554,100 @@ class LLMWSHandler(websocket.WebSocketHandler):
         except Exception as e:
             logger.error(f"Error in _pause_and_suspend_partner for {self.agent_id}: {e}")
 
+    def _suspend_partners(self):
+        """Suspend partner sessions without pausing (pause already done separately)."""
+        try:
+            game_session = game_session_manager.sessions.get(self.game_id)
+            if not game_session:
+                return
+
+            for agent_id, player_info in game_session.players.items():
+                if agent_id == self.agent_id:
+                    continue
+
+                partner_handler = player_info.handler
+                if not partner_handler:
+                    continue
+
+                # Suspend partner's session
+                if partner_handler.session_id:
+                    session_manager.suspend_session(
+                        partner_handler.session_id,
+                        f"partner_{self.agent_id}_disconnected"
+                    )
+                    logger.info(f"Suspended partner {agent_id} session due to {self.agent_id} disconnect")
+
+                # Close partner's WebSocket
+                try:
+                    ws_conn = getattr(partner_handler, 'ws_connection', None)
+                    is_closing = False
+                    if ws_conn:
+                        is_closing_fn = getattr(ws_conn, 'is_closing', None)
+                        if callable(is_closing_fn):
+                            is_closing = is_closing_fn()
+
+                    if not is_closing:
+                        partner_handler.close(code=4001, reason="Partner disconnected - game paused")
+                        logger.info(f"Closed partner {agent_id} WebSocket for coordinated disconnect")
+                except Exception as e:
+                    logger.warning(f"Failed to close partner {agent_id} WebSocket: {e}")
+
+        except Exception as e:
+            logger.error(f"Error in _suspend_partners for {self.agent_id}: {e}")
+
+    def _track_send_failure(self, error: Exception):
+        """Track send failures and proactively pause if connection is degraded.
+
+        This method is called by civcom when a packet send fails. If we see
+        multiple consecutive failures, we proactively pause the game before
+        the connection fully dies - this gives us a better chance of
+        successfully sending the pause command.
+
+        Args:
+            error: The exception that occurred during send
+        """
+        # Initialize tracking attributes if not present
+        if not hasattr(self, '_send_failure_count'):
+            self._send_failure_count = 0
+        if not hasattr(self, '_connection_dead'):
+            self._connection_dead = False
+
+        # Once marked dead, silently ignore further failures to avoid log spam
+        if self._connection_dead:
+            return
+
+        self._send_failure_count += 1
+
+        # After threshold, mark connection as dead and attempt one proactive pause
+        FAILURE_THRESHOLD = 3
+        if self._send_failure_count >= FAILURE_THRESHOLD:
+            self._connection_dead = True  # Stop tracking further failures
+            logger.error(
+                f"Connection dead for {self.agent_id} "
+                f"({self._send_failure_count} consecutive failures) - attempting proactive pause"
+            )
+
+            if self.game_id:
+                game_session = game_session_manager.sessions.get(self.game_id)
+                if game_session and game_session.game_started and not game_session.is_paused:
+                    if self.civcom and not self.civcom.stopped:
+                        success = game_session.pause_game(
+                            self.civcom,
+                            f"{self.agent_id} connection dead"
+                        )
+                        if success:
+                            logger.info(f"Proactive pause successful for dead connection")
+        else:
+            # Only log warning before threshold is reached
+            logger.warning(
+                f"Send failure #{self._send_failure_count} for {self.agent_id}: {error}"
+            )
+
+    def _reset_send_failure_count(self):
+        """Reset the send failure counter and dead flag after successful send."""
+        self._send_failure_count = 0
+        self._connection_dead = False
+
     def _check_and_resume_game(self):
         """Check if game should be resumed after reconnection.
 
@@ -3637,9 +3731,37 @@ class LLMWSHandler(websocket.WebSocketHandler):
         )
 
         # PAUSE GAME AND SUSPEND PARTNER before session cleanup
-        # This must happen while civcom is still valid to send /set timeout 0
-        if self.game_id and self.civcom and not self.civcom.stopped:
-            self._pause_and_suspend_partner()
+        # Try to pause even if our civcom is stopped - use partner's civcom as fallback
+        if self.game_id:
+            game_session = game_session_manager.sessions.get(self.game_id)
+            if game_session and game_session.game_started and not game_session.is_paused:
+                # Try our civcom first
+                civcom_to_use = None
+                if self.civcom and not self.civcom.stopped:
+                    civcom_to_use = self.civcom
+                else:
+                    # Our civcom is dead, try partner's civcom
+                    logger.warning(f"Own civcom stopped for {self.agent_id}, trying partner's civcom for pause")
+                    for agent_id, player_info in game_session.players.items():
+                        if agent_id == self.agent_id:
+                            continue
+                        partner_handler = player_info.handler
+                        if partner_handler and partner_handler.civcom and not partner_handler.civcom.stopped:
+                            civcom_to_use = partner_handler.civcom
+                            logger.info(f"Using {agent_id}'s civcom for pause (own civcom stopped)")
+                            break
+
+                if civcom_to_use:
+                    success = game_session.pause_game(civcom_to_use, f"{self.agent_id} disconnected")
+                    logger.info(f"Pause attempt for {self.game_id}: success={success}")
+                    # Still call partner suspend logic if we have our own civcom
+                    if self.civcom and not self.civcom.stopped:
+                        self._suspend_partners()
+                else:
+                    logger.error(f"Cannot pause game {self.game_id} - no valid civcom available!")
+            elif self.civcom and not self.civcom.stopped:
+                # Game not started or already paused, but still suspend partners
+                self._pause_and_suspend_partner()
 
         # Suspend session to allow reconnection within timeout window
         # (Uses existing suspend_session infrastructure that was never wired up)

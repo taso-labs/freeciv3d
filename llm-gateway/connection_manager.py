@@ -420,26 +420,32 @@ class ConnectionManager:
         Returns a list of player info dicts containing player_id and agent_id
         (the player name used for observe_player/follow parameters).
 
+        Deduplicates by player_id to handle cases where an agent has multiple
+        connections (e.g., during reconnection) or to prevent returning the
+        same player multiple times.
+
         Args:
             game_id: The game ID to get players for
 
         Returns:
             List of dicts with player_id and agent_id, sorted by player_id
         """
-        players = []
+        # Use dict to deduplicate by player_id (keeps first entry per player_id)
+        players_by_id: Dict[int, Dict[str, Any]] = {}
         # Take snapshot to avoid RuntimeError if connections change during iteration
         connections_snapshot = list(self.connections.items())
         for conn_id, conn_info in connections_snapshot:
             if (conn_info.connection_type == "agent"
                 and conn_info.game_id == game_id
                 and conn_info.authenticated
-                and conn_info.player_id is not None):
-                players.append({
+                and conn_info.player_id is not None
+                and conn_info.player_id not in players_by_id):  # Deduplicate
+                players_by_id[conn_info.player_id] = {
                     "player_id": conn_info.player_id,
                     "agent_id": conn_info.identifier,  # This is the player name
-                })
-        players.sort(key=lambda p: p["player_id"])
-        return players
+                }
+        # Sort by player_id and return as list
+        return sorted(players_by_id.values(), key=lambda p: p["player_id"])
 
     async def _heartbeat_loop(self):
         """Background task for connection maintenance"""

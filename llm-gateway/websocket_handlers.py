@@ -135,6 +135,12 @@ class AgentWebSocketHandler:
             if self.connection_id:
                 await connection_manager.handle_disconnect(self.connection_id)
 
+            # NOTE: Stream is NOT stopped here on agent disconnect.
+            # The game pauses (handled by freeciv-proxy) and the stream continues
+            # showing the paused game state. Stream only stops when the game
+            # actually terminates (via LLMGateway.end_game()).
+            # This allows agents to reconnect while viewers see the paused game.
+
             # Release connection tracking
             await comprehensive_rate_limiter.release_connection(self.agent_id)
 
@@ -302,6 +308,35 @@ class AgentWebSocketHandler:
                                 f"   Player ID: {self.player_id}\n"
                                 f"   Status: {msg_data.get('status', 'N/A')}"
                             )
+
+                            # Start streaming on-demand when agent authenticates
+                            # This triggers LocalStreamManager (local) or StreamManager (k8s) to
+                            # create streaming containers with observer URLs for this game
+                            if gateway and gateway.stream_manager and game_id and civserver_port:
+                                try:
+                                    # Only start streaming for the first player (avoid duplicate streams)
+                                    if self.player_id == 0:
+                                        player_names = {
+                                            "player1": self.agent_id,
+                                            "player2": None  # Will be populated by second agent
+                                        }
+                                        stream_result = await gateway.stream_manager.start_stream(
+                                            game_id=game_id,
+                                            civserver_port=civserver_port,
+                                            player_names=player_names
+                                        )
+                                        logger.info(
+                                            f"🎬 Started streaming for game {game_id}:\n"
+                                            f"   Port: {civserver_port}\n"
+                                            f"   Streams: {list(stream_result.get('local_stream_urls', {}).keys())}"
+                                        )
+                                except ValueError as e:
+                                    # Stream already active for this game (expected for second player)
+                                    logger.debug(f"Stream already active for game {game_id}: {e}")
+                                except Exception as e:
+                                    # Streaming failure should not block gameplay
+                                    logger.warning(f"Failed to start streaming for game {game_id}: {e}")
+
                             # Agent expects: {type: "llm_connect", data: {type: "auth_success", ...}}
                             agent_message = {
                                 "type": "llm_connect",

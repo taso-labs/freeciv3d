@@ -112,7 +112,7 @@ class GameSession:
             return slot
 
     def pause_game(self, civcom: Any, disconnect_reason: str = "agent_disconnected") -> bool:
-        """Pause the game by setting timeout to 0.
+        """Pause the game by setting timeout to 0 with retry logic.
 
         This prevents AI takeover when an agent disconnects mid-game.
         The civserver's autotoggle feature won't trigger because no turn
@@ -143,24 +143,35 @@ class GameSession:
                 self.original_timeout = DEFAULT_GAME_TIMEOUT
             logger.info(f"Game {self.game_id}: Captured original timeout: {self.original_timeout}s")
 
-        # Send /set timeout 0 to pause the game
-        try:
-            pause_packet = json.dumps({"pid": PACKET_CHAT_MSG_REQ, "message": "/set timeout 0"})
-            civcom.queue_to_civserver(pause_packet)
-            civcom.send_packets_to_civserver()
-            # State update immediately after successful send (before logging)
-            self.is_paused = True
-        except Exception as e:
-            logger.error(f"Game {self.game_id}: Failed to pause game: {e}")
-            return False
+        # Send /set timeout 0 to pause the game - with retry logic
+        MAX_RETRIES = 3
+        RETRY_DELAY = 0.1  # 100ms between retries
 
-        # Logging outside try block - logging failure shouldn't affect return value
-        logger.info(
-            f"⏸️ Game {self.game_id} PAUSED: {disconnect_reason}\n"
-            f"   Original timeout: {self.original_timeout}s\n"
-            f"   Players: {list(self.players.keys())}"
-        )
-        return True
+        for attempt in range(MAX_RETRIES):
+            try:
+                pause_packet = json.dumps({"pid": PACKET_CHAT_MSG_REQ, "message": "/set timeout 0"})
+                civcom.queue_to_civserver(pause_packet)
+                civcom.send_packets_to_civserver()
+                # State update immediately after successful send
+                self.is_paused = True
+
+                # Success logging
+                logger.info(
+                    f"✅ Game {self.game_id} PAUSED (attempt {attempt + 1}/{MAX_RETRIES}): {disconnect_reason}\n"
+                    f"   Original timeout: {self.original_timeout}s\n"
+                    f"   Players: {list(self.players.keys())}"
+                )
+                return True
+
+            except Exception as e:
+                logger.warning(f"Game {self.game_id}: Pause attempt {attempt + 1}/{MAX_RETRIES} failed: {e}")
+                if attempt < MAX_RETRIES - 1:
+                    import time
+                    time.sleep(RETRY_DELAY)
+
+        # All retries failed
+        logger.error(f"❌ Game {self.game_id}: Failed to pause after {MAX_RETRIES} attempts")
+        return False
 
     def resume_game(self, civcom: Any) -> bool:
         """Resume the game by restoring original timeout.

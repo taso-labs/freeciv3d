@@ -79,9 +79,15 @@ class Settings(BaseSettings):
     # Feature flags
     enable_batch_actions: bool = True
     enable_metrics: bool = True
+    streaming_enabled: bool = True  # YouTube streaming for matches
 
     # Observer streaming settings
     freeciv_web_base_url: str = "http://localhost:8080"  # Base URL for FreeCiv web client
+
+    # Local streaming settings (for development when K8s is not available)
+    # Set to enable local_stream_urls in observer-urls response
+    # Streaming runs by default with `docker-compose up`
+    local_stream_base_url: str = "http://localhost:8890"  # MediaMTX HLS base URL (port 8890)
 
     class Config:
         env_file = ".env"

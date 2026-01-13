@@ -412,6 +412,126 @@ REDIS_PORT=6379
 - Configure health checks in orchestration (Kubernetes, Docker Swarm)
 - Enable structured logging for debugging
 
+### Disabling Streaming
+
+To disable YouTube/local streaming while keeping observer mode fully functional:
+
+#### Option 1: Environment Variable (Recommended)
+
+```bash
+# In docker-compose.yml or K8s deployment
+STREAMING_MODE=disabled
+```
+
+#### Option 2: Config Setting
+
+```bash
+GATEWAY_STREAMING_ENABLED=false
+```
+
+When streaming is disabled:
+
+- Observer mode (`/api/games/{game_id}/observer-urls`) continues to work normally
+- Response includes `observer_urls` but `youtube_urls` and `local_stream_urls` will be `null`
+- Game functionality is completely unaffected
+- Useful for staging/production deployments where streaming is not yet ready
+
+## Local Streaming
+
+The LLM Gateway supports streaming matches to observers via **MediaMTX** (local development) or **YouTube Live** (production via K8s).
+
+### How It Works
+
+When you start a match, three separate streaming views are captured:
+
+| View         | Description                                   | Camera Mode |
+| ------------ | --------------------------------------------- | ----------- |
+| **Global**   | Bird's-eye view of entire map, no fog-of-war  | Strategic   |
+| **Player 1** | AI player 1's perspective with fog-of-war     | Cinematic   |
+| **Player 2** | AI player 2's perspective with fog-of-war     | Cinematic   |
+
+Each view runs in a separate container using Puppeteer to capture the WebGL game and FFmpeg to stream via RTMP.
+
+### Local Development (Enabled by Default)
+
+When running `docker-compose up`, streaming services start automatically:
+
+```bash
+# Start all services including streaming (uses default port 6001)
+docker-compose up -d
+
+# Or specify a different game port
+CIVSERVER_PORT=6002 docker-compose up -d
+
+# Wait for services to be healthy
+docker-compose ps
+```
+
+**Note:** The `CIVSERVER_PORT` environment variable tells streamers which game to observe. Default is `6001` (publite2's first game port).
+
+**View streams** (once a game is running):
+
+- **HLS (VLC/browser)**:
+  - Global: `http://localhost:8890/stream/global/index.m3u8`
+  - Player 1: `http://localhost:8890/stream/player1/index.m3u8`
+  - Player 2: `http://localhost:8890/stream/player2/index.m3u8`
+- **WebRTC (low latency)**:
+  - Global: `http://localhost:8891/stream/global`
+  - Player 1: `http://localhost:8891/stream/player1`
+  - Player 2: `http://localhost:8891/stream/player2`
+
+**Using VLC**:
+```bash
+vlc http://localhost:8890/stream/global/index.m3u8
+```
+
+### API Response
+
+The `/api/games/{game_id}/observer-urls` endpoint includes stream URLs:
+
+```json
+{
+  "game_id": "abc123",
+  "civserver_port": 6001,
+  "observer_urls": {
+    "global": "http://localhost:8080/webclient/?action=observe&...",
+    "player1": "http://localhost:8080/webclient/?action=observe&observe_player=Claude_Sonnet_4_5&...",
+    "player2": "http://localhost:8080/webclient/?action=observe&observe_player=Gemini_3_Flash&..."
+  },
+  "youtube_urls": null,
+  "local_stream_urls": {
+    "global": "http://localhost:8890/stream/global/index.m3u8",
+    "player1": "http://localhost:8890/stream/player1/index.m3u8",
+    "player2": "http://localhost:8890/stream/player2/index.m3u8",
+    "webrtc": {
+      "global": "http://localhost:8891/stream/global",
+      "player1": "http://localhost:8891/stream/player1",
+      "player2": "http://localhost:8891/stream/player2"
+    },
+    "note": "Local streams via MediaMTX (enabled by default with docker-compose up)"
+  }
+}
+```
+
+### Disabling Streaming (Low-Resource Machines)
+
+The streaming containers require ~6GB RAM total (3 streamers × 2GB each). To run without streaming:
+
+```bash
+# Start only core services
+docker-compose up fciv-net db redis nginx flyway -d
+```
+
+### Production (YouTube Live)
+
+In production (GKE), the gateway creates Kubernetes Jobs that stream directly to YouTube Live. This requires:
+
+- `STREAM_KEY` environment variable with YouTube stream key
+- Workload Identity configured for GCS backup uploads
+- StreamManager enabled (`streaming_enabled: true`)
+
+See [stream_manager.py](stream_manager.py) for K8s Job creation details.
+
 ## Development
 
 ### Running Locally

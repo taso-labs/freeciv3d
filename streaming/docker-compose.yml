@@ -1,0 +1,185 @@
+# Local testing configuration for streaming container
+#
+# Usage:
+#   # Development mode with 3 views (local RTMP server, no YouTube):
+#   docker-compose --profile dev up --build
+#   # View streams:
+#   #   Global:  http://localhost:8888/stream/global/index.m3u8 (VLC) or http://localhost:8889/stream/global (WebRTC)
+#   #   Player1: http://localhost:8888/stream/player1/index.m3u8 (VLC) or http://localhost:8889/stream/player1 (WebRTC)
+#   #   Player2: http://localhost:8888/stream/player2/index.m3u8 (VLC) or http://localhost:8889/stream/player2 (WebRTC)
+#
+#   # Single-stream production test with real YouTube:
+#   STREAM_KEY=your-youtube-key docker-compose up streamer --build
+#
+#   # File-only mode (no streaming):
+#   DEV_MODE=file docker-compose up streamer --build
+#
+# Prerequisites:
+#   - FreeCiv game running at localhost:8080 with observer mode
+
+services:
+  # Local RTMP/HLS server for development (replaces YouTube)
+  mediamtx:
+    image: bluenviron/mediamtx:1.4.0
+    profiles: ["dev"]
+    ports:
+      - "1935:1935"   # RTMP input
+      - "8554:8554"   # RTSP output
+      - "8888:8888"   # HLS output
+      - "8889:8889"   # WebRTC output
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8888"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+
+  # =============================================================================
+  # Development: 3 separate streamers for multi-view testing
+  # =============================================================================
+
+  # Global view streamer - bird's eye strategic camera
+  streamer-global:
+    build: .
+    profiles: ["dev"]
+    depends_on:
+      mediamtx:
+        condition: service_healthy
+    environment:
+      - OBSERVER_URL=${OBSERVER_URL_GLOBAL:-http://host.docker.internal:8080/webclient/?action=observe&camera=strategic&embed=1&autojoin=1&name=stream_global}
+      - DEV_MODE=local
+      - LOCAL_RTMP_URL=rtmp://mediamtx:1935/stream/global
+      - BACKUP_PATH=/backup/dev-global.mp4
+      - RESOLUTION=${RESOLUTION:-1280x720}
+      - FPS=${FPS:-30}
+      - BITRATE=${BITRATE:-2500k}
+      - MAX_RETRIES=${MAX_RETRIES:-3}
+      - RETRY_DELAY_MS=${RETRY_DELAY_MS:-5000}
+    volumes:
+      - ./backup:/backup
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 3G
+        reservations:
+          cpus: '1'
+          memory: 2G
+    restart: unless-stopped
+
+  # Player 1 view streamer - AI*1's perspective with fog-of-war, cinematic camera
+  streamer-player1:
+    build: .
+    profiles: ["dev"]
+    depends_on:
+      mediamtx:
+        condition: service_healthy
+    environment:
+      - OBSERVER_URL=${OBSERVER_URL_PLAYER1:-http://host.docker.internal:8080/webclient/?action=observe&camera=cinematic&embed=1&autojoin=1&name=stream_player1}
+      - DEV_MODE=local
+      - LOCAL_RTMP_URL=rtmp://mediamtx:1935/stream/player1
+      - BACKUP_PATH=/backup/dev-player1.mp4
+      - RESOLUTION=${RESOLUTION:-1280x720}
+      - FPS=${FPS:-30}
+      - BITRATE=${BITRATE:-2500k}
+      - MAX_RETRIES=${MAX_RETRIES:-3}
+      - RETRY_DELAY_MS=${RETRY_DELAY_MS:-5000}
+    volumes:
+      - ./backup:/backup
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 3G
+        reservations:
+          cpus: '1'
+          memory: 2G
+    restart: unless-stopped
+
+  # Player 2 view streamer - AI*2's perspective with fog-of-war, cinematic camera
+  streamer-player2:
+    build: .
+    profiles: ["dev"]
+    depends_on:
+      mediamtx:
+        condition: service_healthy
+    environment:
+      - OBSERVER_URL=${OBSERVER_URL_PLAYER2:-http://host.docker.internal:8080/webclient/?action=observe&camera=cinematic&embed=1&autojoin=1&name=stream_player2}
+      - DEV_MODE=local
+      - LOCAL_RTMP_URL=rtmp://mediamtx:1935/stream/player2
+      - BACKUP_PATH=/backup/dev-player2.mp4
+      - RESOLUTION=${RESOLUTION:-1280x720}
+      - FPS=${FPS:-30}
+      - BITRATE=${BITRATE:-2500k}
+      - MAX_RETRIES=${MAX_RETRIES:-3}
+      - RETRY_DELAY_MS=${RETRY_DELAY_MS:-5000}
+    volumes:
+      - ./backup:/backup
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 3G
+        reservations:
+          cpus: '1'
+          memory: 2G
+    restart: unless-stopped
+
+  # =============================================================================
+  # Production/Legacy: Single streamer for backward compatibility
+  # =============================================================================
+
+  streamer:
+    build: .
+    profiles: ["default"]
+    environment:
+      # Required: Observer URL for FreeCiv game
+      - OBSERVER_URL=${OBSERVER_URL:-http://host.docker.internal:8080/webclient/?action=observe&camera=strategic&embed=1&autojoin=1}
+
+      # Development mode: "local" streams to MediaMTX, "file" saves to backup only
+      # If not set, uses YouTube RTMPS (requires STREAM_KEY)
+      - DEV_MODE=${DEV_MODE:-}
+
+      # Local RTMP server URL (for DEV_MODE=local)
+      - LOCAL_RTMP_URL=${LOCAL_RTMP_URL:-rtmp://mediamtx:1935/stream/live}
+
+      # YouTube stream key (only needed for production, not DEV_MODE)
+      - STREAM_KEY=${STREAM_KEY:-}
+
+      # Optional: Video settings
+      - RESOLUTION=${RESOLUTION:-1280x720}
+      - FPS=${FPS:-30}
+      - BITRATE=${BITRATE:-2500k}
+
+      # Optional: Retry settings
+      - MAX_RETRIES=${MAX_RETRIES:-3}
+      - RETRY_DELAY_MS=${RETRY_DELAY_MS:-5000}
+
+      # Backup recording path (inside container)
+      - BACKUP_PATH=/backup/recording.mp4
+
+    volumes:
+      # Mount local backup directory for testing
+      - ./backup:/backup
+
+    # Allow access to host network for local FreeCiv testing
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+    # Reasonable resource limits for streaming
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 3G
+        reservations:
+          cpus: '1'
+          memory: 2G
+
+    # Auto-restart on failure (useful for long streams)
+    restart: unless-stopped

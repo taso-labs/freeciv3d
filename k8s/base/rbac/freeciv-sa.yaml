@@ -21,11 +21,23 @@ metadata:
   namespace: freeciv
 rules:
   - apiGroups: [""]
-    resources: ["configmaps", "secrets"]
+    resources: ["configmaps"]
     verbs: ["get", "list", "watch"]
+  # Secrets: read existing secrets + create/delete for stream key secrets
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list", "watch", "create", "delete"]
   - apiGroups: [""]
     resources: ["pods", "services"]
     verbs: ["get", "list"]
+  # Streaming: Create/delete K8s Jobs for YouTube streaming containers
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["create", "get", "list", "watch", "delete"]
+  # Streaming: Read pod logs for debugging streaming containers
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

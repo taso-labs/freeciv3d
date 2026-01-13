@@ -103,3 +103,12 @@ freeciv-web/src/main/webapp/javascript/packhand_gen.js
 docs/**
 docs/*
 docs/
+
+# Streaming container development artifacts
+streaming/node_modules/
+streaming/coverage/
+streaming/backup/
+
+.metals/**
+.metals/*
+.metals

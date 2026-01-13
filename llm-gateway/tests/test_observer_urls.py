@@ -435,3 +435,88 @@ class TestObserverUrlsRetryBehavior:
         # Verify the correct port was used in the URLs
         data = response.json()
         assert "6005" in data["observer_urls"]["global"]
+
+
+class TestObserverUrlsStreamingDisabled:
+    """
+    Regression prevention tests for observer URLs when streaming is disabled.
+
+    These tests ensure that observer mode continues to work correctly regardless
+    of the streaming feature flag state. This is critical for safe deployment
+    of the streaming feature.
+    """
+
+    def setup_method(self):
+        self.client = TestClient(app)
+
+    def test_observer_urls_returned_when_gateway_stream_manager_is_none(self):
+        """Observer URLs should be returned even when stream_manager is None (streaming disabled)"""
+        with patch("api_endpoints.connection_manager") as mock_cm:
+            setup_mock_connection_manager(mock_cm, civserver_port=6001)
+            # Mock gateway with stream_manager=None (streaming disabled)
+            with patch("api_endpoints.gateway") as mock_gateway:
+                mock_gateway.stream_manager = None
+                mock_gateway.game_sessions = {}
+
+                response = self.client.get("/api/games/test-game/observer-urls")
+
+        assert response.status_code == 200
+        data = response.json()
+        # Observer URLs should always be present
+        assert "observer_urls" in data
+        assert data["observer_urls"]["global"] is not None
+        assert data["observer_urls"]["player1"] is not None
+        assert data["observer_urls"]["player2"] is not None
+        # Streaming URLs should be absent when streaming is disabled
+        assert data.get("youtube_urls") is None
+        assert data.get("local_stream_urls") is None
+
+    def test_observer_urls_returned_when_gateway_is_none(self):
+        """Observer URLs should work even when gateway module is not initialized"""
+        with patch("api_endpoints.connection_manager") as mock_cm:
+            setup_mock_connection_manager(mock_cm, civserver_port=6001)
+            with patch("api_endpoints.gateway", None):
+                response = self.client.get("/api/games/test-game/observer-urls")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert "observer_urls" in data
+        assert data["observer_urls"]["global"] is not None
+        # No streaming URLs when gateway is None
+        assert data.get("youtube_urls") is None
+        assert data.get("local_stream_urls") is None
+
+    def test_local_stream_urls_only_returned_when_stream_manager_exists(self):
+        """local_stream_urls should only be returned when stream_manager is initialized"""
+        with patch("api_endpoints.connection_manager") as mock_cm:
+            setup_mock_connection_manager(mock_cm, civserver_port=6001)
+            # Mock gateway WITH stream_manager (streaming enabled)
+            with patch("api_endpoints.gateway") as mock_gateway:
+                mock_gateway.stream_manager = MagicMock()  # Non-None = streaming enabled
+                mock_gateway.game_sessions = {}
+
+                response = self.client.get("/api/games/test-game/observer-urls")
+
+        assert response.status_code == 200
+        data = response.json()
+        # Observer URLs should always be present
+        assert "observer_urls" in data
+        # local_stream_urls should be present when stream_manager exists
+        assert data.get("local_stream_urls") is not None
+
+    def test_observer_mode_independent_of_streaming_failures(self):
+        """Observer URLs should not fail if streaming encounters errors"""
+        with patch("api_endpoints.connection_manager") as mock_cm:
+            setup_mock_connection_manager(mock_cm, civserver_port=6001)
+            # Mock gateway where stream_manager raises exception on access
+            with patch("api_endpoints.gateway") as mock_gateway:
+                mock_gateway.stream_manager = None  # Streaming disabled/failed
+                mock_gateway.game_sessions = {"test-game": {"port": 6001}}
+
+                response = self.client.get("/api/games/test-game/observer-urls")
+
+        assert response.status_code == 200
+        data = response.json()
+        # Observer URLs should still work
+        assert "observer_urls" in data
+        assert "global" in data["observer_urls"]

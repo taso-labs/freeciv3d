@@ -147,6 +147,14 @@ spec:
             - name: GATEWAY_FREECIV_WEB_BASE_URL
               value: "https://freeciv.clashai.live"
 
+            # YouTube OAuth credentials for streaming (MVP: global view only)
+            - name: YOUTUBE_CREDS_GLOBAL
+              valueFrom:
+                secretKeyRef:
+                  name: youtube-oauth-credentials
+                  key: global
+                  optional: true  # Streaming is optional - game works without it
+
           resources:
             requests:
               cpu: 300m       # Increased from 200m for LLM game processing
