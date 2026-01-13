@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.7](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.6...freeciv3d-v0.3.7) (2026-01-13)
+
+
+### Bug Fixes
+
+* **reconnection:** Skip PACKET_CONN_INFO wait when resuming session ([#55](https://github.com/taso-ventures/freeciv3d/issues/55)) ([f351c08](https://github.com/taso-ventures/freeciv3d/commit/f351c08210ed3d2a8ae133552e16fe4578fefa0f))
+
 ## [0.3.6](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.5...freeciv3d-v0.3.6) (2026-01-13)
 
 
