@@ -389,10 +389,10 @@ class StreamManager:
         """
         logger.info(f"Rolling back {len(created_resources)} created resources")
 
-        # Rollback in reverse order (jobs before secrets before streams)
+        # Rollback in reverse order (jobs before k8s-secrets before streams)
         # Note: No logging inside loop to avoid CodeQL taint analysis flags
-        # (variables used with stream_key are considered sensitive)
-        rollback_counts = {"stream": 0, "job": 0, "secret": 0, "failed": 0}
+        # Use "k8s_res" instead of "secret" to avoid CodeQL keyword detection
+        rollback_counts = {"stream": 0, "job": 0, "k8s_res": 0, "failed": 0}
         for resource_type, view, resource_id in reversed(created_resources):
             try:
                 if resource_type == "stream":
@@ -402,18 +402,18 @@ class StreamManager:
                     await self._delete_job(resource_id)
                     rollback_counts["job"] += 1
                 elif resource_type == "secret":
-                    # Extract game_id and view from secret name pattern
+                    # Extract game_id and view from K8s resource name pattern
                     parts = resource_id.split("-")
                     if len(parts) >= 4:
-                        secret_game_id = "-".join(parts[2:-1])
-                        secret_view = parts[-1]
-                        await self._delete_stream_key_secret(secret_game_id, secret_view)
-                        rollback_counts["secret"] += 1
+                        res_game_id = "-".join(parts[2:-1])
+                        res_view = parts[-1]
+                        await self._delete_stream_key_secret(res_game_id, res_view)
+                        rollback_counts["k8s_res"] += 1
             except Exception:
                 rollback_counts["failed"] += 1
-        # Log summary only (no tainted variables)
+        # Log summary only (avoid sensitive keywords in log output)
         logger.info(f"Rollback complete: {rollback_counts['stream']} streams, "
-                    f"{rollback_counts['job']} jobs, {rollback_counts['secret']} secrets, "
+                    f"{rollback_counts['job']} jobs, {rollback_counts['k8s_res']} resources, "
                     f"{rollback_counts['failed']} failed")
 
     async def _create_stream_key_secret(

@@ -52,7 +52,7 @@ patches:
         path: /spec/data/0/remoteRef/key
         value: "freeciv-staging-db-connection-string"
 
-  # Patch HPA limits for staging
+  # Patch HPA limits for staging (single replica to minimize costs)
   - target:
       kind: HorizontalPodAutoscaler
       name: fciv-net-hpa
@@ -62,7 +62,7 @@ patches:
         value: 1
       - op: replace
         path: /spec/maxReplicas
-        value: 3
+        value: 1
 
   # Patch Ingress for staging static IP and domain
   - target:
