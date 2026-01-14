@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.8](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.7...freeciv3d-v0.3.8) (2026-01-14)
+
+
+### Features
+
+* **observability:** Add distributed tracing with OpenTelemetry and GCP Cloud Trace ([#57](https://github.com/taso-ventures/freeciv3d/issues/57)) ([320268c](https://github.com/taso-ventures/freeciv3d/commit/320268c05aa9771ae930f9ac67d3274b936deffc))
+
 ## [0.3.7](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.6...freeciv3d-v0.3.7) (2026-01-13)
 
 
