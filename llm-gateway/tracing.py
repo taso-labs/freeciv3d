@@ -106,11 +106,19 @@ def init_tracing(
     # Check for OTLP endpoint (matches agent-clash configuration)
     otlp_endpoint = os.getenv("OTLP_ENDPOINT")
 
+    # Configure BatchSpanProcessor with size limits to prevent HTTP/2 FRAME_SIZE_ERROR
+    # These limits prevent large batches that exceed gRPC frame size limits
+    batch_processor_kwargs = {
+        "max_export_batch_size": 64,      # Max spans per export (default 512 is too large)
+        "max_queue_size": 512,            # Max queued spans (default 2048)
+        "schedule_delay_millis": 2000,    # Export every 2 seconds (default 5000)
+    }
+
     if enable_cloud_trace and otlp_endpoint and OTLP_AVAILABLE:
         # Prefer OTLP exporter if endpoint is configured (consistent with agent-clash)
         try:
             exporter = OTLPSpanExporter(endpoint=otlp_endpoint, insecure=False)
-            provider.add_span_processor(BatchSpanProcessor(exporter))
+            provider.add_span_processor(BatchSpanProcessor(exporter, **batch_processor_kwargs))
             logger.info(f"OTLP exporter enabled for {service_name} -> {otlp_endpoint}")
         except Exception as e:
             logger.warning(f"Failed to initialize OTLP exporter: {e}")
@@ -118,8 +126,8 @@ def init_tracing(
         # Fall back to GCP-specific Cloud Trace exporter
         try:
             exporter = CloudTraceSpanExporter()
-            # Use BatchSpanProcessor for production (batches spans for efficiency)
-            provider.add_span_processor(BatchSpanProcessor(exporter))
+            # Use BatchSpanProcessor with size limits for production
+            provider.add_span_processor(BatchSpanProcessor(exporter, **batch_processor_kwargs))
             logger.info(f"Cloud Trace exporter enabled for {service_name}")
         except Exception as e:
             logger.warning(f"Failed to initialize Cloud Trace exporter: {e}")
