@@ -51,9 +51,18 @@ try:
         CLOUD_TRACE_AVAILABLE = False
         logger.warning("Cloud Trace exporter not available - install opentelemetry-exporter-gcp-trace")
 
+    # Try to import OTLP exporter (for telemetry.googleapis.com endpoint)
+    try:
+        from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+        OTLP_AVAILABLE = True
+    except ImportError:
+        OTLP_AVAILABLE = False
+        logger.debug("OTLP exporter not available - install opentelemetry-exporter-otlp")
+
 except ImportError:
     OTEL_AVAILABLE = False
     CLOUD_TRACE_AVAILABLE = False
+    OTLP_AVAILABLE = False
     logger.warning("OpenTelemetry not available - tracing disabled. Install opentelemetry-sdk")
 
 
@@ -94,8 +103,19 @@ def init_tracing(
     # Create tracer provider
     provider = TracerProvider(resource=resource)
 
-    # Add Cloud Trace exporter if enabled and available
-    if enable_cloud_trace and CLOUD_TRACE_AVAILABLE:
+    # Check for OTLP endpoint (matches agent-clash configuration)
+    otlp_endpoint = os.getenv("OTLP_ENDPOINT")
+
+    if enable_cloud_trace and otlp_endpoint and OTLP_AVAILABLE:
+        # Prefer OTLP exporter if endpoint is configured (consistent with agent-clash)
+        try:
+            exporter = OTLPSpanExporter(endpoint=otlp_endpoint, insecure=False)
+            provider.add_span_processor(BatchSpanProcessor(exporter))
+            logger.info(f"OTLP exporter enabled for {service_name} -> {otlp_endpoint}")
+        except Exception as e:
+            logger.warning(f"Failed to initialize OTLP exporter: {e}")
+    elif enable_cloud_trace and CLOUD_TRACE_AVAILABLE:
+        # Fall back to GCP-specific Cloud Trace exporter
         try:
             exporter = CloudTraceSpanExporter()
             # Use BatchSpanProcessor for production (batches spans for efficiency)
@@ -104,7 +124,7 @@ def init_tracing(
         except Exception as e:
             logger.warning(f"Failed to initialize Cloud Trace exporter: {e}")
     elif enable_cloud_trace:
-        logger.warning(f"Cloud Trace requested but exporter not available for {service_name}")
+        logger.warning(f"Cloud Trace requested but no exporter available for {service_name}")
     else:
         logger.info(f"Cloud Trace export disabled for {service_name} (local development mode)")
 

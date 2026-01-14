@@ -129,6 +129,14 @@ spec:
                 configMapKeyRef:
                   name: fciv-net-config
                   key: enable-cloud-trace
+            # OTLP endpoint for OpenTelemetry (matches agent-clash config)
+            - name: OTLP_ENDPOINT
+              value: "https://telemetry.googleapis.com"
+            - name: OTEL_RESOURCE_ATTRIBUTES
+              value: "gcp.project_id=$(GCP_PROJECT_ID)"
+            # GCP project ID (patched by overlay)
+            - name: GCP_PROJECT_ID
+              value: "clashai-staging"
 
             # LLM Gateway secrets (for integrated llm-gateway)
             - name: CACHE_HMAC_SECRET
