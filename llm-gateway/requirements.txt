@@ -17,3 +17,11 @@ docker>=7.0.0  # Docker SDK for LocalStreamManager (uses socket, no CLI needed)
 kubernetes>=29.0.0
 google-api-python-client>=2.100.0
 google-auth>=2.25.0
+# OpenTelemetry for distributed tracing
+opentelemetry-api>=1.24.0
+opentelemetry-sdk>=1.24.0
+opentelemetry-exporter-gcp-trace>=1.6.0
+opentelemetry-exporter-otlp>=1.24.0  # For OTLP endpoint (telemetry.googleapis.com)
+opentelemetry-instrumentation-fastapi>=0.45b0
+# Structured JSON logging
+python-json-logger>=2.0.7

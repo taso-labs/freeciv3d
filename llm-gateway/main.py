@@ -38,6 +38,8 @@ if TYPE_CHECKING:
     from .utils.constants import *
     from .validation import sanitize_for_logging
     from .stream_manager import StreamManager, LocalStreamManager
+    from .tracing import init_tracing, get_tracer
+    from .structured_logging import configure_structured_logging
 else:
     from config import settings, get_cors_origins, get_freeciv_proxy_url, validate_settings
     from connection_manager import connection_manager
@@ -48,6 +50,8 @@ else:
     from utils.constants import *
     from validation import sanitize_for_logging
     from stream_manager import StreamManager, LocalStreamManager
+    from tracing import init_tracing, get_tracer
+    from structured_logging import configure_structured_logging
 
 
 # Streaming mode configuration
@@ -119,15 +123,28 @@ def create_stream_manager() -> Optional[Union[StreamManager, LocalStreamManager]
 # GCloud Logging captures stdout from containers
 os.makedirs("logs", exist_ok=True)
 
-logging.basicConfig(
-    level=getattr(logging, settings.log_level.upper()),
-    format=settings.log_format,
-    handlers=[
-        logging.StreamHandler(sys.stdout),  # GCloud captures stdout (not stderr)
-        logging.FileHandler("logs/gateway.log"),  # File for local debugging
-    ]
-)
-logger = logging.getLogger("llm-gateway")
+# Check if structured JSON logging with tracing should be enabled
+ENABLE_CLOUD_TRACE = os.environ.get("ENABLE_CLOUD_TRACE", "false").lower() == "true"
+
+if ENABLE_CLOUD_TRACE:
+    # Use structured JSON logging for GCP Cloud Logging integration
+    logger = configure_structured_logging(
+        "llm-gateway",
+        log_level=settings.log_level,
+        use_json=True
+    )
+    logger.info("Structured JSON logging enabled for Cloud Logging integration")
+else:
+    # Use standard logging for local development
+    logging.basicConfig(
+        level=getattr(logging, settings.log_level.upper()),
+        format=settings.log_format,
+        handlers=[
+            logging.StreamHandler(sys.stdout),  # GCloud captures stdout (not stderr)
+            logging.FileHandler("logs/gateway.log"),  # File for local debugging
+        ]
+    )
+    logger = logging.getLogger("llm-gateway")
 
 # Create FastAPI app
 app = FastAPI(
@@ -1063,6 +1080,13 @@ async def startup_event():
     """Application startup"""
     if not validate_settings():
         raise RuntimeError("Invalid configuration settings")
+
+    # Initialize distributed tracing if enabled
+    if ENABLE_CLOUD_TRACE:
+        init_tracing("llm-gateway", enable_cloud_trace=True)
+        logger.info("OpenTelemetry tracing initialized with Cloud Trace exporter")
+    else:
+        logger.info("Distributed tracing disabled (set ENABLE_CLOUD_TRACE=true to enable)")
 
     await gateway.start()
     logger.info(f"LLM Gateway started on {settings.host}:{settings.port}")

@@ -78,6 +78,7 @@ class MessageValidator:
                 "leader_name",
                 "game_id",
                 "auto_ready",
+                "trace_context",  # OpenTelemetry trace propagation
             ],
             "field_types": {
                 "type": str,
@@ -87,6 +88,7 @@ class MessageValidator:
                 "nation": str,
                 "leader_name": str,
                 "game_id": str,
+                "trace_context": dict,
             },
             "field_constraints": {
                 "agent_id": {"max_length": 50, "pattern": r"^[a-zA-Z0-9_-]+$"},
@@ -95,51 +97,76 @@ class MessageValidator:
                 "game_id": {"max_length": 64, "pattern": r"^[a-zA-Z0-9_-]+$"},
                 "nation": {"max_length": 50},
                 "leader_name": {"max_length": 100},
+                "trace_context": {"max_keys": 5},  # trace_id, span_id, trace_flags, trace_state
             },
         },
         MessageType.STATE_QUERY: {
             "required_fields": ["type"],
-            "optional_fields": ["format", "include_actions", "player_id"],
+            "optional_fields": ["format", "include_actions", "player_id", "trace_context", "correlation_id"],
             "field_types": {
                 "type": str,
                 "format": str,
                 "include_actions": bool,
                 "player_id": int,
+                "trace_context": dict,
+                "correlation_id": str,
             },
             "field_constraints": {
                 "format": {"allowed_values": ["full", "delta", "llm_optimized"]},
                 "player_id": {"min_value": 1, "max_value": 8},
+                "trace_context": {"max_keys": 5},
+                "correlation_id": {"max_length": 64, "pattern": r"^[a-zA-Z0-9_-]+$"},
             },
         },
         MessageType.ACTION: {
             "required_fields": ["type", "action"],
-            "optional_fields": ["timestamp"],
-            "field_types": {"type": str, "action": dict, "timestamp": (int, float)},
-            "field_constraints": {"action": {"max_keys": 20}},
+            "optional_fields": ["timestamp", "trace_context", "correlation_id"],
+            "field_types": {
+                "type": str,
+                "action": dict,
+                "timestamp": (int, float),
+                "trace_context": dict,
+                "correlation_id": str,
+            },
+            "field_constraints": {
+                "action": {"max_keys": 20},
+                "trace_context": {"max_keys": 5},
+                "correlation_id": {"max_length": 64, "pattern": r"^[a-zA-Z0-9_-]+$"},
+            },
         },
         MessageType.PING: {
             "required_fields": ["type"],
-            "optional_fields": ["timestamp"],
-            "field_types": {"type": str, "timestamp": (int, float)},
+            "optional_fields": ["timestamp", "trace_context"],
+            "field_types": {
+                "type": str,
+                "timestamp": (int, float),
+                "trace_context": dict,
+            },
+            "field_constraints": {
+                "trace_context": {"max_keys": 5},
+            },
         },
         MessageType.PLAYER_READY: {
             "required_fields": ["type"],
-            "optional_fields": [],
-            "field_types": {"type": str},
+            "optional_fields": ["trace_context"],
+            "field_types": {"type": str, "trace_context": dict},
+            "field_constraints": {"trace_context": {"max_keys": 5}},
         },
         MessageType.CONN_PING: {
             "required_fields": ["type"],
-            "optional_fields": [],
-            "field_types": {"type": str},
+            "optional_fields": ["trace_context"],
+            "field_types": {"type": str, "trace_context": dict},
+            "field_constraints": {"trace_context": {"max_keys": 5}},
         },
         MessageType.CONN_PONG: {
             "required_fields": ["type"],
-            "optional_fields": [],
-            "field_types": {"type": str},
+            "optional_fields": ["trace_context"],
+            "field_types": {"type": str, "trace_context": dict},
+            "field_constraints": {"trace_context": {"max_keys": 5}},
         },
         MessageType.UNIT_ACTIONS_QUERY: {
             "required_fields": ["type", "agent_id"],
-            "optional_fields": ["timestamp", "correlation_id", "data", "unit_ids"],
+            "optional_fields": ["timestamp", "correlation_id", "data", "unit_ids", "trace_context"],
             "field_types": {
                 "type": str,
                 "agent_id": str,
@@ -147,25 +174,29 @@ class MessageValidator:
                 "unit_ids": list,
                 "timestamp": (int, float),
                 "correlation_id": str,
+                "trace_context": dict,
             },
             "field_constraints": {
                 "correlation_id": {"max_length": 64, "pattern": r"^[a-zA-Z0-9_-]+$"},
                 "data": {"required_keys": ["unit_ids"]},
+                "trace_context": {"max_keys": 5},
             },
         },
         MessageType.CITY_ACTIONS_QUERY: {
             "required_fields": ["type", "data"],
-            "optional_fields": ["agent_id", "timestamp", "correlation_id"],
+            "optional_fields": ["agent_id", "timestamp", "correlation_id", "trace_context"],
             "field_types": {
                 "type": str,
                 "data": dict,
                 "agent_id": str,
                 "timestamp": (int, float),
                 "correlation_id": str,
+                "trace_context": dict,
             },
             "field_constraints": {
                 "correlation_id": {"max_length": 64, "pattern": r"^[a-zA-Z0-9_-]+$"},
                 "data": {"required_keys": ["city_ids"]},
+                "trace_context": {"max_keys": 5},
             },
         },
         MessageType.CHAT: {
@@ -176,6 +207,7 @@ class MessageValidator:
                 "agent_id",
                 "timestamp",
                 "correlation_id",
+                "trace_context",
             ],
             "field_types": {
                 "type": str,
@@ -184,10 +216,12 @@ class MessageValidator:
                 "agent_id": str,
                 "timestamp": (int, float),
                 "correlation_id": str,
+                "trace_context": dict,
             },
             "field_constraints": {
                 "message": {"max_length": 500},
                 "correlation_id": {"max_length": 64, "pattern": r"^[a-zA-Z0-9_-]+$"},
+                "trace_context": {"max_keys": 5},
             },
         },
     }

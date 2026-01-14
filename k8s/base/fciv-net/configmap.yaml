@@ -27,3 +27,8 @@ data:
 
   # Logging
   log-level: "info"
+
+  # Distributed Tracing (OpenTelemetry with GCP Cloud Trace)
+  # Set to "true" to enable trace export to Cloud Trace
+  # Requires roles/cloudtrace.agent on the service account
+  enable-cloud-trace: "true"
