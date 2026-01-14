@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.9](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.8...freeciv3d-v0.3.9) (2026-01-14)
+
+
+### Bug Fixes
+
+* **k8s:** Convert GATEWAY_FREECIV_WEB_BASE_URL to strategic merge patch ([540f961](https://github.com/taso-ventures/freeciv3d/commit/540f96139f972c4aa7aeab5a7a90bf0434296448))
+
 ## [0.3.8](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.7...freeciv3d-v0.3.8) (2026-01-14)
 
 
