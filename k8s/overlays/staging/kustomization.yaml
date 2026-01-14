@@ -88,13 +88,23 @@ patches:
   # Patch Deployment with staging FreeCiv web URL for observer iframes
   # This URL is used by LLM Gateway to generate observer iframe URLs
   # ROOT.war deploys at / context, so no path prefix needed
-  - target:
+  # Uses strategic merge patch to avoid fragile index-based references
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: fciv-net
+      spec:
+        template:
+          spec:
+            containers:
+            - name: fciv-net
+              env:
+              - name: GATEWAY_FREECIV_WEB_BASE_URL
+                value: "https://freeciv-staging.clashai.live"
+    target:
       kind: Deployment
       name: fciv-net
-    patch: |-
-      - op: replace
-        path: /spec/template/spec/containers/0/env/15/value
-        value: "https://freeciv-staging.clashai.live"
 
   # Patch Flyway Job with Cloud SQL instance
   - target:
