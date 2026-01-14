@@ -37,7 +37,8 @@ echo "Starting Freeciv-web services..."
 echo "=== Starting FreeCiv Proxy for LLM Gateway (Port 8002) ==="
 if [ -d "/docker/freeciv-proxy" ]; then
     cd /docker/freeciv-proxy
-    nohup python3 -u freeciv-proxy.py 8002 > /docker/logs/freeciv-proxy-8002.log 2>&1 &
+    # Use tee to send logs to BOTH file AND stdout (for GCP capture)
+    python3 -u freeciv-proxy.py 8002 2>&1 | tee /docker/logs/freeciv-proxy-8002.log &
     PROXY_8002_PID=$!
     sleep 2
     if kill -0 $PROXY_8002_PID 2>/dev/null; then
@@ -56,7 +57,8 @@ if [ -d "/docker/llm-gateway" ]; then
     # Set Redis URL to use Docker service name instead of localhost
     # Docker internal networking requires using service names not localhost
     export GATEWAY_REDIS_URL="redis://fciv-redis:6379"
-    nohup uvicorn main:app --host 0.0.0.0 --port 8003 --log-level info > /docker/logs/llm-gateway.log 2>&1 &
+    # Use tee to send logs to BOTH file AND stdout (for GCP capture)
+    uvicorn main:app --host 0.0.0.0 --port 8003 --log-level info 2>&1 | tee /docker/logs/llm-gateway.log &
     GATEWAY_PID=$!
     sleep 2
     if kill -0 $GATEWAY_PID 2>/dev/null; then

@@ -54,6 +54,7 @@ from action_constants import *
 from activity_constants import *
 from order_constants import *
 from packet_converter import convert_action_to_packet
+from tracing import init_tracing, extract_trace_context, inject_trace_context, create_child_span
 
 # Configure logging to output to BOTH stdout (for GCloud) and file (for local debugging)
 # GCloud Logging captures stdout from containers, but not file logs
@@ -87,6 +88,10 @@ try:
         logger.debug("File logging disabled: directory %s does not exist (using stdout only)", log_dir)
 except Exception as e:
     logger.warning("Could not initialize file logging: %s", e)
+
+# Initialize distributed tracing (gracefully degrades if OpenTelemetry not available)
+ENABLE_CLOUD_TRACE = os.getenv("ENABLE_CLOUD_TRACE", "false").lower() == "true"
+init_tracing("freeciv-proxy", enable_cloud_trace=ENABLE_CLOUD_TRACE)
 
 # Global registry for active LLM agents
 llm_agents = {}
@@ -234,92 +239,126 @@ class LLMWSHandler(websocket.WebSocketHandler):
         until all async operations complete. This fixes the premature connection closure issue.
         """
         logger.debug(f"Received message from {self.agent_id or self.id}: {message[:200]}")
+
+        # Parse message early to extract trace context
         try:
-            # Session validation for authenticated agents
-            if self.session_id and not self._validate_session():
-                self.write_message(json.dumps({
-                    'type': 'error',
-                    'code': 'E102',
-                    'message': 'Session expired or invalid',
-                    'requires_reconnect': True
-                }))
-                self.close()
-                return
+            msg_data_for_trace = json.loads(message)
+        except json.JSONDecodeError:
+            msg_data_for_trace = {}
 
-            # Cleanup expired sessions periodically
-            session_manager.cleanup_expired_sessions()
+        # Extract trace context from incoming message (propagated from llm-gateway)
+        parent_ctx = extract_trace_context(msg_data_for_trace)
+        msg_type = msg_data_for_trace.get('type', 'unknown')
 
-            # Distributed rate limiting by agent ID
-            if self.agent_id and not distributed_rate_limiter.check_limit(self.agent_id, 'message'):
-                error_response = error_handler.handle_rate_limit_error(
-                    self.agent_id, 'message', 60
-                )
-                self.write_message(error_response.to_json())
-                return
-
-            # Check burst rate limit as well
-            if self.agent_id and not distributed_rate_limiter.check_burst_limit(self.agent_id):
-                error_response = error_handler.handle_rate_limit_error(
-                    self.agent_id, 'burst', 60
-                )
-                self.write_message(error_response.to_json())
-                return
-
-            # Validate and parse message
+        # Create a span for this message handling operation
+        with create_child_span(
+            f"proxy.handle_{msg_type}",
+            parent_ctx,
+            {"agent_id": self.agent_id or self.id, "message_type": msg_type}
+        ) as span:
             try:
-                msg_data = self.message_validator.validate_message(message)
-            except ValidationError as e:
-                error_response = error_handler.handle_validation_error(
-                    self.agent_id or "unknown", e.error_code, e.message,
-                    self.session_id, message
+                # Session validation for authenticated agents
+                if self.session_id and not self._validate_session():
+                    span.set_attribute("error", True)
+                    span.set_attribute("error.reason", "session_invalid")
+                    self.write_message(json.dumps({
+                        'type': 'error',
+                        'code': 'E102',
+                        'message': 'Session expired or invalid',
+                        'requires_reconnect': True
+                    }))
+                    self.close()
+                    return
+
+                # Cleanup expired sessions periodically
+                session_manager.cleanup_expired_sessions()
+
+                # Distributed rate limiting by agent ID
+                if self.agent_id and not distributed_rate_limiter.check_limit(self.agent_id, 'message'):
+                    span.set_attribute("error", True)
+                    span.set_attribute("error.reason", "rate_limited")
+                    error_response = error_handler.handle_rate_limit_error(
+                        self.agent_id, 'message', 60
+                    )
+                    self.write_message(error_response.to_json())
+                    return
+
+                # Check burst rate limit as well
+                if self.agent_id and not distributed_rate_limiter.check_burst_limit(self.agent_id):
+                    span.set_attribute("error", True)
+                    span.set_attribute("error.reason", "burst_limited")
+                    error_response = error_handler.handle_rate_limit_error(
+                        self.agent_id, 'burst', 60
+                    )
+                    self.write_message(error_response.to_json())
+                    return
+
+                # Validate and parse message
+                try:
+                    msg_data = self.message_validator.validate_message(message)
+                except ValidationError as e:
+                    span.set_attribute("error", True)
+                    span.set_attribute("error.reason", "validation_failed")
+                    span.set_attribute("error.code", e.error_code)
+                    error_response = error_handler.handle_validation_error(
+                        self.agent_id or "unknown", e.error_code, e.message,
+                        self.session_id, message
+                    )
+                    self.write_message(error_response.to_json())
+                    return
+
+                # Store span reference for response injection
+                self._current_span = span
+
+                # Route message based on type
+                msg_type = msg_data.get('type', '')
+
+                if msg_type == 'llm_connect':
+                    await self._handle_llm_connect(msg_data)
+                elif msg_type == 'state_query':
+                    self._handle_state_query(msg_data)
+                elif msg_type == 'action':
+                    self._handle_action(msg_data)
+                elif msg_type == 'ping':
+                    self._handle_ping(msg_data)
+                elif msg_type == 'player_ready':
+                    self._handle_player_ready(msg_data)
+                elif msg_type == 'unit_actions_query':
+                    self._handle_unit_actions_query(msg_data)
+                elif msg_type == 'city_actions_query':
+                    self._handle_city_actions_query(msg_data)
+                elif msg_type == 'chat':
+                    self._handle_chat(msg_data)
+                elif self.is_llm_agent:
+                    # Forward other messages to civcom if authenticated
+                    self._forward_to_civcom(message)
+                else:
+                    span.set_attribute("error", True)
+                    span.set_attribute("error.reason", "unknown_message_type")
+                    self.write_message(json.dumps({
+                        'type': 'error',
+                        'code': 'E103',
+                        'message': 'Unknown message type or not authenticated'
+                    }))
+
+            except Exception as e:
+                span.set_attribute("error", True)
+                span.set_attribute("error.reason", "exception")
+                span.set_attribute("error.message", str(e))
+                error_response = error_handler.handle_system_error(
+                    "message_handling", e, self.agent_id, self.session_id
                 )
                 self.write_message(error_response.to_json())
-                return
 
-            # Route message based on type
-            msg_type = msg_data.get('type', '')
-
-            if msg_type == 'llm_connect':
-                await self._handle_llm_connect(msg_data)
-            elif msg_type == 'state_query':
-                self._handle_state_query(msg_data)
-            elif msg_type == 'action':
-                self._handle_action(msg_data)
-            elif msg_type == 'ping':
-                self._handle_ping(msg_data)
-            elif msg_type == 'player_ready':
-                self._handle_player_ready(msg_data)
-            elif msg_type == 'unit_actions_query':
-                self._handle_unit_actions_query(msg_data)
-            elif msg_type == 'city_actions_query':
-                self._handle_city_actions_query(msg_data)
-            elif msg_type == 'chat':
-                self._handle_chat(msg_data)
-            elif self.is_llm_agent:
-                # Forward other messages to civcom if authenticated
-                self._forward_to_civcom(message)
-            else:
-                self.write_message(json.dumps({
-                    'type': 'error',
-                    'code': 'E103',
-                    'message': 'Unknown message type or not authenticated'
-                }))
-
-        except Exception as e:
-            error_response = error_handler.handle_system_error(
-                "message_handling", e, self.agent_id, self.session_id
-            )
-            self.write_message(error_response.to_json())
-
-        # INVESTIGATION: Log when on_message completes
-        try:
-            ws_closed = self.ws_connection.stream.closed() if hasattr(self, 'ws_connection') and hasattr(self.ws_connection, 'stream') else 'NO_STREAM'
-            logger.debug(
-                f"✅ on_message COMPLETED for {self.agent_id}: "
-                f"ws_closed={ws_closed}"
-            )
-        except Exception as log_err:
-            logger.error(f"Error logging on_message completion: {log_err}")
+            # INVESTIGATION: Log when on_message completes
+            try:
+                ws_closed = self.ws_connection.stream.closed() if hasattr(self, 'ws_connection') and hasattr(self.ws_connection, 'stream') else 'NO_STREAM'
+                logger.debug(
+                    f"✅ on_message COMPLETED for {self.agent_id}: "
+                    f"ws_closed={ws_closed}"
+                )
+            except Exception as log_err:
+                logger.error(f"Error logging on_message completion: {log_err}")
 
     async def _handle_llm_connect(self, msg_data: Dict[str, Any]):
         """Handle LLM agent authentication with session management

@@ -123,6 +123,13 @@ spec:
             - name: ENABLE_BOT_API
               value: "true"
 
+            # Distributed tracing (OpenTelemetry with GCP Cloud Trace)
+            - name: ENABLE_CLOUD_TRACE
+              valueFrom:
+                configMapKeyRef:
+                  name: fciv-net-config
+                  key: enable-cloud-trace
+
             # LLM Gateway secrets (for integrated llm-gateway)
             - name: CACHE_HMAC_SECRET
               valueFrom:

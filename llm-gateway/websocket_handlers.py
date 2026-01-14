@@ -23,6 +23,7 @@ try:
         ERROR_CODE_NOT_AUTHENTICATED, ERROR_CODE_CONNECTION_LOST, ERROR_CODE_UNKNOWN,
         WEBSOCKET_PING_INTERVAL, WEBSOCKET_PING_TIMEOUT, WEBSOCKET_CLOSE_TIMEOUT
     )
+    from .tracing import extract_trace_context, inject_trace_context, create_child_span
 except ImportError:
     from connection_manager import connection_manager
     from config import settings
@@ -33,6 +34,7 @@ except ImportError:
         ERROR_CODE_NOT_AUTHENTICATED, ERROR_CODE_CONNECTION_LOST, ERROR_CODE_UNKNOWN,
         WEBSOCKET_PING_INTERVAL, WEBSOCKET_PING_TIMEOUT, WEBSOCKET_CLOSE_TIMEOUT
     )
+    from tracing import extract_trace_context, inject_trace_context, create_child_span
 
 # Gateway will be injected by main.py to avoid circular imports
 gateway = None
@@ -157,33 +159,46 @@ class AgentWebSocketHandler:
         """Handle incoming message from agent - pass through to proxy"""
         message_type = message.get("type")
 
-        if message_type == "llm_connect":
-            # First message - establish proxy connection and forward
-            await self._connect_to_proxy_and_forward(message)
-        elif self.authenticated and self.proxy_connection:
-            # All other messages - forward directly to proxy
-            await self._forward_to_proxy(message)
-        elif message_type == "ping":
-            # Handle pings locally for connection health
-            await self._handle_ping(message)
-        else:
-            # Not authenticated or not connected
-            await self._send_error(
-                "Not authenticated - please send llm_connect message first",
-                error_code=ERROR_CODE_NOT_AUTHENTICATED,
-                details={
-                    "authenticated": self.authenticated,
-                    "proxy_connected": self.proxy_connection is not None,
-                    "can_retry": True
-                }
-            )
+        # Extract trace context from incoming message (if present)
+        parent_ctx = extract_trace_context(message)
 
-    async def _connect_to_proxy_and_forward(self, message: Dict[str, Any]):
+        # Create a span for this message handling operation
+        with create_child_span(
+            f"gateway.handle_{message_type or 'unknown'}",
+            parent_ctx,
+            {"agent_id": self.agent_id, "message_type": message_type}
+        ) as span:
+            if message_type == "llm_connect":
+                # First message - establish proxy connection and forward
+                await self._connect_to_proxy_and_forward(message, span)
+            elif self.authenticated and self.proxy_connection:
+                # All other messages - forward directly to proxy
+                await self._forward_to_proxy(message, span)
+            elif message_type == "ping":
+                # Handle pings locally for connection health
+                await self._handle_ping(message)
+            else:
+                # Not authenticated or not connected
+                span.set_attribute("error", True)
+                span.set_attribute("error.reason", "not_authenticated")
+                await self._send_error(
+                    "Not authenticated - please send llm_connect message first",
+                    error_code=ERROR_CODE_NOT_AUTHENTICATED,
+                    details={
+                        "authenticated": self.authenticated,
+                        "proxy_connected": self.proxy_connection is not None,
+                        "can_retry": True
+                    }
+                )
+
+    async def _connect_to_proxy_and_forward(self, message: Dict[str, Any], span=None):
         """Connect to proxy LLM handler and forward the connect message"""
         try:
             # Connect to the freeciv-proxy LLM handler endpoint
             proxy_url = f"ws://{settings.freeciv_proxy_host}:{settings.freeciv_proxy_port}{settings.freeciv_proxy_ws_path}"
             logger.info(f"Connecting agent {self.agent_id} to proxy: {proxy_url}")
+            if span:
+                span.set_attribute("proxy.url", proxy_url)
 
             # Set max_size to 100MB to handle large FreeCiv game state packets
             # FreeCiv sends packets with map data, player info, city data that exceed the default 1MB limit
@@ -204,6 +219,12 @@ class AgentWebSocketHandler:
 
             # Transform message format: flatten 'data' fields to top level for proxy
             proxy_message = self._transform_to_proxy_format(message)
+
+            # Inject trace context into forwarded message for distributed tracing
+            if span:
+                trace_ctx = inject_trace_context(span)
+                if trace_ctx:
+                    proxy_message["trace_context"] = trace_ctx
 
             # Forward the connect message to proxy
             await self.proxy_connection.send(json.dumps(proxy_message))
@@ -456,7 +477,7 @@ class AgentWebSocketHandler:
                 await self.proxy_connection.close()
                 self.proxy_connection = None
 
-    async def _forward_to_proxy(self, message: Dict[str, Any]):
+    async def _forward_to_proxy(self, message: Dict[str, Any], span=None):
         """Forward message from agent to proxy"""
         try:
             if self.proxy_connection:
@@ -476,9 +497,20 @@ class AgentWebSocketHandler:
                         f"   Actor: {actor_id}\n"
                         f"   Target: {target}"
                     )
+                    # Add action details to span for tracing
+                    if span:
+                        span.set_attribute("action.type", action_type)
+                        span.set_attribute("action.actor_id", str(actor_id))
 
                 # Transform message format for proxy
                 proxy_message = self._transform_to_proxy_format(message)
+
+                # Inject trace context into forwarded message for distributed tracing
+                if span:
+                    trace_ctx = inject_trace_context(span)
+                    if trace_ctx:
+                        proxy_message["trace_context"] = trace_ctx
+
                 await self.proxy_connection.send(json.dumps(proxy_message))
                 logger.debug(f"Forwarded agent message to proxy: {msg_type}")
             else:
