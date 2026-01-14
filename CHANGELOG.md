@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.10](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.9...freeciv3d-v0.3.10) (2026-01-14)
+
+
+### Bug Fixes
+
+* **observability:** Fix tracing export failures and match startup issues ([#60](https://github.com/taso-ventures/freeciv3d/issues/60)) ([fb06119](https://github.com/taso-ventures/freeciv3d/commit/fb06119c25bbe7be0419088b27febc26b741e2da))
+
 ## [0.3.9](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.8...freeciv3d-v0.3.9) (2026-01-14)
 
 
