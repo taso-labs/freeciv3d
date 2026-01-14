@@ -118,17 +118,23 @@ patches:
           name: STREAMING_MODE
           value: "disabled"
 
-  # Patch GCP project ID and OTEL resource attributes for production
-  - target:
+  # Patch OTEL resource attributes for production (strategic merge patch)
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: fciv-net
+      spec:
+        template:
+          spec:
+            containers:
+            - name: fciv-net
+              env:
+              - name: OTEL_RESOURCE_ATTRIBUTES
+                value: "gcp.project_id=clashai-production"
+    target:
       kind: Deployment
       name: fciv-net
-    patch: |-
-      - op: replace
-        path: /spec/template/spec/containers/0/env/15/value
-        value: "clashai-production"
-      - op: replace
-        path: /spec/template/spec/containers/0/env/14/value
-        value: "gcp.project_id=clashai-production"
 
 # ConfigMap generator for production-specific config
 configMapGenerator:

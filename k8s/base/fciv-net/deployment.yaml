@@ -132,11 +132,9 @@ spec:
             # OTLP endpoint for OpenTelemetry (matches agent-clash config)
             - name: OTLP_ENDPOINT
               value: "https://telemetry.googleapis.com"
+            # Resource attributes - patched per environment (staging default)
             - name: OTEL_RESOURCE_ATTRIBUTES
-              value: "gcp.project_id=$(GCP_PROJECT_ID)"
-            # GCP project ID (patched by overlay)
-            - name: GCP_PROJECT_ID
-              value: "clashai-staging"
+              value: "gcp.project_id=clashai-staging"
 
             # LLM Gateway secrets (for integrated llm-gateway)
             - name: CACHE_HMAC_SECRET

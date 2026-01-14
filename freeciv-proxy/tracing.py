@@ -179,6 +179,11 @@ def extract_trace_context(message: Dict[str, Any]) -> Optional[Any]:
         span_id_str = trace_ctx.get("span_id", "0")
         trace_flags_str = trace_ctx.get("trace_flags", "00")
 
+        # Validate field lengths (W3C spec: trace_id=32 hex chars, span_id=16 hex chars)
+        if len(trace_id_str) != 32 or len(span_id_str) != 16:
+            logger.debug(f"Invalid trace context: incorrect field lengths (trace_id={len(trace_id_str)}, span_id={len(span_id_str)})")
+            return None
+
         # Convert hex strings to integers
         trace_id = int(trace_id_str, 16)
         span_id = int(span_id_str, 16)
