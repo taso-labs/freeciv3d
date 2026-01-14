@@ -340,6 +340,7 @@ class CivCom(Thread):
         self.player_id = None  # Will be set from PACKET_PLAYER_INFO
         self.nations = {}  # Will be populated from PACKET_RULESET_NATION (pid=148)
         self.research_info = {}  # {player_id: PACKET_RESEARCH_INFO} - tracks tech progress
+        self.initial_units_received = False  # Set True when first PACKET_UNIT_INFO for our player arrives
 
         # RULESET packet storage - mirrors FreeCiv web client architecture
         # These define immutable game rules (unit types, buildings, techs, terrain, etc.)
@@ -363,6 +364,12 @@ class CivCom(Thread):
 
         # Tile data storage for terrain lookups
         self.tiles = {}  # {tile_index: {terrain, extras, ...}}
+
+        logger.info(
+            f"🆕 CivCom instance created:\n"
+            f"   username={username}, port={civserverport}, key={key}\n"
+            f"   player_units initialized as: {type(self.player_units).__name__}"
+        )
 
     def invalidate_action_cache(self, player_id=None, cache_type=None):
         """Invalidate cached actions when game state changes.
@@ -869,7 +876,14 @@ class CivCom(Thread):
                                 packet_json = json.loads(packet_str)
                                 pid = packet_json.get('pid')
                                 if pid == PACKET_UNIT_INFO:
-                                    logger.info(f"✓ Received PACKET_UNIT_INFO (pid={pid}) for {self.username}")
+                                    unit_id = packet_json.get('id')
+                                    owner = packet_json.get('owner')
+                                    current_count = len(self.player_units) if isinstance(self.player_units, dict) else 0
+                                    logger.info(
+                                        f"📦 PACKET_UNIT_INFO received by CivCom[{self.username}]:\n"
+                                        f"   unit_id={unit_id}, owner={owner}\n"
+                                        f"   CivCom's player_units count BEFORE store: {current_count}"
+                                    )
                                 elif pid == PACKET_CITY_INFO:
                                     logger.info(f"✓ Received PACKET_CITY_INFO (pid={pid}) for {self.username}")
                                 elif pid == PACKET_GAME_INFO:
@@ -1352,7 +1366,18 @@ class CivCom(Thread):
                         self.player_units = {}
 
                     self.player_units[unit_id] = unit_data
-                    logger.info(f"✓ Stored unit {unit_id} (type={unit_type_name}, type_id={unit_type_raw}) for owner {owner}")
+                    total_units = len(self.player_units)
+
+                    # Track when we receive our first unit (for initial state readiness)
+                    if not self.initial_units_received and self.player_id is not None and owner == self.player_id:
+                        self.initial_units_received = True
+                        logger.info(f"🎯 CivCom[{self.username}] received first unit for player {self.player_id} - initial state ready")
+
+                    logger.info(
+                        f"✅ CivCom[{self.username}] stored unit:\n"
+                        f"   unit_id={unit_id}, type={unit_type_name}, owner={owner}\n"
+                        f"   Total units in this CivCom: {total_units}"
+                    )
 
             # City info packet - stores cities by ID for all players
             # NOTE: Verified against packets.def - production is split into production_kind/production_value
@@ -2062,10 +2087,26 @@ class CivCom(Thread):
         units_dict = getattr(self, 'player_units', {})
         player_units_dict = {}
         if isinstance(units_dict, dict):
+            # Debug: Log CivCom identity and unit state
+            logger.info(
+                f"🔍 get_full_state called on CivCom[{self.username}]:\n"
+                f"   Requested player_id={player_id} (type={type(player_id).__name__})\n"
+                f"   CivCom's self.player_id={self.player_id}\n"
+                f"   Total units in this CivCom's player_units: {len(units_dict)}"
+            )
+            if units_dict:
+                owner_types = set(type(u.get('owner')).__name__ for u in units_dict.values())
+                owner_values = set(u.get('owner') for u in units_dict.values())
+                logger.info(
+                    f"   Owner types in units: {owner_types}\n"
+                    f"   Owner values in units: {owner_values}"
+                )
+            else:
+                logger.warning(f"⚠️ CivCom[{self.username}] has ZERO units stored!")
             for unit_id, unit in units_dict.items():
                 if unit.get('owner') == player_id:
                     player_units_dict[str(unit_id)] = unit
-            logger.debug(f"Filtered {len(player_units_dict)} units for player {player_id} from {len(units_dict)} total")
+            logger.info(f"✓ Filtered {len(player_units_dict)} units for player {player_id} from {len(units_dict)} total")
 
         # Keep cities as dict, filtering by player_id
         cities_dict = getattr(self, 'player_cities', {})

@@ -474,11 +474,29 @@ class LLMWSHandler(websocket.WebSocketHandler):
             self.buffer_enabled = True
             logger.info(f"🔒 Packet buffering ENABLED for {self.agent_id} before civserver connection")
 
-            # Connect to civserver
+            # Connect to civserver - try to reuse existing CivCom on reconnection
             logger.info(f"🔌 Connecting agent {self.agent_id} to civserver port {civserver_port} (game: {game_id})")
             try:
-                self._connect_to_civserver(civserver_port, game_id)
-                logger.info(f"✓ Agent {self.agent_id} civcom connection established to port {civserver_port}")
+                # CRITICAL: On reconnection, try to reuse existing CivCom (preserves game state)
+                existing_civcom = civcom_registry.get_civcom(game_id, self.agent_id) if game_id else None
+                if is_reconnecting and existing_civcom and not existing_civcom.stopped:
+                    # Reuse existing CivCom - it has all the game state (units, cities, etc.)
+                    self.civcom = existing_civcom
+                    self.civcom.civwebserver = self  # Reconnect CivCom to new WebSocket handler
+                    self.state_extractor.civcom = self.civcom  # Update StateExtractor reference
+                    logger.info(
+                        f"♻️ REUSING existing CivCom for {self.agent_id} on reconnection:\n"
+                        f"   Units preserved: {len(getattr(self.civcom, 'player_units', {}))}\n"
+                        f"   Cities preserved: {len(getattr(self.civcom, 'player_cities', {}))}\n"
+                        f"   Player ID: {self.civcom.player_id}\n"
+                        f"   CivCom thread alive: {self.civcom.is_alive()}"
+                    )
+                else:
+                    # New connection or no existing CivCom - create fresh
+                    if is_reconnecting and not existing_civcom:
+                        logger.warning(f"⚠️ Reconnecting but no existing CivCom found for {self.agent_id} - creating new")
+                    self._connect_to_civserver(civserver_port, game_id)
+                    logger.info(f"✓ Agent {self.agent_id} civcom connection established to port {civserver_port}")
 
                 # If reconnecting, send /take command to reclaim player slot from AI
                 # The civserver converts disconnected players to AI, so we need to take back our slot
@@ -3820,19 +3838,36 @@ class LLMWSHandler(websocket.WebSocketHandler):
 
         # Suspend session to allow reconnection within timeout window
         # (Uses existing suspend_session infrastructure that was never wired up)
+        session_suspended = False
         if self.session_id:
-            session_manager.suspend_session(self.session_id, "connection_closed")
+            session_suspended = session_manager.suspend_session(self.session_id, "connection_closed")
             logger.info(f"Session {self.session_id} suspended for {self.agent_id} - reconnection allowed")
 
-        # Clean up civcom connection
-        if self.civcom:
-            self.civcom.stopped = True
-            self.civcom.close_connection()
+        # CRITICAL: Preserve CivCom when session is suspended for reconnection
+        # The CivCom maintains TCP socket to FreeCiv server with all game state (units, cities, etc.)
+        # Destroying it would lose state that FreeCiv won't resend on reconnect
+        if session_suspended and self.civcom and not self.civcom.stopped:
+            # Keep CivCom alive but detach from this WebSocket handler
+            # The civcom will continue receiving packets from FreeCiv server
+            logger.info(
+                f"🔄 Preserving CivCom for {self.agent_id} during session suspension:\n"
+                f"   CivCom keeps TCP connection to FreeCiv server (state preserved)\n"
+                f"   Units in CivCom: {len(getattr(self.civcom, 'player_units', {}))}\n"
+                f"   Will be reused on reconnection"
+            )
+            # Don't destroy civcom - it stays registered in civcom_registry for reconnection
+            # Just clear our reference (civcom thread keeps running)
+        else:
+            # Session not suspended (terminated) or civcom already stopped - clean up fully
+            if self.civcom:
+                logger.info(f"Cleaning up CivCom for {self.agent_id} (session not suspended or civcom stopped)")
+                self.civcom.stopped = True
+                self.civcom.close_connection()
 
-        if self.game_id and self.agent_id:
-            registered_civcom = civcom_registry.get_civcom(self.game_id, self.agent_id)
-            if registered_civcom is self.civcom:
-                civcom_registry.unregister_game(self.game_id, self.agent_id)
+            if self.game_id and self.agent_id:
+                registered_civcom = civcom_registry.get_civcom(self.game_id, self.agent_id)
+                if registered_civcom is self.civcom:
+                    civcom_registry.unregister_game(self.game_id, self.agent_id)
 
         self.civcom = None
 
