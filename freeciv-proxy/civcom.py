@@ -1786,7 +1786,8 @@ class CivCom(Thread):
             return actions  # Return empty if invalid format
         
         # Create StateExtractor instance for action generation
-        extractor = StateExtractor()
+        # Pass self as civcom to ensure consistent data source
+        extractor = StateExtractor(civcom=self)
         
         unit_count = 0
         for unit_id, unit in units.items():

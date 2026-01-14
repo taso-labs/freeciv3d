@@ -1959,9 +1959,9 @@ class LLMWSHandler(websocket.WebSocketHandler):
         if not self.civcom:
             return None
         try:
-            # StateExtractor uses civcom_registry for access
+            # StateExtractor uses civcom_registry for access, with handler's civcom as fallback
             # Note: StateExtractor.__init__(civcom, cache, registry) - use named params for clarity
-            return StateExtractor(civcom=None, cache=None, registry=civcom_registry)
+            return StateExtractor(civcom=self.civcom, cache=None, registry=civcom_registry)
         except Exception as e:
             logger.error(f"Failed to create StateExtractor: {e}")
             return None
@@ -3434,6 +3434,9 @@ class LLMWSHandler(websocket.WebSocketHandler):
 
             # Create CivCom connection
             self.civcom = CivCom(self.agent_id, port, f"{self.agent_id}_{self.id}", self)
+            # Update StateExtractor to use this civcom for fallback (fixes dual data source issue)
+            # This ensures state.units and legal_actions use the same civcom instance
+            self.state_extractor.civcom = self.civcom
             logger.debug(f"Created CivCom instance for {self.agent_id}")
             self.civcom.start()
             logger.debug(f"CivCom thread started: is_alive={self.civcom.is_alive()}, daemon={self.civcom.daemon}")

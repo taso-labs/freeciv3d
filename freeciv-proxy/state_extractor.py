@@ -465,17 +465,26 @@ class StateExtractor:
             else:
                 raw_state = civcom.get_full_state(player_id)
 
-                # CRITICAL: If units/cities are empty at game start, wait for initial packets
+                # CRITICAL: If units are empty, wait for initial packets
                 # The FreeCiv server sends PACKET_UNIT_INFO, PACKET_CITY_INFO immediately after
                 # PACKET_START_PHASE, but there's a race condition if agents query state too early
-                if raw_state.get('turn', 0) == 0 and not raw_state.get('units') and not raw_state.get('cities'):
-                    logger.debug(f"Game state empty at turn 0 for {game_id} player {player_id} - waiting for initial packets...")
+                # This can happen at any turn (not just turn 0) when a player joins mid-game
+                # Every player should have at least one unit at game start (settlers/explorer)
+                if not raw_state.get('units'):
+                    current_turn = raw_state.get('turn', 0)
+                    logger.debug(f"No units for {game_id} player {player_id} at turn {current_turn} - waiting for initial packets...")
                     for attempt in range(5):  # Wait up to 500ms
                         time.sleep(0.1)  # Wait 100ms between attempts
                         raw_state = civcom.get_full_state(player_id)
-                        if raw_state.get('units') or raw_state.get('cities'):
-                            logger.debug(f"Initial packets received after {(attempt + 1) * 100}ms")
+                        if raw_state.get('units'):
+                            logger.info(f"✓ Units received for player {player_id} after {(attempt + 1) * 100}ms ({len(raw_state.get('units', {}))} units)")
                             break
+                    else:
+                        # Log warning if we still have no units after waiting
+                        logger.warning(
+                            f"⚠️ Player {player_id} still has 0 units after 500ms wait at turn {current_turn}\n"
+                            f"   This may indicate a packet processing race condition"
+                        )
 
                 if format_type == StateFormat.FULL:
                     state = self._format_full_state(raw_state, player_id)
