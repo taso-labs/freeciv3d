@@ -135,6 +135,9 @@ spec:
             # Resource attributes - patched per environment (staging default)
             - name: OTEL_RESOURCE_ATTRIBUTES
               value: "gcp.project_id=clashai-staging"
+            # GCP project ID for Cloud Trace integration
+            - name: GOOGLE_CLOUD_PROJECT
+              value: "clashai-staging"
 
             # LLM Gateway secrets (for integrated llm-gateway)
             - name: CACHE_HMAC_SECRET

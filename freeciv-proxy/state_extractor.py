@@ -465,17 +465,16 @@ class StateExtractor:
             else:
                 raw_state = civcom.get_full_state(player_id)
 
-                # CRITICAL: If units/cities are empty at game start, wait for initial packets
-                # The FreeCiv server sends PACKET_UNIT_INFO, PACKET_CITY_INFO immediately after
-                # PACKET_START_PHASE, but there's a race condition if agents query state too early
-                if raw_state.get('turn', 0) == 0 and not raw_state.get('units') and not raw_state.get('cities'):
-                    logger.debug(f"Game state empty at turn 0 for {game_id} player {player_id} - waiting for initial packets...")
-                    for attempt in range(5):  # Wait up to 500ms
-                        time.sleep(0.1)  # Wait 100ms between attempts
-                        raw_state = civcom.get_full_state(player_id)
-                        if raw_state.get('units') or raw_state.get('cities'):
-                            logger.debug(f"Initial packets received after {(attempt + 1) * 100}ms")
-                            break
+                # Log warning if units are empty - don't block waiting for packets
+                # The blocking time.sleep() was removed because it freezes Tornado's IOLoop
+                # Agent-clash should retry state queries if needed
+                if not raw_state.get('units'):
+                    current_turn = raw_state.get('turn', 0)
+                    logger.warning(
+                        f"⚠️ No units for player {player_id} at turn {current_turn} in game {game_id}\n"
+                        f"   CivCom may not have processed initial packets yet.\n"
+                        f"   Agent should retry state query if needed."
+                    )
 
                 if format_type == StateFormat.FULL:
                     state = self._format_full_state(raw_state, player_id)
