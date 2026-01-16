@@ -161,20 +161,40 @@ function start_observer_follow_intervals()
     OBSERVER_AUTO_CENTER_MS
   );
 
-  // Initial center with polling to wait for cities to load (more robust than fixed timeout)
+  // Initial center with polling to wait for FOLLOWED PLAYER's cities to load
+  // IMPORTANT: Check for the followed player's cities specifically, not just any cities
+  // This fixes a race condition where another player's cities load first
   var initial_center_attempts = 0;
   observer_initial_center_interval = setInterval(function() {
     initial_center_attempts++;
-    if (typeof cities !== 'undefined' && Object.keys(cities).length > 0) {
+    if (has_cities_for_player(observer_follow_player)) {
       clearInterval(observer_initial_center_interval);
       observer_initial_center_interval = null;
       observer_center_on_followed_player();
+      freelog(LOG_DEBUG, '[Observer] Initial center completed for player ' + observer_follow_player);
     } else if (initial_center_attempts >= MAX_INITIAL_CENTER_ATTEMPTS) {
       clearInterval(observer_initial_center_interval);
       observer_initial_center_interval = null;
-      console.warn('[Observer] Cities not loaded after', MAX_INITIAL_CENTER_ATTEMPTS, 'attempts, giving up initial center');
+      console.warn('[Observer] Cities for player', observer_follow_player, 'not loaded after', MAX_INITIAL_CENTER_ATTEMPTS, 'attempts, giving up initial center');
     }
   }, INITIAL_CENTER_POLL_INTERVAL_MS);
+}
+
+/****************************************************************************
+  Check if any cities exist for the specified player.
+  Used to determine when to stop polling for initial center.
+****************************************************************************/
+function has_cities_for_player(player_id)
+{
+  if (typeof cities === 'undefined' || player_id === null) return false;
+
+  for (var city_id in cities) {
+    var pcity = cities[city_id];
+    if (city_owner_player_id(pcity) === player_id) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /****************************************************************************
