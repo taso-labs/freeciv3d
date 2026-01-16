@@ -285,15 +285,17 @@ function init_land_geometry(geometry, mesh_quality)
   const indices = [];
   const uvs = [];
   const vertices = [];
-  let heightmap_scale = (mesh_quality === 2) ? (mesh_quality * 2) : 1;
+  // Use same heightmap_scale as update_land_geometry for consistency
+  const heightmap_scale = (mesh_quality === 2) ? 2 : 1;
 
   for ( let iy = 0; iy < gridY1; iy ++ ) {
     const y = iy * segment_height - height_half;
     for ( let ix = 0; ix < gridX1; ix ++ ) {
       const x = ix * segment_width - width_half;
-      var sx = ix % xquality, sy = iy % yquality;
-
-      vertices.push( x, -y, heightmap[sx * heightmap_scale][sy * heightmap_scale] * 100 );
+      const sx = ix % xquality, sy = iy % yquality;
+      // Use 1D array indexing matching update_land_geometry (heightmap is Float32Array)
+      const heightIndex = (sy * heightmap_scale * xquality) + (sx * heightmap_scale);
+      vertices.push( x, -y, heightmap[heightIndex] * 100 );
       uvs.push( ix / gridX );
       uvs.push( 1 - ( iy / gridY ) );
     }

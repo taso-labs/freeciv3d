@@ -560,6 +560,21 @@ function execute_observe_player_attachment()
 
   if (typeof send_message === 'function') {
     send_message('/observe ' + observe_player);
+
+    // Set up timeout to detect observer initialization failures
+    setTimeout(function() {
+      if (client_state() !== C_S_RUNNING && observing) {
+        console.error('[Observer] TIMEOUT: Failed to reach C_S_RUNNING state after 15 seconds', {
+          current_state: client_state(),
+          map_xsize: (typeof map !== 'undefined' && map != null) ? map['xsize'] : 'undefined',
+          game_turn: (typeof game_info !== 'undefined' && game_info != null) ? game_info['turn'] : 'undefined',
+          tiles_allocated: (typeof tiles !== 'undefined' && tiles != null),
+          player_count: (typeof players !== 'undefined') ? Object.keys(players).length : 0,
+          observe_player: observe_player
+        });
+        alert('Observer mode failed to initialize. The map is not loading.\n\nThis could be due to network issues or the game not being ready.\n\nPlease try reloading the page.');
+      }
+    }, 15000);
   }
 }
 
@@ -874,6 +889,20 @@ function set_phase_start()
 function request_observe_game()
 {
   send_message("/observe ");
+
+  // Set up timeout to detect observer initialization failures
+  setTimeout(function() {
+    if (client_state() !== C_S_RUNNING && observing) {
+      console.error('[Observer] TIMEOUT: Failed to reach C_S_RUNNING state after 15 seconds', {
+        current_state: client_state(),
+        map_xsize: (typeof map !== 'undefined' && map != null) ? map['xsize'] : 'undefined',
+        game_turn: (typeof game_info !== 'undefined' && game_info != null) ? game_info['turn'] : 'undefined',
+        tiles_allocated: (typeof tiles !== 'undefined' && tiles != null),
+        player_count: (typeof players !== 'undefined') ? Object.keys(players).length : 0
+      });
+      alert('Observer mode failed to initialize. The map is not loading.\n\nThis could be due to network issues or the game not being ready.\n\nPlease try reloading the page.');
+    }
+  }, 15000);
 }
 
 /**************************************************************************
