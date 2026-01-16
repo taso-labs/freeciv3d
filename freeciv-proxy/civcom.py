@@ -49,6 +49,7 @@ from packet_constants import (
     PACKET_RESEARCH_INFO,
     PACKET_SERVER_JOIN_REPLY,
     PACKET_CLIENT_INFO,
+    PACKET_BEGIN_TURN,  # Turn start signal from server
     get_packet_name
 )
 
@@ -336,8 +337,7 @@ class CivCom(Thread):
         self.known_techs = []
         self.visible_tiles = []
         self.game_turn = 1
-        self.pending_turn_advance = False  # Set True when end_turn sent, cleared when turn packet arrives
-        self._turn_before_end_turn = None  # Track turn when end_turn was sent for logging
+        self.turn_started = True  # True when in active turn, False after end_turn until PACKET_BEGIN_TURN
         self.game_phase = 'movement'
         self.player_id = None  # Will be set from PACKET_PLAYER_INFO
         self.nations = {}  # Will be populated from PACKET_RULESET_NATION (pid=148)
@@ -1279,8 +1279,6 @@ class CivCom(Thread):
                 new_turn = packet.get('turn', self.game_turn)
                 if new_turn > self.game_turn:
                     logger.info(f"Turn advanced: {self.game_turn} -> {new_turn}")
-                    # Clear pending flag when turn actually advances (race condition fix)
-                    self.pending_turn_advance = False
                 self.game_turn = new_turn
                 # Extract citymindist (minimum distance between cities) from game info
                 # This is critical for validating city founding actions
@@ -1296,6 +1294,14 @@ class CivCom(Thread):
                     self.game_timeout = timeout
                     logger.debug(f"Stored game timeout: {self.game_timeout}s")
                 logger.debug(f"Updated game turn: {self.game_turn}")
+
+            # Begin turn packet - authoritative server signal that new turn has started
+            # This is sent when ALL players have finished their turn
+            elif packet_type == PACKET_BEGIN_TURN:
+                new_turn = packet.get('turn', self.game_turn)
+                logger.info(f"🔄 PACKET_BEGIN_TURN received: turn {new_turn}")
+                self.game_turn = new_turn
+                self.turn_started = True  # Signal to state_query that turn is active
 
             # CRITICAL: Connection info packet - contains player_num assignment
             # This is the FIX for the PACKET_CONN_INFO bug

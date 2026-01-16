@@ -892,24 +892,23 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 f"   Game ID: {self.game_id}"
             )
 
-            # Wait for pending turn advance to complete (race condition fix)
-            # After end_turn, the C server may not have sent the turn packet yet
-            # Wait with timeout to ensure we return fresh state for the new turn
-            if self.civcom and self.civcom.pending_turn_advance:
-                turn_before = getattr(self.civcom, '_turn_before_end_turn', '?')
-                logger.info(f"⏳ Waiting for turn advance from {turn_before}...")
+            # Wait for new turn to start if we've ended our turn (PACKET_BEGIN_TURN fix)
+            # After end_turn, wait for server's authoritative BEGIN_TURN signal
+            # This ensures all players have finished before we return fresh state
+            if self.civcom and not self.civcom.turn_started:
+                logger.info(f"⏳ Waiting for new turn to begin (current: {self.civcom.game_turn})...")
                 wait_start = time.time()
-                max_wait = 2.0  # Maximum 2 seconds to wait for turn packet
+                max_wait = 10.0  # 10 seconds - enough for other player(s) to end turn
 
-                while self.civcom.pending_turn_advance and (time.time() - wait_start) < max_wait:
+                while not self.civcom.turn_started and (time.time() - wait_start) < max_wait:
                     # Yield control to allow packet processing
                     await asyncio.sleep(0.05)  # 50ms polling interval
 
                 elapsed_ms = (time.time() - wait_start) * 1000
-                if self.civcom.pending_turn_advance:
-                    logger.warning(f"⚠️ Turn advance timeout after {max_wait}s - returning current state")
+                if not self.civcom.turn_started:
+                    logger.warning(f"⚠️ Turn start timeout after {max_wait}s - returning current state")
                 else:
-                    logger.info(f"✓ Turn advance completed in {elapsed_ms:.0f}ms (now turn {self.civcom.game_turn})")
+                    logger.info(f"✓ Turn {self.civcom.game_turn} started in {elapsed_ms:.0f}ms")
 
             # Generate cache key with turn number to prevent stale state
             # Using turn-based key instead of time-based to handle fast turn progression
@@ -1387,14 +1386,13 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 # Without this, actions are queued but never transmitted to civserver
                 self.civcom.send_packets_to_civserver()
 
-                # Handle end_turn: mark pending turn advance and reset rate limits
+                # Handle end_turn: mark turn as ended and reset rate limits
                 if sanitized_action.get('type') == 'end_turn' and self.agent_id:
-                    # Mark pending turn advance so state_query can wait for turn packet
-                    # This fixes the race condition where state is queried before turn advances
+                    # Mark turn as ended - state_query will wait for PACKET_BEGIN_TURN
+                    # This ensures we don't return stale state while waiting for all players
                     if self.civcom:
-                        self.civcom.pending_turn_advance = True
-                        self.civcom._turn_before_end_turn = self.civcom.game_turn
-                        logger.info(f"Marked pending turn advance from turn {self.civcom.game_turn}")
+                        self.civcom.turn_started = False
+                        logger.info(f"🛑 Turn {self.civcom.game_turn} ended, waiting for PACKET_BEGIN_TURN")
 
                     # Reset rate limits to give agent fresh quota for next turn
                     reset_on_turn_end = llm_config.get('validation.rate_limit.reset_on_turn_end', True)
