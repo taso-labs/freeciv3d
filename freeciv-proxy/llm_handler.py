@@ -330,8 +330,33 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 elif msg_type == 'chat':
                     self._handle_chat(msg_data)
                 elif self.is_llm_agent:
-                    # Forward other messages to civcom if authenticated
-                    self._forward_to_civcom(message)
+                    # Enhanced message forwarding with validation logging
+                    # Log messages without "pid" field for debugging, but still forward them
+                    # (Don't block - some control messages legitimately lack "pid")
+                    try:
+                        if "pid" not in msg_data:
+                            # Log for debugging/metrics, but don't reject
+                            logger.debug(
+                                f"📋 Forwarding non-protocol message from {self.agent_id}: "
+                                f"type={msg_data.get('type', 'unknown')}, keys={list(msg_data.keys())[:10]}"
+                            )
+                            span.set_attribute("message.has_pid", False)
+                            span.set_attribute("message.keys", str(list(msg_data.keys())[:5]))
+                        else:
+                            # Standard FreeCiv protocol packet with pid
+                            logger.debug(f"📋 Forwarding protocol packet pid={msg_data.get('pid')} from {self.agent_id}")
+                            span.set_attribute("message.has_pid", True)
+                            span.set_attribute("message.pid", msg_data.get('pid'))
+
+                        # Always forward - let the C server decide if it's valid
+                        self._forward_to_civcom(message)
+
+                    except Exception as e:
+                        logger.error(f"❌ Error processing message from {self.agent_id}: {e}")
+                        span.set_attribute("error", True)
+                        span.set_attribute("error.reason", "message_processing_exception")
+                        # Still try to forward despite error
+                        self._forward_to_civcom(message)
                 else:
                     span.set_attribute("error", True)
                     span.set_attribute("error.reason", "unknown_message_type")
@@ -2097,6 +2122,37 @@ class LLMWSHandler(websocket.WebSocketHandler):
             'techs': [],
             'map_info': {}
         }
+
+    def send_game_ready(self):
+        """Notify agent that initial game state is ready.
+
+        Called by CivCom when first unit packet is received, indicating
+        the game has started and state queries will return valid data.
+
+        This solves the race condition where agents query state before
+        the initial unit packets arrive, getting empty unit lists.
+
+        NOTE: This may be called from CivCom thread, so we use IOLoop callback
+        to schedule the write_message on the main Tornado IOLoop thread.
+        """
+        if not self.is_llm_agent:
+            return
+
+        try:
+            ready_message = {
+                'type': 'game_ready',
+                'agent_id': self.agent_id,
+                'player_id': self.player_id,
+                'session_id': self.session_id,
+                'timestamp': time.time()
+            }
+            message_json = json.dumps(ready_message)
+            # Schedule write on IOLoop since this may be called from CivCom thread
+            # This prevents "no current event loop in thread" errors
+            self.io_loop.add_callback(self.write_message, message_json)
+            logger.info(f"✅ Scheduled game_ready signal to {self.agent_id} (player {self.player_id})")
+        except Exception as e:
+            logger.error(f"❌ Failed to schedule game_ready to {self.agent_id}: {e}")
 
     def _ensure_dict(self, data: Any, key_field: str = 'id') -> Dict:
         """Ensure data is returned as a dict (convert list/dict_values to dict if needed).

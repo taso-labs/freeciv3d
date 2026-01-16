@@ -382,8 +382,19 @@ class StateCache:
             # Allow entries without signatures (for backward compatibility)
             return True
 
+        # For compressed entries, decompress to get the original data for verification
+        # This fixes the bug where entry.data is None for compressed entries
+        data_for_verification = entry.data
+        if entry.is_compressed and entry.compressed_data:
+            try:
+                decompressed = gzip.decompress(entry.compressed_data)
+                data_for_verification = json.loads(decompressed.decode('utf-8'))
+            except Exception as e:
+                logger.error(f"Failed to decompress cache entry for verification: {e}")
+                return False
+
         # Generate expected signature using the stored cache key
-        expected_signature = self._generate_signature(entry.data, entry.player_id, entry.cache_key)
+        expected_signature = self._generate_signature(data_for_verification, entry.player_id, entry.cache_key)
 
         # Compare signatures using constant-time comparison
         try:

@@ -197,9 +197,9 @@ DEFAULT_CITYMINDIST = 2
 # Packet size limits for large packet handling
 # Packets above WARNING_PACKET_SIZE get logged
 # Packets above CRITICAL_PACKET_SIZE trigger rate limiting (delay between sends)
-WARNING_PACKET_SIZE = 500 * 1024     # 500KB - warn about large packets
-CRITICAL_PACKET_SIZE = 1000 * 1024   # 1MB - add rate limiting delay
-LARGE_PACKET_DELAY_MS = 50           # 50ms delay after critical-size packets
+WARNING_PACKET_SIZE = 500 * 1024       # 500KB - warn about large packets
+CRITICAL_PACKET_SIZE = 2 * 1024 * 1024 # 2MB - add rate limiting delay
+LARGE_PACKET_DELAY_MS = 20             # 20ms delay after critical-size packets
 
 HOST = '127.0.0.1'
 logger = logging.getLogger("freeciv-proxy")
@@ -410,13 +410,33 @@ class CivCom(Thread):
             packet: The packet string to send
             packet_size: Size of packet in bytes (pre-calculated for efficiency)
         """
+        # ERR-P-003 FIX: Basic connection check - don't be too aggressive
+        # Tornado's WebSocketHandler doesn't expose ws_connection the way we were checking
+        if not conn:
+            logger.warning(
+                f"⚠️ Skipping write to {self.username}: No connection object "
+                f"(packet size: {packet_size:,} bytes)"
+            )
+            return
+
         try:
             conn.write_message(packet)
             # Reset failure count on successful send if handler supports it
             if hasattr(conn, '_reset_send_failure_count'):
                 conn._reset_send_failure_count()
         except Exception as e:
-            logger.error(f"❌ WebSocket write failed for {self.username}: {e} (packet size: {packet_size:,} bytes)")
+            # Enhanced error logging with exception type and details
+            error_type = type(e).__name__
+            logger.error(
+                f"❌ WebSocket write failed for {self.username}: {error_type}: {e} "
+                f"(packet size: {packet_size:,} bytes)"
+            )
+            # Log additional context for debugging observer disconnections
+            if "observer" in self.username.lower() or "_view_" in self.username:
+                logger.error(
+                    f"   ⚠️ Observer connection failure detected for {self.username}"
+                )
+
             # Track failure for connection health monitoring
             if hasattr(conn, '_track_send_failure'):
                 conn._track_send_failure(e)
@@ -916,8 +936,20 @@ class CivCom(Thread):
                         except Exception as e:
                             logger.warning(f"⚠ Error parsing packet for state storage: {e}", exc_info=True)
 
-                        # ALWAYS forward packet to client (even if parsing disabled/failed)
-                        self.send_buffer_append(self.net_buf[:-1])
+                        # Forward packet to client UNLESS it's a PACKET_CONN_PING
+                        # PACKET_CONN_PING is handled internally (we respond with pong automatically)
+                        # Forwarding it to agents causes unnecessary ping/pong that triggers E101 errors
+                        should_forward = True
+                        try:
+                            pkt = json.loads(self.net_buf[:-1].decode('utf-8'))
+                            if pkt.get('pid') == PACKET_CONN_PING:
+                                should_forward = False
+                                logger.debug(f"[PING] Not forwarding PACKET_CONN_PING to client for {self.username} (handled internally)")
+                        except:
+                            pass  # If we can't parse, forward anyway
+
+                        if should_forward:
+                            self.send_buffer_append(self.net_buf[:-1])
                         self.packet_size = -1
                         self.net_buf = bytearray(0)
                         continue
@@ -1372,6 +1404,13 @@ class CivCom(Thread):
                     if not self.initial_units_received and self.player_id is not None and owner == self.player_id:
                         self.initial_units_received = True
                         logger.info(f"🎯 CivCom[{self.username}] received first unit for player {self.player_id} - initial state ready")
+                        # Notify LLM handler that game state is ready (if connected via LLM gateway)
+                        # This allows agents to wait for this signal before querying state
+                        if hasattr(self.civwebserver, 'send_game_ready'):
+                            try:
+                                self.civwebserver.send_game_ready()
+                            except Exception as e:
+                                logger.warning(f"Failed to send game_ready signal: {e}")
 
                     logger.info(
                         f"✅ CivCom[{self.username}] stored unit:\n"
