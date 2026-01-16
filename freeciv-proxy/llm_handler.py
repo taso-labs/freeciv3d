@@ -316,7 +316,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 if msg_type == 'llm_connect':
                     await self._handle_llm_connect(msg_data)
                 elif msg_type == 'state_query':
-                    self._handle_state_query(msg_data)
+                    await self._handle_state_query(msg_data)
                 elif msg_type == 'action':
                     self._handle_action(msg_data)
                 elif msg_type == 'ping':
@@ -810,8 +810,8 @@ class LLMWSHandler(websocket.WebSocketHandler):
             )
             self.write_message(error_response.to_json())
 
-    def _handle_state_query(self, msg_data: Dict[str, Any]):
-        """Handle optimized state query for LLM"""
+    async def _handle_state_query(self, msg_data: Dict[str, Any]):
+        """Handle optimized state query for LLM (async to support turn advance wait)"""
         logger.info(f"🔍 STATE_QUERY received from agent {self.agent_id}")
         
         # Extract correlation_id for request/response matching
@@ -892,8 +892,29 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 f"   Game ID: {self.game_id}"
             )
 
-            # Generate cache key with session info for security
-            cache_key = f"state_{self.player_id}_{query_format}_{int(time.time() // 5)}"  # 5-second granularity
+            # Wait for pending turn advance to complete (race condition fix)
+            # After end_turn, the C server may not have sent the turn packet yet
+            # Wait with timeout to ensure we return fresh state for the new turn
+            if self.civcom and self.civcom.pending_turn_advance:
+                turn_before = getattr(self.civcom, '_turn_before_end_turn', '?')
+                logger.info(f"⏳ Waiting for turn advance from {turn_before}...")
+                wait_start = time.time()
+                max_wait = 2.0  # Maximum 2 seconds to wait for turn packet
+
+                while self.civcom.pending_turn_advance and (time.time() - wait_start) < max_wait:
+                    # Yield control to allow packet processing
+                    await asyncio.sleep(0.05)  # 50ms polling interval
+
+                elapsed_ms = (time.time() - wait_start) * 1000
+                if self.civcom.pending_turn_advance:
+                    logger.warning(f"⚠️ Turn advance timeout after {max_wait}s - returning current state")
+                else:
+                    logger.info(f"✓ Turn advance completed in {elapsed_ms:.0f}ms (now turn {self.civcom.game_turn})")
+
+            # Generate cache key with turn number to prevent stale state
+            # Using turn-based key instead of time-based to handle fast turn progression
+            current_turn = self.civcom.game_turn if self.civcom and hasattr(self.civcom, 'game_turn') else 0
+            cache_key = f"state_{self.player_id}_{query_format}_turn_{current_turn}"
 
             # Try cache first
             cached_state = state_cache.get(cache_key)
@@ -1366,9 +1387,16 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 # Without this, actions are queued but never transmitted to civserver
                 self.civcom.send_packets_to_civserver()
 
-                # Reset rate limits on end_turn to give agent fresh quota for next turn
-                # This prevents cumulative rate limiting across turns in turn-based games
+                # Handle end_turn: mark pending turn advance and reset rate limits
                 if sanitized_action.get('type') == 'end_turn' and self.agent_id:
+                    # Mark pending turn advance so state_query can wait for turn packet
+                    # This fixes the race condition where state is queried before turn advances
+                    if self.civcom:
+                        self.civcom.pending_turn_advance = True
+                        self.civcom._turn_before_end_turn = self.civcom.game_turn
+                        logger.info(f"Marked pending turn advance from turn {self.civcom.game_turn}")
+
+                    # Reset rate limits to give agent fresh quota for next turn
                     reset_on_turn_end = llm_config.get('validation.rate_limit.reset_on_turn_end', True)
                     if reset_on_turn_end:
                         distributed_rate_limiter.reset_limits(self.agent_id)

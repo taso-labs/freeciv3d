@@ -336,6 +336,8 @@ class CivCom(Thread):
         self.known_techs = []
         self.visible_tiles = []
         self.game_turn = 1
+        self.pending_turn_advance = False  # Set True when end_turn sent, cleared when turn packet arrives
+        self._turn_before_end_turn = None  # Track turn when end_turn was sent for logging
         self.game_phase = 'movement'
         self.player_id = None  # Will be set from PACKET_PLAYER_INFO
         self.nations = {}  # Will be populated from PACKET_RULESET_NATION (pid=148)
@@ -1274,7 +1276,12 @@ class CivCom(Thread):
 
             # Game info packet (turn number, citymindist, timeout, etc)
             elif packet_type == PACKET_GAME_INFO:
-                self.game_turn = packet.get('turn', self.game_turn)
+                new_turn = packet.get('turn', self.game_turn)
+                if new_turn > self.game_turn:
+                    logger.info(f"Turn advanced: {self.game_turn} -> {new_turn}")
+                    # Clear pending flag when turn actually advances (race condition fix)
+                    self.pending_turn_advance = False
+                self.game_turn = new_turn
                 # Extract citymindist (minimum distance between cities) from game info
                 # This is critical for validating city founding actions
                 citymindist = packet.get('citymindist')
