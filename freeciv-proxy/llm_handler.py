@@ -1077,15 +1077,17 @@ class LLMWSHandler(websocket.WebSocketHandler):
             if "dest_y" in action_data:
                 normalized["dest_y"] = action_data["dest_y"]
 
-        elif action_type == "city_production":
-            # Extract city_id and production type
+        elif action_type in ("city_production", "city_change_production"):
+            # Extract city_id and production type (both action names are aliases)
             if "city_id" in action_data:
                 normalized["city_id"] = action_data["city_id"]
 
             target = action_data.get("target", {})
             if isinstance(target, dict):
                 # Support multiple field names for production
-                if "value" in target:
+                if "production_type" in target:
+                    production = target["production_type"]
+                elif "value" in target:
                     production = target["value"]
                 elif "production" in target:
                     production = target["production"]
@@ -1194,19 +1196,23 @@ class LLMWSHandler(websocket.WebSocketHandler):
 
             logger.info(f"Parsed unit_move: {result}")
 
-        elif action_type == "city_production":
-            # Map city production fields
+        elif action_type in ("city_production", "city_change_production"):
+            # Map city production fields (both action names are aliases)
             if "actor_id" in params:
                 result["city_id"] = params["actor_id"]
             elif "city_id" in params:
                 result["city_id"] = params["city_id"]
 
-            if "target" in params:
-                result["production_type"] = str(params["target"]).lower()
+            # Extract production_type from target dict or direct field
+            target = params.get("target", {})
+            if isinstance(target, dict) and "production_type" in target:
+                result["production_type"] = str(target["production_type"]).lower()
+            elif isinstance(target, str):
+                result["production_type"] = target.lower()
             elif "production_type" in params:
                 result["production_type"] = str(params["production_type"]).lower()
 
-            logger.info(f"Parsed city_production: {result}")
+            logger.info(f"Parsed {action_type}: {result}")
 
         elif action_type == "unit_build_city":
             # Map unit build city fields
@@ -2747,11 +2753,12 @@ class LLMWSHandler(websocket.WebSocketHandler):
                     'dir': direction   # CRITICAL: Actual direction index, NOT -1!
                 }]
             }
-        elif action_type == 'city_production':
+        elif action_type in ('city_production', 'city_change_production'):
             # FIXED: Use correct packet ID and implement production name→ID mapping
             # Was using non-existent packet ID 45 with wrong field names
             # Should use PACKET_CITY_CHANGE (pid=35) with production_kind + production_value
             # Matches web client city.js:914 send_city_change()
+            # Note: city_change_production is an alias for city_production
 
             production_name = action.get('production_type', '')
 
