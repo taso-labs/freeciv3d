@@ -194,7 +194,14 @@ function handle_tile_info(packet)
     update_roads_tile(tiles[packet['tile']], true);
     update_tiletypes_tile(tiles[packet['tile']]);
   } else {
-    console.warn('PACKET_TILE_INFO received but tiles array is null!');
+    // Enhanced diagnostic logging for observer mode debugging
+    console.error('[Observer] PACKET_TILE_INFO received but tiles array is null!', {
+      map_xsize: (typeof map !== 'undefined' && map != null) ? map['xsize'] : 'undefined',
+      map_ysize: (typeof map !== 'undefined' && map != null) ? map['ysize'] : 'undefined',
+      client_state: client_state(),
+      observing: (typeof observing !== 'undefined') ? observing : 'undefined',
+      tile_id: packet['tile']
+    });
   }
 }
 

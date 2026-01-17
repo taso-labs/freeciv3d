@@ -98,7 +98,7 @@ class GameConfig(BaseModel):
     """
     ruleset: str = Field(default="classic", description="Game ruleset")
     map_size: Literal["tiny", "small", "medium", "large", "huge"] = Field(
-        default="medium", description="Map size (tiny=50x50, small=64x64, medium=80x80, large=96x96, huge=128x128)"
+        default="small", description="Map size (tiny=50x50, small=64x64, medium=80x80, large=96x96, huge=128x128)"
     )
     map_generator: Literal["FRACTAL", "ISLAND", "FAIR", "CONTINENTS"] = Field(
         default="FRACTAL", description="Map generation algorithm (FRACTAL=large continents, ISLAND=many islands, FAIR=identical islands per player)"

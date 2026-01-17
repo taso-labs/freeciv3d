@@ -280,21 +280,14 @@ class AgentWebSocketHandler:
 
                         # Handle both single objects and arrays of packets from FreeCiv protocol
                         if isinstance(msg_data, list):
-                            # Check for PACKET_CONN_PING (pid:88) and transform it
-                            # Civserver sends pings as raw packets, but agents expect {"type": "conn_ping"}
-                            has_ping = any(packet.get("pid") == 88 for packet in msg_data if isinstance(packet, dict))
+                            # NOTE: PACKET_CONN_PING (pid:88) is now filtered in civcom.py
+                            # CivCom handles civserver keep-alive internally, so pings should never reach here
+                            # We no longer forward conn_ping to agents since:
+                            # 1. CivCom handles the pong response to civserver
+                            # 2. WebSocket-level ping/pong handles connection health
+                            # 3. Forwarding caused E101 errors when agents responded with {"pid": 89}
 
-                            if has_ping:
-                                logger.info(f"🏓 PING: Detected pid:88 in packet array for agent {self.agent_id} - sending transformed conn_ping")
-                                # Send transformed ping message that agent can handle
-                                ping_message = {"type": "conn_ping"}
-                                await self.websocket.send_text(json.dumps(ping_message))
-                                # Also forward raw packets for compatibility with other packet handlers
-                                await self.websocket.send_text(proxy_message)
-                                logger.debug(f"📤 Forwarded both conn_ping and raw packets to agent {self.agent_id}")
-                                continue
-
-                            # Raw FreeCiv packet array (no ping) - forward as-is
+                            # Raw FreeCiv packet array - forward as-is
                             logger.debug(f"📦 Forwarding packet array ({len(msg_data)} packets) to agent {self.agent_id}")
                             await self.websocket.send_text(proxy_message)
                             logger.debug(f"📤 Forwarded packet array to agent {self.agent_id}")
@@ -412,14 +405,18 @@ class AgentWebSocketHandler:
                                 "data": msg_data
                             }
                             proxy_message = json.dumps(agent_message)
-                        # Handle conn_ping - critical for keepalive
+                        # Handle conn_ping - now filtered at civcom.py level
                         elif msg_type == "conn_ping":
-                            logger.info(f"🏓 PING: Received conn_ping from proxy for agent {self.agent_id} - forwarding to agent")
-                            # Forward as-is (no transformation needed)
-                            # Agent must respond with conn_pong to keep connection alive
+                            # NOTE: CivCom handles civserver keep-alive internally (responds with pong directly)
+                            # and filters out PACKET_CONN_PING before forwarding to WebSocket clients.
+                            # So we should never receive conn_ping here. If we do, log it but DON'T forward
+                            # to agents (this caused E101 errors when agents responded with {"pid": 89})
+                            logger.warning(f"🏓 PING: Unexpected conn_ping from proxy for agent {self.agent_id} (should be filtered by civcom)")
+                            continue  # Don't forward to agent
                         # Handle conn_pong - should not come from proxy, but log if it does
                         elif msg_type == "conn_pong":
                             logger.warning(f"🏓 PONG: Unexpected conn_pong from proxy for agent {self.agent_id} (pongs should come from agent)")
+                            continue  # Don't forward to agent
                         # Handle game_ready - important initialization signal
                         elif msg_type == "game_ready":
                             logger.info(f"🎮 GAME_READY: Received game_ready signal for agent {self.agent_id} - forwarding to agent")
@@ -485,7 +482,9 @@ class AgentWebSocketHandler:
 
                 # Add diagnostic logging for critical message types
                 if msg_type == "conn_pong":
-                    logger.info(f"🏓 PONG: Agent {self.agent_id} responding to ping - forwarding conn_pong to proxy")
+                    # Agent sent conn_pong - acknowledge but don't forward (handled locally)
+                    # CivCom handles civserver keep-alive internally
+                    logger.info(f"🏓 PONG: Agent {self.agent_id} sent conn_pong - acknowledging locally (not forwarded)")
                 elif msg_type == "action":
                     action_data = message.get("action", {})
                     action_type = action_data.get("action_type", "unknown")
@@ -504,6 +503,11 @@ class AgentWebSocketHandler:
 
                 # Transform message format for proxy
                 proxy_message = self._transform_to_proxy_format(message)
+
+                # Handle messages that should not be forwarded (e.g., conn_pong)
+                if proxy_message is None:
+                    logger.debug(f"Message type {msg_type} handled locally, not forwarding to proxy")
+                    return
 
                 # Inject trace context into forwarded message for distributed tracing
                 if span:
@@ -644,6 +648,14 @@ class AgentWebSocketHandler:
             # Preserve optional fields
             if "correlation_id" in message:
                 transformed["correlation_id"] = message["correlation_id"]
+        elif msg_type == "conn_pong":
+            # Agent is responding to a conn_ping we may have sent earlier
+            # However, CivCom already handles civserver keep-alive internally (PACKET_CONN_PING/PONG)
+            # and WebSocket-level ping/pong handles connection health
+            # So we just acknowledge the pong and DON'T forward it to the proxy
+            # (Forwarding {"pid": 89} causes E101 errors since proxy expects {"type": ...} format)
+            logger.debug(f"🏓 Received conn_pong from agent {self.agent_id} - acknowledging (not forwarding)")
+            return None  # Signal to not forward this message
         # For other types, pass through as-is
 
         return transformed

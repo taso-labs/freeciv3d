@@ -46,6 +46,10 @@ var seconds_to_phasedone_sync = 0;
 var dialog_close_trigger = "";
 var dialog_message_close_task;
 
+// Observer initialization timeout in milliseconds
+// Used to detect when observer mode fails to reach C_S_RUNNING state
+const OBSERVER_INIT_TIMEOUT_MS = 15000;
+
 // Observer follow mode state
 var observer_follow_player = null;        // Player ID to follow, or null for global
 var observer_auto_center_interval = null; // Interval timer ID for periodic re-centering
@@ -161,20 +165,40 @@ function start_observer_follow_intervals()
     OBSERVER_AUTO_CENTER_MS
   );
 
-  // Initial center with polling to wait for cities to load (more robust than fixed timeout)
+  // Initial center with polling to wait for FOLLOWED PLAYER's cities to load
+  // IMPORTANT: Check for the followed player's cities specifically, not just any cities
+  // This fixes a race condition where another player's cities load first
   var initial_center_attempts = 0;
   observer_initial_center_interval = setInterval(function() {
     initial_center_attempts++;
-    if (typeof cities !== 'undefined' && Object.keys(cities).length > 0) {
+    if (has_cities_for_player(observer_follow_player)) {
       clearInterval(observer_initial_center_interval);
       observer_initial_center_interval = null;
       observer_center_on_followed_player();
+      freelog(LOG_DEBUG, '[Observer] Initial center completed for player ' + observer_follow_player);
     } else if (initial_center_attempts >= MAX_INITIAL_CENTER_ATTEMPTS) {
       clearInterval(observer_initial_center_interval);
       observer_initial_center_interval = null;
-      console.warn('[Observer] Cities not loaded after', MAX_INITIAL_CENTER_ATTEMPTS, 'attempts, giving up initial center');
+      console.warn('[Observer] Cities for player', observer_follow_player, 'not loaded after', MAX_INITIAL_CENTER_ATTEMPTS, 'attempts, giving up initial center');
     }
   }, INITIAL_CENTER_POLL_INTERVAL_MS);
+}
+
+/****************************************************************************
+  Check if any cities exist for the specified player.
+  Used to determine when to stop polling for initial center.
+****************************************************************************/
+function has_cities_for_player(player_id)
+{
+  if (typeof cities === 'undefined' || player_id === null) return false;
+
+  for (var city_id in cities) {
+    var pcity = cities[city_id];
+    if (city_owner_player_id(pcity) === player_id) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /****************************************************************************
@@ -560,6 +584,21 @@ function execute_observe_player_attachment()
 
   if (typeof send_message === 'function') {
     send_message('/observe ' + observe_player);
+
+    // Set up timeout to detect observer initialization failures
+    setTimeout(function() {
+      if (client_state() !== C_S_RUNNING && observing) {
+        console.error('[Observer] TIMEOUT: Failed to reach C_S_RUNNING state after ' + (OBSERVER_INIT_TIMEOUT_MS / 1000) + ' seconds', {
+          current_state: client_state(),
+          map_xsize: (typeof map !== 'undefined' && map != null) ? map['xsize'] : 'undefined',
+          game_turn: (typeof game_info !== 'undefined' && game_info != null) ? game_info['turn'] : 'undefined',
+          tiles_allocated: (typeof tiles !== 'undefined' && tiles != null),
+          player_count: (typeof players !== 'undefined') ? Object.keys(players).length : 0,
+          observe_player: observe_player
+        });
+        alert('Observer mode failed to initialize. The map is not loading.\n\nThis could be due to network issues or the game not being ready.\n\nPlease try reloading the page.');
+      }
+    }, OBSERVER_INIT_TIMEOUT_MS);
   }
 }
 
@@ -874,6 +913,20 @@ function set_phase_start()
 function request_observe_game()
 {
   send_message("/observe ");
+
+  // Set up timeout to detect observer initialization failures
+  setTimeout(function() {
+    if (client_state() !== C_S_RUNNING && observing) {
+      console.error('[Observer] TIMEOUT: Failed to reach C_S_RUNNING state after ' + (OBSERVER_INIT_TIMEOUT_MS / 1000) + ' seconds', {
+        current_state: client_state(),
+        map_xsize: (typeof map !== 'undefined' && map != null) ? map['xsize'] : 'undefined',
+        game_turn: (typeof game_info !== 'undefined' && game_info != null) ? game_info['turn'] : 'undefined',
+        tiles_allocated: (typeof tiles !== 'undefined' && tiles != null),
+        player_count: (typeof players !== 'undefined') ? Object.keys(players).length : 0
+      });
+      alert('Observer mode failed to initialize. The map is not loading.\n\nThis could be due to network issues or the game not being ready.\n\nPlease try reloading the page.');
+    }
+  }, OBSERVER_INIT_TIMEOUT_MS);
 }
 
 /**************************************************************************

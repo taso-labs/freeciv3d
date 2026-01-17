@@ -443,18 +443,23 @@ class StateExtractor:
         Returns:
             Dictionary containing game state in requested format
         """
-        cache_key = self._build_cache_key(game_id, player_id, format_type.value, since_turn)
+        # Get civcom FIRST to determine current turn for cache key
+        # This prevents stale state being returned when turns advance faster than cache TTL
+        civcom = self._get_civcom_for_game(game_id, agent_id)
+        if not civcom:
+            raise CivComNotFoundError(game_id)
 
-        # Check cache first
+        # Get current turn from civcom for turn-aware cache key
+        current_turn = getattr(civcom, 'game_turn', None)
+
+        # Build cache key with current turn to prevent stale data
+        cache_key = self._build_cache_key(game_id, player_id, format_type.value, since_turn, current_turn)
+
+        # Check cache
         cached_state = self.cache.get(cache_key)
         if cached_state is not None:
             logger.debug(f"Cache hit for {cache_key}")
             return cached_state
-
-        # Get civcom for this game - pass agent_id for composite key lookup
-        civcom = self._get_civcom_for_game(game_id, agent_id)
-        if not civcom:
-            raise CivComNotFoundError(game_id)
 
         # Extract fresh state
         start_time = time.time()
@@ -469,9 +474,9 @@ class StateExtractor:
                 # The blocking time.sleep() was removed because it freezes Tornado's IOLoop
                 # Agent-clash should retry state queries if needed
                 if not raw_state.get('units'):
-                    current_turn = raw_state.get('turn', 0)
+                    state_turn = raw_state.get('turn', 0)
                     logger.warning(
-                        f"⚠️ No units for player {player_id} at turn {current_turn} in game {game_id}\n"
+                        f"⚠️ No units for player {player_id} at turn {state_turn} in game {game_id}\n"
                         f"   CivCom may not have processed initial packets yet.\n"
                         f"   Agent should retry state query if needed."
                     )
@@ -2083,9 +2088,15 @@ class StateExtractor:
             logger.warning(f"Error analyzing expansion sites: {e}")
             return 2  # Conservative fallback
 
-    def _build_cache_key(self, game_id: str, player_id: int, format_type: str, since_turn: Optional[int] = None) -> str:
-        """Build cache key for state"""
+    def _build_cache_key(self, game_id: str, player_id: int, format_type: str, since_turn: Optional[int] = None, current_turn: Optional[int] = None) -> str:
+        """Build cache key for state including current turn to prevent stale data.
+
+        The current_turn parameter is critical for cache correctness - without it,
+        state queries return stale data when turns advance faster than cache TTL.
+        """
         key = f"{game_id}_{player_id}_{format_type}"
+        if current_turn is not None:
+            key += f"_turn_{current_turn}"
         if since_turn is not None:
             key += f"_since_{since_turn}"
         return key

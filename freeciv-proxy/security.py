@@ -198,7 +198,7 @@ class InputSanitizer:
             if 'player_id' in action:
                 sanitized['player_id'] = cls.sanitize_player_id(action['player_id'])
 
-        elif action_type == 'city_production':
+        elif action_type in ('city_production', 'city_change_production'):
             if 'city_id' in action:
                 sanitized['city_id'] = cls.sanitize_city_id(action['city_id'])
             if 'production_type' in action:

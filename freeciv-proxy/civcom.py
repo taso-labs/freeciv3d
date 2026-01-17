@@ -21,6 +21,7 @@ import logging
 import time
 import json
 import os
+import asyncio
 from tornado import ioloop
 
 # Import packet ID constants for type-safe packet handling
@@ -49,6 +50,7 @@ from packet_constants import (
     PACKET_RESEARCH_INFO,
     PACKET_SERVER_JOIN_REPLY,
     PACKET_CLIENT_INFO,
+    PACKET_BEGIN_TURN,  # Turn start signal from server
     get_packet_name
 )
 
@@ -195,11 +197,18 @@ TC_OCEAN = 1  # Ocean terrain
 DEFAULT_CITYMINDIST = 2
 
 # Packet size limits for large packet handling
-# Packets above WARNING_PACKET_SIZE get logged
+# Packets above WARNING_PACKET_SIZE get logged for monitoring
 # Packets above CRITICAL_PACKET_SIZE trigger rate limiting (delay between sends)
-WARNING_PACKET_SIZE = 500 * 1024     # 500KB - warn about large packets
-CRITICAL_PACKET_SIZE = 1000 * 1024   # 1MB - add rate limiting delay
-LARGE_PACKET_DELAY_MS = 50           # 50ms delay after critical-size packets
+# to prevent WebSocket buffer overflow and give clients time to process
+#
+# Threshold rationale:
+# - 500KB warning: Most packets are <100KB; this catches unusually large ones
+# - 2MB critical: Ruleset packets can exceed 1MB on large maps with many units.
+#   This threshold was chosen based on observed max packet sizes in production.
+#   Going higher risks WebSocket frame fragmentation issues.
+WARNING_PACKET_SIZE = 500 * 1024       # 500KB - warn about large packets
+CRITICAL_PACKET_SIZE = 2 * 1024 * 1024 # 2MB - add rate limiting delay
+LARGE_PACKET_DELAY_MS = 20             # 20ms delay after critical-size packets
 
 HOST = '127.0.0.1'
 logger = logging.getLogger("freeciv-proxy")
@@ -336,6 +345,9 @@ class CivCom(Thread):
         self.known_techs = []
         self.visible_tiles = []
         self.game_turn = 1
+        self.turn_started = True  # True when in active turn, False after end_turn until PACKET_BEGIN_TURN
+        self.turn_advance_event = asyncio.Event()  # Event for efficient turn waiting (replaces polling)
+        self.turn_advance_event.set()  # Start with event set (turn is active)
         self.game_phase = 'movement'
         self.player_id = None  # Will be set from PACKET_PLAYER_INFO
         self.nations = {}  # Will be populated from PACKET_RULESET_NATION (pid=148)
@@ -410,13 +422,33 @@ class CivCom(Thread):
             packet: The packet string to send
             packet_size: Size of packet in bytes (pre-calculated for efficiency)
         """
+        # ERR-P-003 FIX: Basic connection check - don't be too aggressive
+        # Tornado's WebSocketHandler doesn't expose ws_connection the way we were checking
+        if not conn:
+            logger.warning(
+                f"⚠️ Skipping write to {self.username}: No connection object "
+                f"(packet size: {packet_size:,} bytes)"
+            )
+            return
+
         try:
             conn.write_message(packet)
             # Reset failure count on successful send if handler supports it
             if hasattr(conn, '_reset_send_failure_count'):
                 conn._reset_send_failure_count()
         except Exception as e:
-            logger.error(f"❌ WebSocket write failed for {self.username}: {e} (packet size: {packet_size:,} bytes)")
+            # Enhanced error logging with exception type and details
+            error_type = type(e).__name__
+            logger.error(
+                f"❌ WebSocket write failed for {self.username}: {error_type}: {e} "
+                f"(packet size: {packet_size:,} bytes)"
+            )
+            # Log additional context for debugging observer disconnections
+            if "observer" in self.username.lower() or "_view_" in self.username:
+                logger.error(
+                    f"   ⚠️ Observer connection failure detected for {self.username}"
+                )
+
             # Track failure for connection health monitoring
             if hasattr(conn, '_track_send_failure'):
                 conn._track_send_failure(e)
@@ -916,8 +948,20 @@ class CivCom(Thread):
                         except Exception as e:
                             logger.warning(f"⚠ Error parsing packet for state storage: {e}", exc_info=True)
 
-                        # ALWAYS forward packet to client (even if parsing disabled/failed)
-                        self.send_buffer_append(self.net_buf[:-1])
+                        # Forward packet to client UNLESS it's a PACKET_CONN_PING
+                        # PACKET_CONN_PING is handled internally (we respond with pong automatically)
+                        # Forwarding it to agents causes unnecessary ping/pong that triggers E101 errors
+                        should_forward = True
+                        try:
+                            pkt = json.loads(self.net_buf[:-1].decode('utf-8'))
+                            if pkt.get('pid') == PACKET_CONN_PING:
+                                should_forward = False
+                                logger.debug(f"[PING] Not forwarding PACKET_CONN_PING to client for {self.username} (handled internally)")
+                        except Exception:
+                            pass  # If we can't parse, forward anyway
+
+                        if should_forward:
+                            self.send_buffer_append(self.net_buf[:-1])
                         self.packet_size = -1
                         self.net_buf = bytearray(0)
                         continue
@@ -1242,7 +1286,10 @@ class CivCom(Thread):
 
             # Game info packet (turn number, citymindist, timeout, etc)
             elif packet_type == PACKET_GAME_INFO:
-                self.game_turn = packet.get('turn', self.game_turn)
+                new_turn = packet.get('turn', self.game_turn)
+                if new_turn > self.game_turn:
+                    logger.info(f"Turn advanced: {self.game_turn} -> {new_turn}")
+                self.game_turn = new_turn
                 # Extract citymindist (minimum distance between cities) from game info
                 # This is critical for validating city founding actions
                 citymindist = packet.get('citymindist')
@@ -1257,6 +1304,15 @@ class CivCom(Thread):
                     self.game_timeout = timeout
                     logger.debug(f"Stored game timeout: {self.game_timeout}s")
                 logger.debug(f"Updated game turn: {self.game_turn}")
+
+            # Begin turn packet - authoritative server signal that new turn has started
+            # This is sent when ALL players have finished their turn
+            elif packet_type == PACKET_BEGIN_TURN:
+                new_turn = packet.get('turn', self.game_turn)
+                logger.info(f"🔄 PACKET_BEGIN_TURN received: turn {new_turn}")
+                self.game_turn = new_turn
+                self.turn_started = True  # Signal to state_query that turn is active
+                self.turn_advance_event.set()  # Wake up any coroutines waiting for turn start
 
             # CRITICAL: Connection info packet - contains player_num assignment
             # This is the FIX for the PACKET_CONN_INFO bug
@@ -1372,6 +1428,13 @@ class CivCom(Thread):
                     if not self.initial_units_received and self.player_id is not None and owner == self.player_id:
                         self.initial_units_received = True
                         logger.info(f"🎯 CivCom[{self.username}] received first unit for player {self.player_id} - initial state ready")
+                        # Notify LLM handler that game state is ready (if connected via LLM gateway)
+                        # This allows agents to wait for this signal before querying state
+                        if hasattr(self.civwebserver, 'send_game_ready'):
+                            try:
+                                self.civwebserver.send_game_ready()
+                            except Exception as e:
+                                logger.error(f"Failed to send game_ready signal: {e}", exc_info=True)
 
                     logger.info(
                         f"✅ CivCom[{self.username}] stored unit:\n"

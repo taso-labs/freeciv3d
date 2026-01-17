@@ -15,6 +15,7 @@ import aiohttp
 from typing import Dict, Optional, Any
 from dataclasses import dataclass, field
 from enum import Enum
+from tornado.ioloop import IOLoop
 
 from state_extractor import civcom_registry
 from packet_constants import PACKET_CHAT_MSG_REQ
@@ -316,14 +317,22 @@ class GameSession:
         return True
 
     def add_player(self, agent_id: str, player_id: int, handler: Any) -> bool:
-        """Add a player to the game session"""
+        """Add a player to the game session, or update handler on reconnection"""
         if len(self.players) >= self.max_players:
             logger.warning(f"Game {self.game_id}: Max players ({self.max_players}) reached")
             return False
 
         if agent_id in self.players:
-            logger.warning(f"Game {self.game_id}: Player {agent_id} already in session")
-            return False
+            # Player already exists - this is a reconnection scenario
+            # Update the handler reference while preserving player state
+            with self._players_lock:
+                existing_info = self.players[agent_id]
+                existing_info.handler = handler
+            logger.info(
+                f"Game {self.game_id}: 🔄 Reconnected player {agent_id} "
+                f"(player_id={player_id}, nation_selected={existing_info.nation_selected})"
+            )
+            return True
 
         player_info = PlayerInfo(
             agent_id=agent_id,
@@ -552,10 +561,13 @@ class GameSession:
                         'message': 'Game fully initialized - ready to accept state queries and actions',
                         'timestamp': time.time()
                     }
-                    player_info.handler.write_message(json.dumps(game_ready_msg))
-                    logger.info(f"✅ Sent game_ready to {player_info.agent_id} (player_id={player_info.player_id})")
+                    message_json = json.dumps(game_ready_msg)
+                    # Schedule write on IOLoop to handle potential thread context issues
+                    # This ensures write_message is called from the main Tornado thread
+                    IOLoop.current().add_callback(player_info.handler.write_message, message_json)
+                    logger.info(f"✅ Scheduled game_ready to {player_info.agent_id} (player_id={player_info.player_id})")
                 except Exception as e:
-                    logger.error(f"❌ Failed to send game_ready to {player_info.agent_id}: {e}")
+                    logger.error(f"❌ Failed to schedule game_ready to {player_info.agent_id}: {e}")
                     import traceback
                     logger.error(f"Traceback: {traceback.format_exc()}")
 

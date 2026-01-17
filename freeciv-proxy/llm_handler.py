@@ -14,6 +14,7 @@ import uuid
 import asyncio
 import socket
 from tornado import websocket
+from tornado.ioloop import IOLoop
 from civcom import CivCom
 from state_cache import state_cache
 from state_extractor import StateExtractor, StateFormat, civcom_registry
@@ -316,7 +317,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 if msg_type == 'llm_connect':
                     await self._handle_llm_connect(msg_data)
                 elif msg_type == 'state_query':
-                    self._handle_state_query(msg_data)
+                    await self._handle_state_query(msg_data)
                 elif msg_type == 'action':
                     self._handle_action(msg_data)
                 elif msg_type == 'ping':
@@ -330,8 +331,33 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 elif msg_type == 'chat':
                     self._handle_chat(msg_data)
                 elif self.is_llm_agent:
-                    # Forward other messages to civcom if authenticated
-                    self._forward_to_civcom(message)
+                    # Enhanced message forwarding with validation logging
+                    # Log messages without "pid" field for debugging, but still forward them
+                    # (Don't block - some control messages legitimately lack "pid")
+                    try:
+                        if "pid" not in msg_data:
+                            # Log for debugging/metrics, but don't reject
+                            logger.debug(
+                                f"📋 Forwarding non-protocol message from {self.agent_id}: "
+                                f"type={msg_data.get('type', 'unknown')}, keys={list(msg_data.keys())[:10]}"
+                            )
+                            span.set_attribute("message.has_pid", False)
+                            span.set_attribute("message.keys", str(list(msg_data.keys())[:5]))
+                        else:
+                            # Standard FreeCiv protocol packet with pid
+                            logger.debug(f"📋 Forwarding protocol packet pid={msg_data.get('pid')} from {self.agent_id}")
+                            span.set_attribute("message.has_pid", True)
+                            span.set_attribute("message.pid", msg_data.get('pid'))
+
+                        # Always forward - let the C server decide if it's valid
+                        self._forward_to_civcom(message)
+
+                    except Exception as e:
+                        logger.error(f"❌ Error processing message from {self.agent_id}: {e}")
+                        span.set_attribute("error", True)
+                        span.set_attribute("error.reason", "message_processing_exception")
+                        # Still try to forward despite error
+                        self._forward_to_civcom(message)
                 else:
                     span.set_attribute("error", True)
                     span.set_attribute("error.reason", "unknown_message_type")
@@ -785,8 +811,8 @@ class LLMWSHandler(websocket.WebSocketHandler):
             )
             self.write_message(error_response.to_json())
 
-    def _handle_state_query(self, msg_data: Dict[str, Any]):
-        """Handle optimized state query for LLM"""
+    async def _handle_state_query(self, msg_data: Dict[str, Any]):
+        """Handle optimized state query for LLM (async to support turn advance wait)"""
         logger.info(f"🔍 STATE_QUERY received from agent {self.agent_id}")
         
         # Extract correlation_id for request/response matching
@@ -867,8 +893,26 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 f"   Game ID: {self.game_id}"
             )
 
-            # Generate cache key with session info for security
-            cache_key = f"state_{self.player_id}_{query_format}_{int(time.time() // 5)}"  # 5-second granularity
+            # Wait for new turn to start if we've ended our turn (PACKET_BEGIN_TURN fix)
+            # After end_turn, wait for server's authoritative BEGIN_TURN signal
+            # This ensures all players have finished before we return fresh state
+            # Uses asyncio.Event for efficient blocking instead of polling
+            if self.civcom and not self.civcom.turn_started:
+                logger.info(f"⏳ Waiting for new turn to begin (current: {self.civcom.game_turn})...")
+                wait_start = time.time()
+                try:
+                    # Event-based wait is more efficient than polling - wakes immediately when signaled
+                    await asyncio.wait_for(self.civcom.turn_advance_event.wait(), timeout=10.0)
+                    elapsed_ms = (time.time() - wait_start) * 1000
+                    logger.info(f"✓ Turn {self.civcom.game_turn} started in {elapsed_ms:.0f}ms")
+                except asyncio.TimeoutError:
+                    elapsed_ms = (time.time() - wait_start) * 1000
+                    logger.warning(f"⚠️ Turn start timeout after {elapsed_ms/1000:.1f}s - returning current state")
+
+            # Generate cache key with turn number to prevent stale state
+            # Using turn-based key instead of time-based to handle fast turn progression
+            current_turn = self.civcom.game_turn if self.civcom and hasattr(self.civcom, 'game_turn') else 0
+            cache_key = f"state_{self.player_id}_{query_format}_turn_{current_turn}"
 
             # Try cache first
             cached_state = state_cache.get(cache_key)
@@ -1033,15 +1077,17 @@ class LLMWSHandler(websocket.WebSocketHandler):
             if "dest_y" in action_data:
                 normalized["dest_y"] = action_data["dest_y"]
 
-        elif action_type == "city_production":
-            # Extract city_id and production type
+        elif action_type in ("city_production", "city_change_production"):
+            # Extract city_id and production type (both action names are aliases)
             if "city_id" in action_data:
                 normalized["city_id"] = action_data["city_id"]
 
             target = action_data.get("target", {})
             if isinstance(target, dict):
                 # Support multiple field names for production
-                if "value" in target:
+                if "production_type" in target:
+                    production = target["production_type"]
+                elif "value" in target:
                     production = target["value"]
                 elif "production" in target:
                     production = target["production"]
@@ -1150,19 +1196,23 @@ class LLMWSHandler(websocket.WebSocketHandler):
 
             logger.info(f"Parsed unit_move: {result}")
 
-        elif action_type == "city_production":
-            # Map city production fields
+        elif action_type in ("city_production", "city_change_production"):
+            # Map city production fields (both action names are aliases)
             if "actor_id" in params:
                 result["city_id"] = params["actor_id"]
             elif "city_id" in params:
                 result["city_id"] = params["city_id"]
 
-            if "target" in params:
-                result["production_type"] = str(params["target"]).lower()
+            # Extract production_type from target dict or direct field
+            target = params.get("target", {})
+            if isinstance(target, dict) and "production_type" in target:
+                result["production_type"] = str(target["production_type"]).lower()
+            elif isinstance(target, str):
+                result["production_type"] = target.lower()
             elif "production_type" in params:
                 result["production_type"] = str(params["production_type"]).lower()
 
-            logger.info(f"Parsed city_production: {result}")
+            logger.info(f"Parsed {action_type}: {result}")
 
         elif action_type == "unit_build_city":
             # Map unit build city fields
@@ -1341,9 +1391,16 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 # Without this, actions are queued but never transmitted to civserver
                 self.civcom.send_packets_to_civserver()
 
-                # Reset rate limits on end_turn to give agent fresh quota for next turn
-                # This prevents cumulative rate limiting across turns in turn-based games
+                # Handle end_turn: mark turn as ended and reset rate limits
                 if sanitized_action.get('type') == 'end_turn' and self.agent_id:
+                    # Mark turn as ended - state_query will wait for PACKET_BEGIN_TURN
+                    # This ensures we don't return stale state while waiting for all players
+                    if self.civcom:
+                        self.civcom.turn_started = False
+                        self.civcom.turn_advance_event.clear()  # Clear event to block waiters
+                        logger.info(f"🛑 Turn {self.civcom.game_turn} ended, waiting for PACKET_BEGIN_TURN")
+
+                    # Reset rate limits to give agent fresh quota for next turn
                     reset_on_turn_end = llm_config.get('validation.rate_limit.reset_on_turn_end', True)
                     if reset_on_turn_end:
                         distributed_rate_limiter.reset_limits(self.agent_id)
@@ -2098,6 +2155,43 @@ class LLMWSHandler(websocket.WebSocketHandler):
             'map_info': {}
         }
 
+    def send_game_ready(self):
+        """Notify agent that initial game state is ready.
+
+        Called by CivCom when first unit packet is received, indicating
+        the game has started and state queries will return valid data.
+
+        This solves the race condition where agents query state before
+        the initial unit packets arrive, getting empty unit lists.
+
+        NOTE: This may be called from CivCom thread, so we use IOLoop callback
+        to schedule the write_message on the main Tornado IOLoop thread.
+        """
+        if not self.is_llm_agent:
+            return
+
+        try:
+            ready_message = {
+                'type': 'game_ready',
+                'agent_id': self.agent_id,
+                'player_id': self.player_id,
+                'session_id': self.session_id,
+                'timestamp': time.time()
+            }
+            message_json = json.dumps(ready_message)
+            # Check if we're on the IOLoop thread to avoid potential deadlock
+            # If called from IOLoop, write directly; otherwise schedule via callback
+            current_loop = IOLoop.current(instance=False)
+            if current_loop and current_loop == self.io_loop:
+                self.write_message(message_json)
+            else:
+                # Schedule write on IOLoop since this is called from CivCom thread
+                # This prevents "no current event loop in thread" errors
+                self.io_loop.add_callback(self.write_message, message_json)
+            logger.info(f"✅ Scheduled game_ready signal to {self.agent_id} (player {self.player_id})")
+        except Exception as e:
+            logger.error(f"❌ Failed to schedule game_ready to {self.agent_id}: {e}")
+
     def _ensure_dict(self, data: Any, key_field: str = 'id') -> Dict:
         """Ensure data is returned as a dict (convert list/dict_values to dict if needed).
 
@@ -2438,12 +2532,14 @@ class LLMWSHandler(websocket.WebSocketHandler):
                         # Limit to first 5 production options
                         for production in can_build[:5]:
                             prod_name = production.get('name', production) if isinstance(production, dict) else production
-                            actions.append({
+                            city_action = {
                                 'action_type': 'city_change_production',
                                 'actor_id': city_id,
                                 'target': {'production_type': prod_name},
                                 'is_valid': True
-                            })
+                            }
+                            actions.append(city_action)
+                            logger.debug(f"Generated city production action: {city_action}")
                     else:
                         # Fallback to common early-game options
                         for production in ['Warriors', 'Granary']:
@@ -2659,11 +2755,12 @@ class LLMWSHandler(websocket.WebSocketHandler):
                     'dir': direction   # CRITICAL: Actual direction index, NOT -1!
                 }]
             }
-        elif action_type == 'city_production':
+        elif action_type in ('city_production', 'city_change_production'):
             # FIXED: Use correct packet ID and implement production name→ID mapping
             # Was using non-existent packet ID 45 with wrong field names
             # Should use PACKET_CITY_CHANGE (pid=35) with production_kind + production_value
             # Matches web client city.js:914 send_city_change()
+            # Note: city_change_production is an alias for city_production
 
             production_name = action.get('production_type', '')
 
@@ -3322,6 +3419,14 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 'pid': PACKET_UNIT_CHANGE_ACTIVITY,  # PACKET_UNIT_CHANGE_ACTIVITY
                 'unit_id': action['unit_id'],
                 'activity': ACTIVITY_IDLE,  # ACTIVITY_IDLE (wake up/activate)
+                'target': -1
+            }
+        elif action_type == 'unit_skip':
+            # unit_skip makes unit idle for current turn (same as unit_wake)
+            return {
+                'pid': PACKET_UNIT_CHANGE_ACTIVITY,
+                'unit_id': action['unit_id'],
+                'activity': ACTIVITY_IDLE,
                 'target': -1
             }
         elif action_type == 'unit_auto_worker':
