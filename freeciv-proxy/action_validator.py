@@ -116,6 +116,8 @@ class ActionType(Enum):
     UNIT_UPGRADE = "unit_upgrade"
     UNIT_CONVERT = "unit_convert"
     UNIT_HEAL = "unit_heal"
+    UNIT_SKIP = "unit_skip"
+    UNIT_WAKE = "unit_wake"
 
     # === Espionage (Diplomat/Spy) ===
     UNIT_ESTABLISH_EMBASSY = "unit_establish_embassy"
@@ -149,6 +151,7 @@ class ActionType(Enum):
 
     # === City Management ===
     CITY_PRODUCTION = "city_production"
+    CITY_CHANGE_PRODUCTION = "city_change_production"  # Alias for city_production
     CITY_BUY = "city_buy"
     CITY_SELL_IMPROVEMENT = "city_sell_improvement"
 
@@ -222,6 +225,8 @@ ACTION_CATEGORIES = {
     ActionType.UNIT_UPGRADE: ActionCategory.UNIT_STATUS,
     ActionType.UNIT_CONVERT: ActionCategory.UNIT_STATUS,
     ActionType.UNIT_HEAL: ActionCategory.UNIT_STATUS,
+    ActionType.UNIT_SKIP: ActionCategory.UNIT_STATUS,
+    ActionType.UNIT_WAKE: ActionCategory.UNIT_STATUS,
     # Espionage
     ActionType.UNIT_ESTABLISH_EMBASSY: ActionCategory.ESPIONAGE,
     ActionType.UNIT_EXPEL: ActionCategory.ESPIONAGE,
@@ -252,6 +257,7 @@ ACTION_CATEGORIES = {
     ActionType.DIPLOMACY_MESSAGE: ActionCategory.DIPLOMACY,
     # City Management
     ActionType.CITY_PRODUCTION: ActionCategory.CITY_MANAGEMENT,
+    ActionType.CITY_CHANGE_PRODUCTION: ActionCategory.CITY_MANAGEMENT,
     ActionType.CITY_BUY: ActionCategory.CITY_MANAGEMENT,
     ActionType.CITY_SELL_IMPROVEMENT: ActionCategory.CITY_MANAGEMENT,
     # Research
@@ -320,7 +326,7 @@ class LLMActionValidator:
             result = self._validate_unit_move(action, player_id, game_state)
         elif action_type == ActionType.UNIT_BUILD_CITY:
             result = self._validate_unit_build_city(action, player_id, game_state)
-        elif action_type == ActionType.CITY_PRODUCTION:
+        elif action_type in (ActionType.CITY_PRODUCTION, ActionType.CITY_CHANGE_PRODUCTION):
             result = self._validate_city_production(action, player_id, game_state)
         elif action_type == ActionType.TECH_RESEARCH:
             result = self._validate_tech_research(action, player_id, game_state)

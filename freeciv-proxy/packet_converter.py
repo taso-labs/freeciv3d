@@ -243,7 +243,7 @@ def _convert_action_to_packet_impl(
             }
         )
 
-    elif action_type == "city_production":
+    elif action_type in ("city_production", "city_change_production"):
         production_name = action.get("production_type", "")
         if not production_name:
             raise ValueError("city_production requires 'production_type' field")
@@ -801,6 +801,14 @@ def _convert_action_to_packet_impl(
             "action_type": ACTION_HOME_CITY,
         }
     elif action_type == "unit_wake":
+        return {
+            "pid": PACKET_UNIT_CHANGE_ACTIVITY,
+            "unit_id": action["unit_id"],
+            "activity": ACTIVITY_IDLE,
+            "target": -1,
+        }
+    elif action_type == "unit_skip":
+        # unit_skip makes unit idle for current turn (same as unit_wake)
         return {
             "pid": PACKET_UNIT_CHANGE_ACTIVITY,
             "unit_id": action["unit_id"],

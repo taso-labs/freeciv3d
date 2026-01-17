@@ -3412,6 +3412,14 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 'activity': ACTIVITY_IDLE,  # ACTIVITY_IDLE (wake up/activate)
                 'target': -1
             }
+        elif action_type == 'unit_skip':
+            # unit_skip makes unit idle for current turn (same as unit_wake)
+            return {
+                'pid': PACKET_UNIT_CHANGE_ACTIVITY,
+                'unit_id': action['unit_id'],
+                'activity': ACTIVITY_IDLE,
+                'target': -1
+            }
         elif action_type == 'unit_auto_worker':
             return {
                 'pid': PACKET_UNIT_SERVER_SIDE_AGENT_SET,  # PACKET_UNIT_SERVER_SIDE_AGENT_SET

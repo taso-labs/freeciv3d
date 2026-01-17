@@ -317,14 +317,22 @@ class GameSession:
         return True
 
     def add_player(self, agent_id: str, player_id: int, handler: Any) -> bool:
-        """Add a player to the game session"""
+        """Add a player to the game session, or update handler on reconnection"""
         if len(self.players) >= self.max_players:
             logger.warning(f"Game {self.game_id}: Max players ({self.max_players}) reached")
             return False
 
         if agent_id in self.players:
-            logger.warning(f"Game {self.game_id}: Player {agent_id} already in session")
-            return False
+            # Player already exists - this is a reconnection scenario
+            # Update the handler reference while preserving player state
+            with self._players_lock:
+                existing_info = self.players[agent_id]
+                existing_info.handler = handler
+            logger.info(
+                f"Game {self.game_id}: 🔄 Reconnected player {agent_id} "
+                f"(player_id={player_id}, nation_selected={existing_info.nation_selected})"
+            )
+            return True
 
         player_info = PlayerInfo(
             agent_id=agent_id,
