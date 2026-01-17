@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.11](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.10...freeciv3d-v0.3.11) (2026-01-17)
+
+
+### Bug Fixes
+
+* Stability improvements for LLM agent matches and WebGL rendering ([#62](https://github.com/taso-ventures/freeciv3d/issues/62)) ([a16a528](https://github.com/taso-ventures/freeciv3d/commit/a16a528b189b0d95d8d74bc62229c796b5236d3d))
+
 ## [0.3.10](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.9...freeciv3d-v0.3.10) (2026-01-14)
 
 
