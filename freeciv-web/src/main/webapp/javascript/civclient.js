@@ -46,6 +46,10 @@ var seconds_to_phasedone_sync = 0;
 var dialog_close_trigger = "";
 var dialog_message_close_task;
 
+// Observer initialization timeout in milliseconds
+// Used to detect when observer mode fails to reach C_S_RUNNING state
+const OBSERVER_INIT_TIMEOUT_MS = 15000;
+
 // Observer follow mode state
 var observer_follow_player = null;        // Player ID to follow, or null for global
 var observer_auto_center_interval = null; // Interval timer ID for periodic re-centering
@@ -584,7 +588,7 @@ function execute_observe_player_attachment()
     // Set up timeout to detect observer initialization failures
     setTimeout(function() {
       if (client_state() !== C_S_RUNNING && observing) {
-        console.error('[Observer] TIMEOUT: Failed to reach C_S_RUNNING state after 15 seconds', {
+        console.error('[Observer] TIMEOUT: Failed to reach C_S_RUNNING state after ' + (OBSERVER_INIT_TIMEOUT_MS / 1000) + ' seconds', {
           current_state: client_state(),
           map_xsize: (typeof map !== 'undefined' && map != null) ? map['xsize'] : 'undefined',
           game_turn: (typeof game_info !== 'undefined' && game_info != null) ? game_info['turn'] : 'undefined',
@@ -594,7 +598,7 @@ function execute_observe_player_attachment()
         });
         alert('Observer mode failed to initialize. The map is not loading.\n\nThis could be due to network issues or the game not being ready.\n\nPlease try reloading the page.');
       }
-    }, 15000);
+    }, OBSERVER_INIT_TIMEOUT_MS);
   }
 }
 
@@ -913,7 +917,7 @@ function request_observe_game()
   // Set up timeout to detect observer initialization failures
   setTimeout(function() {
     if (client_state() !== C_S_RUNNING && observing) {
-      console.error('[Observer] TIMEOUT: Failed to reach C_S_RUNNING state after 15 seconds', {
+      console.error('[Observer] TIMEOUT: Failed to reach C_S_RUNNING state after ' + (OBSERVER_INIT_TIMEOUT_MS / 1000) + ' seconds', {
         current_state: client_state(),
         map_xsize: (typeof map !== 'undefined' && map != null) ? map['xsize'] : 'undefined',
         game_turn: (typeof game_info !== 'undefined' && game_info != null) ? game_info['turn'] : 'undefined',
@@ -922,7 +926,7 @@ function request_observe_game()
       });
       alert('Observer mode failed to initialize. The map is not loading.\n\nThis could be due to network issues or the game not being ready.\n\nPlease try reloading the page.');
     }
-  }, 15000);
+  }, OBSERVER_INIT_TIMEOUT_MS);
 }
 
 /**************************************************************************

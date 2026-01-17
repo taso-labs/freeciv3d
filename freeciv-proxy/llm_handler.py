@@ -14,6 +14,7 @@ import uuid
 import asyncio
 import socket
 from tornado import websocket
+from tornado.ioloop import IOLoop
 from civcom import CivCom
 from state_cache import state_cache
 from state_extractor import StateExtractor, StateFormat, civcom_registry
@@ -895,20 +896,18 @@ class LLMWSHandler(websocket.WebSocketHandler):
             # Wait for new turn to start if we've ended our turn (PACKET_BEGIN_TURN fix)
             # After end_turn, wait for server's authoritative BEGIN_TURN signal
             # This ensures all players have finished before we return fresh state
+            # Uses asyncio.Event for efficient blocking instead of polling
             if self.civcom and not self.civcom.turn_started:
                 logger.info(f"⏳ Waiting for new turn to begin (current: {self.civcom.game_turn})...")
                 wait_start = time.time()
-                max_wait = 10.0  # 10 seconds - enough for other player(s) to end turn
-
-                while not self.civcom.turn_started and (time.time() - wait_start) < max_wait:
-                    # Yield control to allow packet processing
-                    await asyncio.sleep(0.05)  # 50ms polling interval
-
-                elapsed_ms = (time.time() - wait_start) * 1000
-                if not self.civcom.turn_started:
-                    logger.warning(f"⚠️ Turn start timeout after {max_wait}s - returning current state")
-                else:
+                try:
+                    # Event-based wait is more efficient than polling - wakes immediately when signaled
+                    await asyncio.wait_for(self.civcom.turn_advance_event.wait(), timeout=10.0)
+                    elapsed_ms = (time.time() - wait_start) * 1000
                     logger.info(f"✓ Turn {self.civcom.game_turn} started in {elapsed_ms:.0f}ms")
+                except asyncio.TimeoutError:
+                    elapsed_ms = (time.time() - wait_start) * 1000
+                    logger.warning(f"⚠️ Turn start timeout after {elapsed_ms/1000:.1f}s - returning current state")
 
             # Generate cache key with turn number to prevent stale state
             # Using turn-based key instead of time-based to handle fast turn progression
@@ -1392,6 +1391,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                     # This ensures we don't return stale state while waiting for all players
                     if self.civcom:
                         self.civcom.turn_started = False
+                        self.civcom.turn_advance_event.clear()  # Clear event to block waiters
                         logger.info(f"🛑 Turn {self.civcom.game_turn} ended, waiting for PACKET_BEGIN_TURN")
 
                     # Reset rate limits to give agent fresh quota for next turn
@@ -2173,9 +2173,15 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 'timestamp': time.time()
             }
             message_json = json.dumps(ready_message)
-            # Schedule write on IOLoop since this may be called from CivCom thread
-            # This prevents "no current event loop in thread" errors
-            self.io_loop.add_callback(self.write_message, message_json)
+            # Check if we're on the IOLoop thread to avoid potential deadlock
+            # If called from IOLoop, write directly; otherwise schedule via callback
+            current_loop = IOLoop.current(instance=False)
+            if current_loop and current_loop == self.io_loop:
+                self.write_message(message_json)
+            else:
+                # Schedule write on IOLoop since this is called from CivCom thread
+                # This prevents "no current event loop in thread" errors
+                self.io_loop.add_callback(self.write_message, message_json)
             logger.info(f"✅ Scheduled game_ready signal to {self.agent_id} (player {self.player_id})")
         except Exception as e:
             logger.error(f"❌ Failed to schedule game_ready to {self.agent_id}: {e}")

@@ -99,8 +99,9 @@ class StateCache:
                 current_time = time.time()
 
                 if current_time - entry.timestamp < self.ttl:
-                    # Verify cache integrity
-                    if self._verify_cache_integrity(entry):
+                    # Verify cache integrity (returns decompressed data to avoid double decompression)
+                    is_valid, cached_data = self._verify_cache_integrity(entry)
+                    if is_valid:
                         # Cache hit (metrics removed for thread safety)
                         entry.last_accessed = current_time
 
@@ -109,17 +110,8 @@ class StateCache:
 
                         logger.debug(f"Cache hit for key: {key}")
 
-                        # Handle decompression if needed
-                        if entry.is_compressed and entry.compressed_data:
-                            try:
-                                decompressed_bytes = gzip.decompress(entry.compressed_data)
-                                return json.loads(decompressed_bytes.decode('utf-8'))
-                            except Exception as e:
-                                logger.error(f"Decompression failed for key {key}: {e}")
-                                self.cache.pop(key, None)
-                                return None
-
-                        return entry.data
+                        # Data is already decompressed by _verify_cache_integrity
+                        return cached_data
 
                     # Cache poisoning detected, remove entry
                     self.cache.pop(key, None)
@@ -376,11 +368,17 @@ class StateCache:
 
         return signature
 
-    def _verify_cache_integrity(self, entry: CacheEntry) -> bool:
-        """Verify cache entry integrity using HMAC"""
+    def _verify_cache_integrity(self, entry: CacheEntry) -> tuple:
+        """Verify cache entry integrity using HMAC.
+
+        Returns:
+            Tuple of (is_valid: bool, decompressed_data: Optional[Dict[str, Any]])
+            where decompressed_data is provided for compressed entries to avoid
+            double decompression in the caller.
+        """
         if not entry.signature:
             # Allow entries without signatures (for backward compatibility)
-            return True
+            return (True, entry.data)
 
         # For compressed entries, decompress to get the original data for verification
         # This fixes the bug where entry.data is None for compressed entries
@@ -391,17 +389,18 @@ class StateCache:
                 data_for_verification = json.loads(decompressed.decode('utf-8'))
             except Exception as e:
                 logger.error(f"Failed to decompress cache entry for verification: {e}")
-                return False
+                return (False, None)
 
         # Generate expected signature using the stored cache key
         expected_signature = self._generate_signature(data_for_verification, entry.player_id, entry.cache_key)
 
         # Compare signatures using constant-time comparison
         try:
-            return hmac.compare_digest(entry.signature, expected_signature)
+            is_valid = hmac.compare_digest(entry.signature, expected_signature)
+            return (is_valid, data_for_verification if is_valid else None)
         except Exception as e:
             logger.error(f"Error verifying cache integrity: {e}")
-            return False
+            return (False, None)
 
     def _calculate_shannon_entropy(self, data: str) -> float:
         """

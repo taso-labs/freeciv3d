@@ -295,7 +295,15 @@ function init_land_geometry(geometry, mesh_quality)
       const sx = ix % xquality, sy = iy % yquality;
       // Use 1D array indexing matching update_land_geometry (heightmap is Float32Array)
       const heightIndex = (sy * heightmap_scale * xquality) + (sx * heightmap_scale);
-      vertices.push( x, -y, heightmap[heightIndex] * 100 );
+      // Bounds check: if heightIndex exceeds array length, use 0 as fallback
+      // This prevents undefined/NaN values from corrupting the geometry
+      const height = (heightIndex < heightmap.length) ? heightmap[heightIndex] : 0;
+      if (height === undefined || isNaN(height)) {
+        console.error('[WebGL] Invalid height at index', heightIndex, 'max:', heightmap.length);
+        vertices.push(x, -y, 0);
+      } else {
+        vertices.push(x, -y, height * 100);
+      }
       uvs.push( ix / gridX );
       uvs.push( 1 - ( iy / gridY ) );
     }
@@ -358,7 +366,14 @@ function update_land_geometry(geometry, mesh_quality) {
       const index = iy * (gridX + 1) + ix;
       const heightIndex = (sy * heightmap_scale * xquality) + (sx * heightmap_scale); // Convert (sx, sy) to single index
 
-      bufferAttribute.setXYZ(index, x, -y, heightmap[heightIndex] * 100);
+      // Bounds check: if heightIndex exceeds array length, use 0 as fallback
+      const height = (heightIndex < heightmap.length) ? heightmap[heightIndex] : 0;
+      if (height === undefined || isNaN(height)) {
+        console.error('[WebGL] Invalid height in update at index', heightIndex, 'max:', heightmap.length);
+        bufferAttribute.setXYZ(index, x, -y, 0);
+      } else {
+        bufferAttribute.setXYZ(index, x, -y, height * 100);
+      }
     }
   }
 
