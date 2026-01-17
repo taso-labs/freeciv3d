@@ -2532,12 +2532,14 @@ class LLMWSHandler(websocket.WebSocketHandler):
                         # Limit to first 5 production options
                         for production in can_build[:5]:
                             prod_name = production.get('name', production) if isinstance(production, dict) else production
-                            actions.append({
+                            city_action = {
                                 'action_type': 'city_change_production',
                                 'actor_id': city_id,
                                 'target': {'production_type': prod_name},
                                 'is_valid': True
-                            })
+                            }
+                            actions.append(city_action)
+                            logger.debug(f"Generated city production action: {city_action}")
                     else:
                         # Fallback to common early-game options
                         for production in ['Warriors', 'Granary']:
