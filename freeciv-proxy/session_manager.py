@@ -321,8 +321,9 @@ class SessionManager:
             session = self.sessions.get(session_id)
             if session and session.state == SessionState.ACTIVE:
                 session.state = SessionState.SUSPENDED
-                # Set expiry for reconnection window (configurable via env var, default 60s)
-                suspension_timeout = int(os.getenv('SESSION_SUSPENSION_TIMEOUT_SECS', '60'))
+                # Set expiry for reconnection window (configurable via env var, default 300s/5min)
+                # Extended from 60s to 300s for better network resilience
+                suspension_timeout = int(os.getenv('SESSION_SUSPENSION_TIMEOUT_SECS', '300'))
                 session.expires_at = time.time() + suspension_timeout
                 logger.info(f"Suspended session {session_id}: {reason} (expires in {suspension_timeout}s)")
                 return True

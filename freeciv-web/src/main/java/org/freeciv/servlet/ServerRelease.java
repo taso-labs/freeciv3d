@@ -37,6 +37,10 @@ import org.freeciv.util.Constants;
  * Server release API for LLM game arena integration
  * Releases allocated servers back to the available pool
  *
+ * Supports game_id parameter:
+ * - If game_id is provided, marks the game_allocations record as released
+ * - This preserves allocation history for debugging
+ *
  * URL: /meta/release (mapped in web.xml)
  */
 public class ServerRelease extends HttpServlet {
@@ -53,6 +57,7 @@ public class ServerRelease extends HttpServlet {
 
 		String sPort = request.getParameter("port");
 		String sHost = request.getParameter("host");
+		String gameId = request.getParameter("game_id");
 
 		if (sHost == null) {
 			sHost = "localhost";
@@ -73,6 +78,13 @@ public class ServerRelease extends HttpServlet {
 			return;
 		}
 
+		// Validate game_id format if provided (alphanumeric + hyphens, max 64 chars)
+		if (gameId != null && !gameId.matches("^[a-zA-Z0-9\\-_]{1,64}$")) {
+			response.setStatus(HttpServletResponse.SC_BAD_REQUEST);
+			out.write("{\"error\": \"Invalid game_id format. Must be alphanumeric with hyphens/underscores, max 64 chars.\"}");
+			return;
+		}
+
 		Connection conn = null;
 		PreparedStatement statement = null;
 
@@ -87,11 +99,36 @@ public class ServerRelease extends HttpServlet {
 			statement.setString(1, sHost);
 			statement.setInt(2, port);
 			int updated = statement.executeUpdate();
+			statement.close();
+
+			// If game_id provided, mark the allocation as released (keep for history)
+			// If no game_id, try to find and release by port
+			String allocationUpdateMsg = "";
+			if (gameId != null) {
+				PreparedStatement releaseAllocation = conn.prepareStatement(
+					"UPDATE game_allocations SET released_at = NOW() WHERE game_id = ? AND released_at IS NULL");
+				releaseAllocation.setString(1, gameId);
+				int allocationUpdated = releaseAllocation.executeUpdate();
+				releaseAllocation.close();
+				if (allocationUpdated > 0) {
+					allocationUpdateMsg = ", allocation_released: true";
+				}
+			} else {
+				// Try to release by port if no game_id provided
+				PreparedStatement releaseByPort = conn.prepareStatement(
+					"UPDATE game_allocations SET released_at = NOW() WHERE port = ? AND released_at IS NULL");
+				releaseByPort.setInt(1, port);
+				int allocationUpdated = releaseByPort.executeUpdate();
+				releaseByPort.close();
+				if (allocationUpdated > 0) {
+					allocationUpdateMsg = ", allocation_released: true";
+				}
+			}
 
 			if (updated > 0) {
 				String jsonResponse = String.format(
-					"{\"success\": true, \"host\": \"%s\", \"port\": %d, \"message\": \"Server released and available\"}",
-					sHost, port
+					"{\"success\": true, \"host\": \"%s\", \"port\": %d, \"message\": \"Server released and available\"%s}",
+					sHost, port, allocationUpdateMsg
 				);
 				out.write(jsonResponse);
 				response.setStatus(HttpServletResponse.SC_OK);
@@ -133,9 +170,19 @@ public class ServerRelease extends HttpServlet {
 		String docs = "{"
 			+ "\"endpoint\": \"/meta/release\","
 			+ "\"method\": \"POST\","
-			+ "\"parameters\": {\"host\": \"Server host (default: localhost)\", \"port\": \"Server port (6000-6009)\"},"
-			+ "\"response\": {\"success\": true, \"host\": \"localhost\", \"port\": 6001, \"message\": \"Server released and available\"},"
-			+ "\"errors\": {\"400\": \"Invalid parameters\", \"404\": \"Server not found\", \"500\": \"Internal server error\"}"
+			+ "\"parameters\": {"
+			+ "\"host\": \"Server host (default: localhost)\","
+			+ "\"port\": \"Server port (6000-6009)\","
+			+ "\"game_id\": \"Optional. Game identifier to mark allocation as released in game_allocations table.\""
+			+ "},"
+			+ "\"response\": {"
+			+ "\"success\": true,"
+			+ "\"host\": \"localhost\","
+			+ "\"port\": 6001,"
+			+ "\"message\": \"Server released and available\","
+			+ "\"allocation_released\": \"true if game_allocations record was updated\""
+			+ "},"
+			+ "\"errors\": {\"400\": \"Invalid parameters or game_id format\", \"404\": \"Server not found\", \"500\": \"Internal server error\"}"
 			+ "}";
 
 		out.write(docs);
