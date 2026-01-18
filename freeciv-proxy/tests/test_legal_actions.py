@@ -1,5 +1,11 @@
 """Test legal action generation and normalization"""
 
+import os
+import secrets
+
+# Set required environment variable for StateCache before any imports
+os.environ.setdefault('CACHE_HMAC_SECRET', secrets.token_hex(32))
+
 from unittest.mock import Mock, patch
 from state_extractor import StateExtractor
 
@@ -214,7 +220,239 @@ class TestLegalActionNormalization:
                 ]
                 
                 actions = extractor.get_legal_actions('game_1', 0)
-                
+
                 # Only valid action should be returned
                 assert len(actions) == 1
                 assert actions[0]['type'] == 'end_turn'
+
+
+class TestMovesLeftPrecondition:
+    """Test that actions requiring movement are invalid when moves_left = 0.
+
+    This tests the fix for E024 errors where units with no moves remaining
+    were being offered terrain improvement, combat, and other movement-consuming
+    actions in their legal_actions list.
+    """
+
+    def _create_mock_civcom(self, can_do_actions=None):
+        """Create a mock civcom that enables specific actions via action_probabilities"""
+        mock = Mock()
+        mock.player_id = 0
+        mock.tiles = {}
+        mock.player_cities = {}
+        mock.other_cities = {}
+        mock.other_units = {}  # Other player's units
+        mock.player_units = {}  # Our units
+        mock.unit_types = {1: {'name': 'Workers', 'unit_class': 1}}
+        mock.unit_classes = {1: {'name': 'Land'}}
+        mock.get_terrain_class = Mock(return_value=0)  # TC_LAND
+        mock.is_unit_class_native_to_terrain = Mock(return_value=True)
+        mock.can_city_be_founded_at = Mock(return_value=(False, "Not a settler"))
+        # Map info for coordinate calculations
+        mock.map_info = {'width': 80, 'height': 50, 'wrap_x': True, 'wrap_y': False}
+        # Diplomacy info
+        mock.diplomacy = {}
+        mock.player_info = {'player_id': 0}
+        # Set up action probabilities for allowed actions
+        if can_do_actions:
+            mock.action_probabilities = {1: {action_id: {'max': 200} for action_id in can_do_actions}}
+        else:
+            mock.action_probabilities = {}
+        return mock
+
+    def test_terrain_actions_invalid_when_no_moves(self):
+        """Test that terrain improvement actions are invalid when moves_left = 0"""
+        from state_extractor import StateExtractor, civcom_registry
+        from civcom import (
+            ACTION_ROAD, ACTION_IRRIGATE, ACTION_MINE, ACTION_BASE,
+            ACTION_TRANSFORM_TERRAIN, ACTION_CULTIVATE, ACTION_PLANT
+        )
+
+        extractor = StateExtractor()
+
+        # Unit with 0 moves
+        unit = {
+            'id': 1,
+            'type_id': 1,
+            'type': 'Workers',
+            'owner': 0,
+            'x': 10,
+            'y': 10,
+            'tile': 100,
+            'moves_left': 0,  # No moves remaining
+            'activity': 'idle'
+        }
+
+        state = {'units': {'1': unit}, 'cities': {}}
+
+        # Enable terrain actions in the mock
+        terrain_action_ids = [ACTION_ROAD, ACTION_IRRIGATE, ACTION_MINE, ACTION_BASE,
+                               ACTION_TRANSFORM_TERRAIN, ACTION_CULTIVATE, ACTION_PLANT]
+        mock_civcom = self._create_mock_civcom(can_do_actions=terrain_action_ids)
+
+        # Patch civcom_registry to return our mock
+        with patch.object(extractor, '_get_civcom_for_player', return_value=mock_civcom):
+            actions = extractor._generate_unit_actions(unit, state, player_id=0)
+
+        # Find terrain improvement actions
+        terrain_action_names = ['build_road', 'build_irrigation', 'build_mine',
+                                 'build_base', 'transform', 'cultivate', 'plant']
+        terrain_actions = [a for a in actions if a.get('action') in terrain_action_names]
+
+        # All terrain actions should be marked as invalid with "No moves left" reason
+        assert len(terrain_actions) > 0, "Expected terrain actions to be generated"
+        for action in terrain_actions:
+            assert action.get('is_valid') is False, \
+                f"Action {action.get('action')} should be invalid when moves_left=0"
+            assert action.get('reason') == "No moves left", \
+                f"Action {action.get('action')} should have reason 'No moves left'"
+
+    def test_terrain_actions_valid_when_has_moves(self):
+        """Test that terrain improvement actions are valid when moves_left > 0"""
+        from state_extractor import StateExtractor
+        from civcom import ACTION_ROAD
+
+        extractor = StateExtractor()
+
+        # Unit with moves
+        unit = {
+            'id': 1,
+            'type_id': 1,
+            'type': 'Workers',
+            'owner': 0,
+            'x': 10,
+            'y': 10,
+            'tile': 100,
+            'moves_left': 3,  # Has moves
+            'activity': 'idle'
+        }
+
+        state = {'units': {'1': unit}, 'cities': {}}
+
+        mock_civcom = self._create_mock_civcom(can_do_actions=[ACTION_ROAD])
+
+        with patch.object(extractor, '_get_civcom_for_player', return_value=mock_civcom):
+            actions = extractor._generate_unit_actions(unit, state, player_id=0)
+
+        # Find build_road action
+        road_actions = [a for a in actions if a.get('action') == 'build_road']
+
+        assert len(road_actions) > 0, "Expected build_road action to be generated"
+        # Should be valid since unit has moves
+        assert road_actions[0].get('is_valid') is True, \
+            "build_road should be valid when moves_left > 0"
+
+    def test_combat_actions_invalid_when_no_moves(self):
+        """Test that combat actions are invalid when moves_left = 0"""
+        from state_extractor import StateExtractor
+        from civcom import (
+            ACTION_ATTACK, ACTION_SUICIDE_ATTACK,
+            ACTION_CAPTURE_UNITS, ACTION_CONQUER_CITY, ACTION_BOMBARD
+        )
+
+        extractor = StateExtractor()
+
+        # Unit with 0 moves
+        unit = {
+            'id': 1,
+            'type_id': 1,
+            'type': 'Warriors',
+            'owner': 0,
+            'x': 10,
+            'y': 10,
+            'tile': 100,
+            'moves_left': 0,  # No moves remaining
+            'activity': 'idle'
+        }
+
+        state = {'units': {'1': unit}, 'cities': {}}
+
+        combat_action_ids = [ACTION_ATTACK, ACTION_SUICIDE_ATTACK,
+                             ACTION_CAPTURE_UNITS, ACTION_CONQUER_CITY, ACTION_BOMBARD]
+        mock_civcom = self._create_mock_civcom(can_do_actions=combat_action_ids)
+
+        with patch.object(extractor, '_get_civcom_for_player', return_value=mock_civcom):
+            actions = extractor._generate_unit_actions(unit, state, player_id=0)
+
+        # Find combat actions
+        combat_action_names = ['attack', 'suicide_attack', 'capture', 'conquer_city', 'bombard']
+        combat_actions = [a for a in actions if a.get('action') in combat_action_names]
+
+        # All combat actions should be marked as invalid with "No moves left" reason
+        assert len(combat_actions) > 0, "Expected combat actions to be generated"
+        for action in combat_actions:
+            assert action.get('is_valid') is False, \
+                f"Action {action.get('action')} should be invalid when moves_left=0"
+            assert action.get('reason') == "No moves left", \
+                f"Action {action.get('action')} should have reason 'No moves left'"
+
+    def test_pillage_clean_invalid_when_no_moves(self):
+        """Test that pillage and clean actions are invalid when moves_left = 0"""
+        from state_extractor import StateExtractor
+        from civcom import ACTION_PILLAGE, ACTION_CLEAN
+
+        extractor = StateExtractor()
+
+        # Unit with 0 moves
+        unit = {
+            'id': 1,
+            'type_id': 1,
+            'type': 'Warriors',
+            'owner': 0,
+            'x': 10,
+            'y': 10,
+            'tile': 100,
+            'moves_left': 0,  # No moves remaining
+            'activity': 'idle'
+        }
+
+        state = {'units': {'1': unit}, 'cities': {}}
+
+        mock_civcom = self._create_mock_civcom(can_do_actions=[ACTION_PILLAGE, ACTION_CLEAN])
+
+        with patch.object(extractor, '_get_civcom_for_player', return_value=mock_civcom):
+            actions = extractor._generate_unit_actions(unit, state, player_id=0)
+
+        # Find pillage/clean actions
+        pillage_clean = [a for a in actions if a.get('action') in ['pillage', 'clean']]
+
+        # All should be marked as invalid with "No moves left" reason
+        assert len(pillage_clean) > 0, "Expected pillage/clean actions to be generated"
+        for action in pillage_clean:
+            assert action.get('is_valid') is False, \
+                f"Action {action.get('action')} should be invalid when moves_left=0"
+            assert action.get('reason') == "No moves left", \
+                f"Action {action.get('action')} should have reason 'No moves left'"
+
+    def test_movement_actions_not_generated_when_no_moves(self):
+        """Test that movement actions are not generated at all when moves_left = 0"""
+        from state_extractor import StateExtractor
+
+        extractor = StateExtractor()
+
+        # Unit with 0 moves
+        unit = {
+            'id': 1,
+            'type_id': 1,
+            'type': 'Warriors',
+            'owner': 0,
+            'x': 10,
+            'y': 10,
+            'tile': 100,
+            'moves_left': 0,  # No moves remaining
+            'activity': 'idle'
+        }
+
+        state = {'units': {'1': unit}, 'cities': {}}
+
+        mock_civcom = self._create_mock_civcom()
+
+        with patch.object(extractor, '_get_civcom_for_player', return_value=mock_civcom):
+            actions = extractor._generate_unit_actions(unit, state, player_id=0)
+
+        # Find move actions
+        move_actions = [a for a in actions if a.get('action') == 'move']
+
+        # Movement actions should not be generated at all (this behavior was already correct)
+        assert len(move_actions) == 0, \
+            "Movement actions should not be generated when moves_left=0"
