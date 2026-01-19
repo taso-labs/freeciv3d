@@ -6,6 +6,12 @@
 -- The composite index improves performance for:
 --   SELECT ... WHERE game_id = ? AND released_at IS NULL (reconnection check)
 --   UPDATE ... WHERE game_id = ? AND released_at IS NULL (release by game_id)
+--
+-- IMPORTANT: MySQL Event Scheduler must be enabled for cleanup events to work.
+-- Check status:  SHOW VARIABLES LIKE 'event_scheduler';
+-- Enable:        SET GLOBAL event_scheduler = ON;
+-- Grant perms:   GRANT EVENT ON freeciv_web.* TO 'your_user'@'localhost';
+-- The Docker setup enables this automatically via init scripts.
 
 -- Add composite index for common query pattern
 -- This is more efficient than using two separate indexes for multi-column conditions

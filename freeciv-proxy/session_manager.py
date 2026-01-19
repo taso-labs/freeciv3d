@@ -630,15 +630,22 @@ class MySQLSessionManager:
 
     def get_session_stats(self) -> Dict[str, Any]:
         """Get session management statistics"""
-        active_count = self.get_active_session_count()
-
+        # Optimized: Single query instead of N+1 pattern (was: 2 separate queries)
+        # Also provides atomic snapshot of both counts
+        active_count = 0
         total_count = 0
         try:
             with self._get_connection() as conn:
                 with conn.cursor(dictionary=True) as cursor:
-                    cursor.execute("SELECT COUNT(*) as count FROM agent_sessions")
+                    cursor.execute("""
+                        SELECT
+                            SUM(CASE WHEN state = 'active' THEN 1 ELSE 0 END) as active_count,
+                            COUNT(*) as total_count
+                        FROM agent_sessions
+                    """)
                     row = cursor.fetchone()
-                    total_count = row['count'] if row else 0
+                    active_count = int(row['active_count'] or 0)
+                    total_count = int(row['total_count'] or 0)
         except Exception:
             pass
 

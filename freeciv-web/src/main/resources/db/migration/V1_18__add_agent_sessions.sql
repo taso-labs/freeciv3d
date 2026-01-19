@@ -2,6 +2,12 @@
 -- Purpose: Enable session recovery after freeciv-proxy restarts
 -- Previously sessions were stored only in-memory, meaning a proxy restart
 -- would lose all active sessions and force agents to re-authenticate.
+--
+-- IMPORTANT: MySQL Event Scheduler must be enabled for cleanup events to work.
+-- Check status:  SHOW VARIABLES LIKE 'event_scheduler';
+-- Enable:        SET GLOBAL event_scheduler = ON;
+-- Grant perms:   GRANT EVENT ON freeciv_web.* TO 'your_user'@'localhost';
+-- The Docker setup enables this automatically via init scripts.
 
 CREATE TABLE IF NOT EXISTS agent_sessions (
   session_id VARCHAR(64) NOT NULL PRIMARY KEY,

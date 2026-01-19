@@ -51,7 +51,8 @@ public class ServerAllocator extends HttpServlet {
 
 	// Maximum age in seconds for a game allocation to be considered valid for reuse
 	// After this time, the allocation is considered stale and a new port is assigned
-	private static final int MAX_ALLOCATION_AGE_SECONDS = 3600; // 1 hour
+	// 24 hours allows for long-running LLM games with extended pauses
+	private static final int MAX_ALLOCATION_AGE_SECONDS = 86400; // 24 hours
 
 	@Override
 	public void doPost(HttpServletRequest request, HttpServletResponse response)

@@ -532,7 +532,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                     # STATE VERIFICATION: Check if expected_turn matches actual game state
                     # This catches the case where reconnection went to a different/reset game
                     if expected_turn is not None:
-                        current_turn = getattr(self.civcom, 'turn', 0)
+                        current_turn = self.civcom.game_turn if hasattr(self.civcom, 'game_turn') else 0
                         if current_turn != expected_turn:
                             logger.error(
                                 f"❌ STATE MISMATCH for {self.agent_id}:\n"
