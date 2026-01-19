@@ -142,7 +142,8 @@ public class ServerAllocator extends HttpServlet {
 					}
 
 					// Find an available server of the requested type in Pregame state
-					String query = "SELECT host, port FROM servers WHERE type = ? AND state = 'Pregame' AND available != 0 ORDER BY port LIMIT 1 FOR UPDATE";
+					// SKIP LOCKED prevents race conditions: if another thread locked a row, skip it instead of waiting
+					String query = "SELECT host, port FROM servers WHERE type = ? AND state = 'Pregame' AND available != 0 ORDER BY port LIMIT 1 FOR UPDATE SKIP LOCKED";
 					try (PreparedStatement statement = conn.prepareStatement(query)) {
 						statement.setString(1, gameType);
 

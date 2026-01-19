@@ -186,7 +186,7 @@ class MySQLSessionManager:
         try:
             self._pool = pooling.MySQLConnectionPool(
                 pool_name="session_pool",
-                pool_size=5,
+                pool_size=int(os.getenv('DB_POOL_SIZE', '20')),
                 pool_reset_session=True,
                 **self.db_config
             )
@@ -221,11 +221,10 @@ class MySQLSessionManager:
         """Check if MySQL backend is available"""
         try:
             with self._get_connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute("SELECT 1")
-                cursor.fetchone()
-                cursor.close()
-                return True
+                with conn.cursor() as cursor:
+                    cursor.execute("SELECT 1")
+                    cursor.fetchone()
+                    return True
         except Exception as e:
             logger.debug(f"MySQLSessionManager: Availability check failed: {e}")
             return False
@@ -234,40 +233,37 @@ class MySQLSessionManager:
         """Create a new session in MySQL"""
         try:
             with self._get_connection() as conn:
-                cursor = conn.cursor(dictionary=True)
+                with conn.cursor(dictionary=True) as cursor:
+                    # Check session limits
+                    cursor.execute(
+                        "SELECT COUNT(*) as count FROM agent_sessions WHERE state = 'active'"
+                    )
+                    row = cursor.fetchone()
+                    if row and row['count'] >= self.max_concurrent_sessions:
+                        logger.warning(f"Maximum concurrent sessions reached: {self.max_concurrent_sessions}")
+                        return None
 
-                # Check session limits
-                cursor.execute(
-                    "SELECT COUNT(*) as count FROM agent_sessions WHERE state = 'active'"
-                )
-                row = cursor.fetchone()
-                if row and row['count'] >= self.max_concurrent_sessions:
-                    logger.warning(f"Maximum concurrent sessions reached: {self.max_concurrent_sessions}")
-                    cursor.close()
-                    return None
+                    # Terminate existing session for this agent
+                    cursor.execute(
+                        "UPDATE agent_sessions SET state = 'terminated' WHERE agent_id = %s AND state IN ('active', 'suspended')",
+                        (agent_id,)
+                    )
 
-                # Terminate existing session for this agent
-                cursor.execute(
-                    "UPDATE agent_sessions SET state = 'terminated' WHERE agent_id = %s AND state IN ('active', 'suspended')",
-                    (agent_id,)
-                )
+                    # Generate session ID and hash token
+                    session_id = self._generate_session_id(agent_id)
+                    api_token_hash = TokenHasher.hash_token(api_token)
 
-                # Generate session ID and hash token
-                session_id = self._generate_session_id(agent_id)
-                api_token_hash = TokenHasher.hash_token(api_token)
+                    now = datetime.now()
+                    expires_at = now + timedelta(seconds=self.session_timeout)
 
-                now = datetime.now()
-                expires_at = now + timedelta(seconds=self.session_timeout)
+                    # Insert new session
+                    cursor.execute("""
+                        INSERT INTO agent_sessions
+                        (session_id, agent_id, game_id, api_token_hash, expires_at, state, connection_count, resume_attempts)
+                        VALUES (%s, %s, %s, %s, %s, 'active', 0, 0)
+                    """, (session_id, agent_id, game_id, api_token_hash, expires_at))
 
-                # Insert new session
-                cursor.execute("""
-                    INSERT INTO agent_sessions
-                    (session_id, agent_id, game_id, api_token_hash, expires_at, state, connection_count, resume_attempts)
-                    VALUES (%s, %s, %s, %s, %s, 'active', 0, 0)
-                """, (session_id, agent_id, game_id, api_token_hash, expires_at))
-
-                conn.commit()
-                cursor.close()
+                    conn.commit()
 
                 self.stats['sessions_created'] += 1
                 logger.info(f"MySQLSessionManager: Created session for agent {agent_id}: {session_id}")
@@ -294,55 +290,49 @@ class MySQLSessionManager:
 
         try:
             with self._get_connection() as conn:
-                cursor = conn.cursor(dictionary=True)
+                with conn.cursor(dictionary=True) as cursor:
+                    cursor.execute("""
+                        SELECT * FROM agent_sessions WHERE session_id = %s
+                    """, (session_id,))
+                    row = cursor.fetchone()
 
-                cursor.execute("""
-                    SELECT * FROM agent_sessions WHERE session_id = %s
-                """, (session_id,))
-                row = cursor.fetchone()
+                    if not row:
+                        self.stats['authentication_failures'] += 1
+                        return None
 
-                if not row:
-                    self.stats['authentication_failures'] += 1
-                    cursor.close()
-                    return None
+                    # Check state
+                    if row['state'] != 'active':
+                        logger.warning(f"Session {session_id} is not active: {row['state']}")
+                        self.stats['authentication_failures'] += 1
+                        return None
 
-                # Check state
-                if row['state'] != 'active':
-                    logger.warning(f"Session {session_id} is not active: {row['state']}")
-                    self.stats['authentication_failures'] += 1
-                    cursor.close()
-                    return None
+                    # Check expiration
+                    if datetime.now() > row['expires_at']:
+                        logger.info(f"Session {session_id} expired")
+                        cursor.execute(
+                            "UPDATE agent_sessions SET state = 'expired' WHERE session_id = %s",
+                            (session_id,)
+                        )
+                        conn.commit()
+                        self.stats['sessions_expired'] += 1
+                        self.stats['authentication_failures'] += 1
+                        return None
 
-                # Check expiration
-                if datetime.now() > row['expires_at']:
-                    logger.info(f"Session {session_id} expired")
+                    # Verify API token if provided
+                    if api_token:
+                        if not TokenHasher.verify_token(api_token, row['api_token_hash']):
+                            logger.warning(f"Invalid API token for session {session_id}")
+                            self.stats['authentication_failures'] += 1
+                            return None
+
+                    # Update last activity (handled by ON UPDATE CURRENT_TIMESTAMP)
                     cursor.execute(
-                        "UPDATE agent_sessions SET state = 'expired' WHERE session_id = %s",
+                        "UPDATE agent_sessions SET last_activity = NOW() WHERE session_id = %s",
                         (session_id,)
                     )
                     conn.commit()
-                    self.stats['sessions_expired'] += 1
-                    self.stats['authentication_failures'] += 1
-                    cursor.close()
-                    return None
 
-                # Verify API token if provided
-                if api_token:
-                    if not TokenHasher.verify_token(api_token, row['api_token_hash']):
-                        logger.warning(f"Invalid API token for session {session_id}")
-                        self.stats['authentication_failures'] += 1
-                        cursor.close()
-                        return None
-
-                # Update last activity (handled by ON UPDATE CURRENT_TIMESTAMP)
-                cursor.execute(
-                    "UPDATE agent_sessions SET last_activity = NOW() WHERE session_id = %s",
-                    (session_id,)
-                )
-                conn.commit()
-                cursor.close()
-
-                return self._row_to_session_info(row)
+                    return self._row_to_session_info(row)
 
         except Exception as e:
             logger.error(f"MySQLSessionManager: Error validating session: {e}")
@@ -354,16 +344,15 @@ class MySQLSessionManager:
         """Update session last activity timestamp"""
         try:
             with self._get_connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute("""
-                    UPDATE agent_sessions
-                    SET last_activity = NOW()
-                    WHERE session_id = %s AND state = 'active'
-                """, (session_id,))
-                affected = cursor.rowcount
-                conn.commit()
-                cursor.close()
-                return affected > 0
+                with conn.cursor() as cursor:
+                    cursor.execute("""
+                        UPDATE agent_sessions
+                        SET last_activity = NOW()
+                        WHERE session_id = %s AND state = 'active'
+                    """, (session_id,))
+                    affected = cursor.rowcount
+                    conn.commit()
+                    return affected > 0
         except Exception as e:
             logger.error(f"MySQLSessionManager: Error updating activity: {e}")
             self.stats['db_errors'] += 1
@@ -374,17 +363,16 @@ class MySQLSessionManager:
         extension = extension_seconds or self.session_timeout
         try:
             with self._get_connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute("""
-                    UPDATE agent_sessions
-                    SET expires_at = GREATEST(expires_at, NOW()) + INTERVAL %s SECOND
-                    WHERE session_id = %s AND state = 'active'
-                """, (extension, session_id))
-                affected = cursor.rowcount
-                conn.commit()
-                cursor.close()
-                logger.debug(f"Extended session {session_id} by {extension} seconds")
-                return affected > 0
+                with conn.cursor() as cursor:
+                    cursor.execute("""
+                        UPDATE agent_sessions
+                        SET expires_at = GREATEST(expires_at, NOW()) + INTERVAL %s SECOND
+                        WHERE session_id = %s AND state = 'active'
+                    """, (extension, session_id))
+                    affected = cursor.rowcount
+                    conn.commit()
+                    logger.debug(f"Extended session {session_id} by {extension} seconds")
+                    return affected > 0
         except Exception as e:
             logger.error(f"MySQLSessionManager: Error extending session: {e}")
             self.stats['db_errors'] += 1
@@ -394,27 +382,24 @@ class MySQLSessionManager:
         """Terminate a specific session"""
         try:
             with self._get_connection() as conn:
-                cursor = conn.cursor(dictionary=True)
+                with conn.cursor(dictionary=True) as cursor:
+                    # Get session info for logging
+                    cursor.execute("SELECT agent_id FROM agent_sessions WHERE session_id = %s", (session_id,))
+                    row = cursor.fetchone()
 
-                # Get session info for logging
-                cursor.execute("SELECT agent_id FROM agent_sessions WHERE session_id = %s", (session_id,))
-                row = cursor.fetchone()
+                    if not row:
+                        return False
 
-                if not row:
-                    cursor.close()
-                    return False
+                    # Update state to terminated
+                    cursor.execute(
+                        "UPDATE agent_sessions SET state = 'terminated' WHERE session_id = %s",
+                        (session_id,)
+                    )
+                    conn.commit()
 
-                # Update state to terminated
-                cursor.execute(
-                    "UPDATE agent_sessions SET state = 'terminated' WHERE session_id = %s",
-                    (session_id,)
-                )
-                conn.commit()
-                cursor.close()
-
-                self.stats['sessions_terminated'] += 1
-                logger.info(f"MySQLSessionManager: Terminated session {session_id} for agent {row['agent_id']}: {reason}")
-                return True
+                    self.stats['sessions_terminated'] += 1
+                    logger.info(f"MySQLSessionManager: Terminated session {session_id} for agent {row['agent_id']}: {reason}")
+                    return True
 
         except Exception as e:
             logger.error(f"MySQLSessionManager: Error terminating session: {e}")
@@ -425,20 +410,19 @@ class MySQLSessionManager:
         """Terminate all sessions for a specific agent"""
         try:
             with self._get_connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute("""
-                    UPDATE agent_sessions
-                    SET state = 'terminated'
-                    WHERE agent_id = %s AND state IN ('active', 'suspended')
-                """, (agent_id,))
-                affected = cursor.rowcount
-                conn.commit()
-                cursor.close()
+                with conn.cursor() as cursor:
+                    cursor.execute("""
+                        UPDATE agent_sessions
+                        SET state = 'terminated'
+                        WHERE agent_id = %s AND state IN ('active', 'suspended')
+                    """, (agent_id,))
+                    affected = cursor.rowcount
+                    conn.commit()
 
-                if affected > 0:
-                    self.stats['sessions_terminated'] += affected
-                    logger.info(f"MySQLSessionManager: Terminated {affected} session(s) for agent {agent_id}: {reason}")
-                return affected > 0
+                    if affected > 0:
+                        self.stats['sessions_terminated'] += affected
+                        logger.info(f"MySQLSessionManager: Terminated {affected} session(s) for agent {agent_id}: {reason}")
+                    return affected > 0
 
         except Exception as e:
             logger.error(f"MySQLSessionManager: Error terminating agent sessions: {e}")
@@ -449,18 +433,17 @@ class MySQLSessionManager:
         """Get active session for an agent"""
         try:
             with self._get_connection() as conn:
-                cursor = conn.cursor(dictionary=True)
-                cursor.execute("""
-                    SELECT * FROM agent_sessions
-                    WHERE agent_id = %s AND state IN ('active', 'suspended')
-                    ORDER BY created_at DESC LIMIT 1
-                """, (agent_id,))
-                row = cursor.fetchone()
-                cursor.close()
+                with conn.cursor(dictionary=True) as cursor:
+                    cursor.execute("""
+                        SELECT * FROM agent_sessions
+                        WHERE agent_id = %s AND state IN ('active', 'suspended')
+                        ORDER BY created_at DESC LIMIT 1
+                    """, (agent_id,))
+                    row = cursor.fetchone()
 
-                if row:
-                    return self._row_to_session_info(row)
-                return None
+                    if row:
+                        return self._row_to_session_info(row)
+                    return None
 
         except Exception as e:
             logger.error(f"MySQLSessionManager: Error getting session by agent: {e}")
@@ -473,19 +456,18 @@ class MySQLSessionManager:
 
         try:
             with self._get_connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute("""
-                    UPDATE agent_sessions
-                    SET state = 'suspended', expires_at = NOW() + INTERVAL %s SECOND
-                    WHERE session_id = %s AND state = 'active'
-                """, (suspension_timeout, session_id))
-                affected = cursor.rowcount
-                conn.commit()
-                cursor.close()
+                with conn.cursor() as cursor:
+                    cursor.execute("""
+                        UPDATE agent_sessions
+                        SET state = 'suspended', expires_at = NOW() + INTERVAL %s SECOND
+                        WHERE session_id = %s AND state = 'active'
+                    """, (suspension_timeout, session_id))
+                    affected = cursor.rowcount
+                    conn.commit()
 
-                if affected > 0:
-                    logger.info(f"MySQLSessionManager: Suspended session {session_id}: {reason} (expires in {suspension_timeout}s)")
-                return affected > 0
+                    if affected > 0:
+                        logger.info(f"MySQLSessionManager: Suspended session {session_id}: {reason} (expires in {suspension_timeout}s)")
+                    return affected > 0
 
         except Exception as e:
             logger.error(f"MySQLSessionManager: Error suspending session: {e}")
@@ -496,41 +478,37 @@ class MySQLSessionManager:
         """Resume a suspended session"""
         try:
             with self._get_connection() as conn:
-                cursor = conn.cursor(dictionary=True)
+                with conn.cursor(dictionary=True) as cursor:
+                    # Check if session exists and is suspended
+                    cursor.execute("""
+                        SELECT * FROM agent_sessions
+                        WHERE session_id = %s AND state = 'suspended'
+                    """, (session_id,))
+                    row = cursor.fetchone()
 
-                # Check if session exists and is suspended
-                cursor.execute("""
-                    SELECT * FROM agent_sessions
-                    WHERE session_id = %s AND state = 'suspended'
-                """, (session_id,))
-                row = cursor.fetchone()
+                    if not row:
+                        return False
 
-                if not row:
-                    cursor.close()
-                    return False
+                    # Check expiration
+                    if datetime.now() > row['expires_at']:
+                        cursor.execute(
+                            "UPDATE agent_sessions SET state = 'expired' WHERE session_id = %s",
+                            (session_id,)
+                        )
+                        conn.commit()
+                        logger.info(f"Cannot resume expired session {session_id}")
+                        return False
 
-                # Check expiration
-                if datetime.now() > row['expires_at']:
-                    cursor.execute(
-                        "UPDATE agent_sessions SET state = 'expired' WHERE session_id = %s",
-                        (session_id,)
-                    )
+                    # Resume the session
+                    cursor.execute("""
+                        UPDATE agent_sessions
+                        SET state = 'active', last_activity = NOW()
+                        WHERE session_id = %s
+                    """, (session_id,))
                     conn.commit()
-                    cursor.close()
-                    logger.info(f"Cannot resume expired session {session_id}")
-                    return False
 
-                # Resume the session
-                cursor.execute("""
-                    UPDATE agent_sessions
-                    SET state = 'active', last_activity = NOW()
-                    WHERE session_id = %s
-                """, (session_id,))
-                conn.commit()
-                cursor.close()
-
-                logger.info(f"MySQLSessionManager: Resumed session {session_id}")
-                return True
+                    logger.info(f"MySQLSessionManager: Resumed session {session_id}")
+                    return True
 
         except Exception as e:
             logger.error(f"MySQLSessionManager: Error resuming session: {e}")
@@ -548,69 +526,64 @@ class MySQLSessionManager:
 
         try:
             with self._get_connection() as conn:
-                cursor = conn.cursor(dictionary=True)
+                with conn.cursor(dictionary=True) as cursor:
+                    # Find suspended session for this agent
+                    cursor.execute("""
+                        SELECT * FROM agent_sessions
+                        WHERE agent_id = %s AND state = 'suspended' AND expires_at > NOW()
+                        ORDER BY created_at DESC LIMIT 1
+                    """, (agent_id,))
+                    row = cursor.fetchone()
 
-                # Find suspended session for this agent
-                cursor.execute("""
-                    SELECT * FROM agent_sessions
-                    WHERE agent_id = %s AND state = 'suspended' AND expires_at > NOW()
-                    ORDER BY created_at DESC LIMIT 1
-                """, (agent_id,))
-                row = cursor.fetchone()
+                    if not row:
+                        return None
 
-                if not row:
-                    cursor.close()
-                    return None
+                    session_id = row['session_id']
 
-                session_id = row['session_id']
-
-                # Increment resume attempts
-                new_attempts = row['resume_attempts'] + 1
-                cursor.execute(
-                    "UPDATE agent_sessions SET resume_attempts = %s WHERE session_id = %s",
-                    (new_attempts, session_id)
-                )
-
-                # Rate limiting check
-                if new_attempts > MAX_RESUME_ATTEMPTS:
-                    logger.warning(
-                        f"Rate limit exceeded for session {session_id}: "
-                        f"{new_attempts} attempts (max {MAX_RESUME_ATTEMPTS})"
+                    # Increment resume attempts
+                    new_attempts = row['resume_attempts'] + 1
+                    cursor.execute(
+                        "UPDATE agent_sessions SET resume_attempts = %s WHERE session_id = %s",
+                        (new_attempts, session_id)
                     )
+
+                    # Rate limiting check
+                    if new_attempts > MAX_RESUME_ATTEMPTS:
+                        logger.warning(
+                            f"Rate limit exceeded for session {session_id}: "
+                            f"{new_attempts} attempts (max {MAX_RESUME_ATTEMPTS})"
+                        )
+                        conn.commit()
+                        self.stats['authentication_failures'] += 1
+                        return None
+
+                    # Verify token
+                    if not TokenHasher.verify_token(api_token, row['api_token_hash']):
+                        logger.warning(f"Token mismatch for session {session_id} - rejecting resume attempt ({new_attempts}/{MAX_RESUME_ATTEMPTS})")
+                        conn.commit()
+                        self.stats['authentication_failures'] += 1
+                        return None
+
+                    # All checks passed - resume the session
+                    new_connection_count = row['connection_count'] + 1
+                    cursor.execute("""
+                        UPDATE agent_sessions
+                        SET state = 'active',
+                            last_activity = NOW(),
+                            connection_count = %s,
+                            resume_attempts = 0
+                        WHERE session_id = %s
+                    """, (new_connection_count, session_id))
                     conn.commit()
-                    cursor.close()
-                    self.stats['authentication_failures'] += 1
-                    return None
 
-                # Verify token
-                if not TokenHasher.verify_token(api_token, row['api_token_hash']):
-                    logger.warning(f"Token mismatch for session {session_id} - rejecting resume attempt ({new_attempts}/{MAX_RESUME_ATTEMPTS})")
-                    conn.commit()
-                    cursor.close()
-                    self.stats['authentication_failures'] += 1
-                    return None
+                    logger.info(f"MySQLSessionManager: Resumed session {session_id} for agent {agent_id} (connection #{new_connection_count})")
 
-                # All checks passed - resume the session
-                new_connection_count = row['connection_count'] + 1
-                cursor.execute("""
-                    UPDATE agent_sessions
-                    SET state = 'active',
-                        last_activity = NOW(),
-                        connection_count = %s,
-                        resume_attempts = 0
-                    WHERE session_id = %s
-                """, (new_connection_count, session_id))
-                conn.commit()
-                cursor.close()
-
-                logger.info(f"MySQLSessionManager: Resumed session {session_id} for agent {agent_id} (connection #{new_connection_count})")
-
-                # Return updated session info
-                session = self._row_to_session_info(row)
-                session.state = SessionState.ACTIVE
-                session.connection_count = new_connection_count
-                session.resume_attempts = 0
-                return session
+                    # Return updated session info
+                    session = self._row_to_session_info(row)
+                    session.state = SessionState.ACTIVE
+                    session.connection_count = new_connection_count
+                    session.resume_attempts = 0
+                    return session
 
         except Exception as e:
             logger.error(f"MySQLSessionManager: Error resuming session for agent: {e}")
@@ -625,18 +598,17 @@ class MySQLSessionManager:
         """
         try:
             with self._get_connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute("""
-                    DELETE FROM agent_sessions
-                    WHERE expires_at < NOW() OR state IN ('expired', 'terminated')
-                """)
-                affected = cursor.rowcount
-                conn.commit()
-                cursor.close()
+                with conn.cursor() as cursor:
+                    cursor.execute("""
+                        DELETE FROM agent_sessions
+                        WHERE expires_at < NOW() OR state IN ('expired', 'terminated')
+                    """)
+                    affected = cursor.rowcount
+                    conn.commit()
 
-                if affected > 0:
-                    logger.info(f"MySQLSessionManager: Cleaned up {affected} expired sessions")
-                return affected
+                    if affected > 0:
+                        logger.info(f"MySQLSessionManager: Cleaned up {affected} expired sessions")
+                    return affected
 
         except Exception as e:
             logger.error(f"MySQLSessionManager: Error cleaning up sessions: {e}")
@@ -647,11 +619,10 @@ class MySQLSessionManager:
         """Get count of active sessions"""
         try:
             with self._get_connection() as conn:
-                cursor = conn.cursor(dictionary=True)
-                cursor.execute("SELECT COUNT(*) as count FROM agent_sessions WHERE state = 'active'")
-                row = cursor.fetchone()
-                cursor.close()
-                return row['count'] if row else 0
+                with conn.cursor(dictionary=True) as cursor:
+                    cursor.execute("SELECT COUNT(*) as count FROM agent_sessions WHERE state = 'active'")
+                    row = cursor.fetchone()
+                    return row['count'] if row else 0
         except Exception as e:
             logger.error(f"MySQLSessionManager: Error getting session count: {e}")
             self.stats['db_errors'] += 1
@@ -664,11 +635,10 @@ class MySQLSessionManager:
         total_count = 0
         try:
             with self._get_connection() as conn:
-                cursor = conn.cursor(dictionary=True)
-                cursor.execute("SELECT COUNT(*) as count FROM agent_sessions")
-                row = cursor.fetchone()
-                cursor.close()
-                total_count = row['count'] if row else 0
+                with conn.cursor(dictionary=True) as cursor:
+                    cursor.execute("SELECT COUNT(*) as count FROM agent_sessions")
+                    row = cursor.fetchone()
+                    total_count = row['count'] if row else 0
         except Exception:
             pass
 
