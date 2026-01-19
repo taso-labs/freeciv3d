@@ -654,61 +654,6 @@ class GameSessionManager:
             logger.error(f"Error allocating port from metaserver for game {game_id}: {e}")
             return None
 
-    async def _query_metaserver_for_multiplayer_ports(self) -> list[int]:
-        """Query metaserver /meta/allocate to find available multiplayer ports
-
-        DEPRECATED: Use _allocate_port_from_metaserver() with game_id instead.
-        This method is kept for backwards compatibility but will allocate without
-        game_id persistence.
-
-        Queries the metaserver's allocation endpoint to discover which ports
-        are running multiplayer servers (type='multiplayer', available >= 1).
-
-        Returns:
-            List of available multiplayer server ports
-            Empty list if query fails
-        """
-        try:
-            async with aiohttp.ClientSession(self.metaserver_url) as session:
-                # Make POST request with type=multiplayer to trigger allocation logic
-                # The endpoint queries: SELECT * FROM servers WHERE type='multiplayer' AND available != 0
-                # ROOT.war deploys at / context, so no /freeciv-web prefix
-                async with session.post(
-                    "/meta/allocate",
-                    params={"type": "multiplayer"},
-                    timeout=aiohttp.ClientTimeout(total=5),
-                ) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        if data.get("success") and "port" in data:
-                            # Got an allocated port - this is ONE available port
-                            port = data["port"]
-                            logger.info(f"Metaserver allocated port {port} for multiplayer game")
-
-                            # Release it immediately since we're just querying
-                            release_url = f"{self.metaserver_url}/meta/release"
-                            async with session.post(
-                                release_url,
-                                data={"host": "localhost", "port": port},
-                                timeout=aiohttp.ClientTimeout(total=5)
-                            ) as release_response:
-                                if release_response.status == 200:
-                                    logger.debug(f"Released port {port} back to pool")
-
-                            # Return this port as available
-                            return [port]
-                    elif response.status == 503:
-                        # No available servers
-                        logger.warning(f"Metaserver reports no available multiplayer servers (503), {response}")
-                        return []
-                    else:
-                        logger.error(f"Metaserver allocate failed with status {response.status}")
-                        return []
-
-        except Exception as e:
-            logger.error(f"Error querying metaserver for multiplayer ports: {e}")
-            return []
-
     async def allocate_civserver_port(self, game_id: str) -> int:
         """Allocate a civserver port for a game by querying metaserver with game_id.
 
