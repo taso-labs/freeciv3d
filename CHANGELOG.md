@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.12](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.11...freeciv3d-v0.3.12) (2026-01-19)
+
+
+### Bug Fixes
+
+* **proxy:** Add moves_left checks to prevent E024 errors in legal actions ([#64](https://github.com/taso-ventures/freeciv3d/issues/64)) ([86a201e](https://github.com/taso-ventures/freeciv3d/commit/86a201e715e928e483021b90db694e1f1e2522f7))
+
 ## [0.3.11](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.10...freeciv3d-v0.3.11) (2026-01-17)
 
 
