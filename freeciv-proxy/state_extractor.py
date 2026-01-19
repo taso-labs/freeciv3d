@@ -1096,6 +1096,7 @@ class StateExtractor:
                       "Already fortified" if not is_valid else None, ACTION_FORTIFY)
         
         # === TERRAIN IMPROVEMENT ACTIONS ===
+        # Require moves_left > 0 - terrain improvements consume movement points
         terrain_actions = [
             (ACTION_ROAD, 'build_road', 'road'),
             (ACTION_IRRIGATE, 'build_irrigation', 'irrigation'),
@@ -1105,19 +1106,24 @@ class StateExtractor:
             (ACTION_CULTIVATE, 'cultivate', None),
             (ACTION_PLANT, 'plant', None),
         ]
-        
+
         for action_id, action_name, improvement in terrain_actions:
             if can_do_action(action_id):
                 is_valid = True
                 reason = None
-                
+
+                # Check if unit has moves remaining
+                if moves_left <= 0:
+                    is_valid = False
+                    reason = "No moves left"
+
                 # Basic validation: don't allow if already working on something
-                if is_working:
+                elif is_working:
                     is_valid = False
                     reason = f"Already working on {activity}"
-                
+
                 # Check if on ocean (can't build most improvements on ocean)
-                if is_valid and civcom and tile_index is not None:
+                elif civcom and tile_index is not None:
                     tile = civcom.tiles.get(tile_index)
                     if tile:
                         terrain_id = tile.get('terrain')
@@ -1126,39 +1132,52 @@ class StateExtractor:
                             if terrain_class == TC_OCEAN and action_id not in (ACTION_BASE,):
                                 is_valid = False
                                 reason = "Cannot build on ocean"
-                
+
                 params = {'improvement': improvement} if improvement else {}
                 add_action(action_name, params, is_valid, reason, action_id)
         
         # === PILLAGE ACTION ===
+        # Require moves_left > 0 - pillaging consumes movement points
         if can_do_action(ACTION_PILLAGE):
-            add_action('pillage', {}, True, None, ACTION_PILLAGE)
-        
+            is_valid = moves_left > 0
+            reason = "No moves left" if not is_valid else None
+            add_action('pillage', {}, is_valid, reason, ACTION_PILLAGE)
+
         # === CLEAN ACTION ===
+        # Require moves_left > 0 - cleaning consumes movement points
         if can_do_action(ACTION_CLEAN):
-            add_action('clean', {}, True, None, ACTION_CLEAN)
+            is_valid = moves_left > 0
+            reason = "No moves left" if not is_valid else None
+            add_action('clean', {}, is_valid, reason, ACTION_CLEAN)
         
         # === COMBAT ACTIONS ===
         # Attack actions for adjacent tiles
+        # Require moves_left > 0 - combat actions consume movement points
         basic_combat_actions = [
             (ACTION_ATTACK, 'attack'),
             (ACTION_SUICIDE_ATTACK, 'suicide_attack'),
             (ACTION_CAPTURE_UNITS, 'capture'),
             (ACTION_CONQUER_CITY, 'conquer_city'),
         ]
-        
+
         for action_id, action_name in basic_combat_actions:
             if can_do_action(action_id):
+                # Check if unit has moves remaining
+                is_valid = moves_left > 0
+                reason = "No moves left" if not is_valid else None
                 # Add attack actions for each direction
                 for direction in directions:
                     target_x, target_y, _ = get_target_tile(direction)
                     add_action(action_name, {
-                        'direction': direction, 
+                        'direction': direction,
                         'target': {'x': target_x, 'y': target_y}
-                    }, True, None, action_id)
-        
+                    }, is_valid, reason, action_id)
+
         # Bombard is ranged - check for visible targets
+        # Require moves_left > 0 - bombard consumes movement points
         if can_do_action(ACTION_BOMBARD):
+            is_valid = moves_left > 0
+            reason = "No moves left" if not is_valid else None
             # Simplified: add bombard for adjacent tiles (full implementation would check range)
             # In full version: get unit type's bombard range and check for enemy units/cities in range
             for direction in directions:
@@ -1166,7 +1185,7 @@ class StateExtractor:
                 add_action('bombard', {
                     'direction': direction,
                     'target': {'x': target_x, 'y': target_y}
-                }, True, None, ACTION_BOMBARD)
+                }, is_valid, reason, ACTION_BOMBARD)
         
         # === NUCLEAR ACTIONS ===
         # Nuclear weapons require targets and sufficient moves

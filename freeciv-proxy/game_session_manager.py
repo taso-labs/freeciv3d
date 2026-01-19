@@ -607,88 +607,88 @@ class GameSessionManager:
         self.metaserver_url = metaserver_url
         self._last_port_used = None  # Track last allocated port for round-robin
 
-    async def _query_metaserver_for_multiplayer_ports(self) -> list[int]:
-        """Query metaserver /meta/allocate to find available multiplayer ports
-        
-        Queries the metaserver's allocation endpoint to discover which ports
-        are running multiplayer servers (type='multiplayer', available >= 1).
-        
+    async def _allocate_port_from_metaserver(self, game_id: str) -> Optional[int]:
+        """Allocate a port from metaserver with game_id for persistent mapping.
+
+        Makes a POST to /meta/allocate with game_id parameter. The metaserver will:
+        - Return the same port if game_id already has an active allocation (reconnection)
+        - Allocate a new port and store the mapping if game_id is new
+
+        Args:
+            game_id: Unique game identifier (e.g., match_id from agent-clash)
+
         Returns:
-            List of available multiplayer server ports
-            Empty list if query fails
+            Allocated port number, or None if allocation failed
         """
         try:
             async with aiohttp.ClientSession(self.metaserver_url) as session:
-                # Make POST request with type=multiplayer to trigger allocation logic
-                # The endpoint queries: SELECT * FROM servers WHERE type='multiplayer' AND available != 0
-                # ROOT.war deploys at / context, so no /freeciv-web prefix
+                # Make POST request with type=multiplayer and game_id for persistent mapping
+                # The endpoint will return the same port for the same game_id on reconnection
                 async with session.post(
                     "/meta/allocate",
-                    params={"type": "multiplayer"},
+                    params={"type": "multiplayer", "game_id": game_id},
                     timeout=aiohttp.ClientTimeout(total=5),
                 ) as response:
                     if response.status == 200:
                         data = await response.json()
                         if data.get("success") and "port" in data:
-                            # Got an allocated port - this is ONE available port
                             port = data["port"]
-                            logger.info(f"Metaserver allocated port {port} for multiplayer game")
-
-                            # Release it immediately since we're just querying
-                            release_url = f"{self.metaserver_url}/meta/release"
-                            async with session.post(
-                                release_url,
-                                data={"host": "localhost", "port": port},
-                                timeout=aiohttp.ClientTimeout(total=5)
-                            ) as release_response:
-                                if release_response.status == 200:
-                                    logger.debug(f"Released port {port} back to pool")
-
-                            # Return this port as available
-                            return [port]
+                            reused = data.get("reused", False)
+                            logger.info(
+                                f"Metaserver allocated port {port} for game {game_id}\n"
+                                f"   Reused existing allocation: {reused}"
+                            )
+                            return port
+                        else:
+                            logger.error(f"Metaserver allocate returned unexpected response: {data}")
+                            return None
                     elif response.status == 503:
                         # No available servers
-                        logger.warning(f"Metaserver reports no available multiplayer servers (503), {response}")
-                        return []
+                        logger.warning(f"Metaserver reports no available multiplayer servers (503)")
+                        return None
                     else:
                         logger.error(f"Metaserver allocate failed with status {response.status}")
-                        return []
+                        return None
 
         except Exception as e:
-            logger.error(f"Error querying metaserver for multiplayer ports: {e}")
-            return []
+            logger.error(f"Error allocating port from metaserver for game {game_id}: {e}")
+            return None
 
     async def allocate_civserver_port(self, game_id: str) -> int:
-        """Allocate a civserver port for a game by querying metaserver
-        
-        Queries the metaserver /meta/allocate endpoint to find an available
-        multiplayer server port. The metaserver maintains the authoritative
-        database of servers with their types and availability status.
-        
-        IMPORTANT: Does NOT assume odd/even port distinction. Queries actual
-        server type from database via metaserver HTTP API.
-        
+        """Allocate a civserver port for a game by querying metaserver with game_id.
+
+        Uses the metaserver /meta/allocate endpoint with game_id parameter for
+        persistent game-port mapping. This enables:
+        - Same port returned for same game_id on reconnection
+        - Prevents the issue where reconnecting agents get a different port
+
+        IMPORTANT: The metaserver now handles game_id -> port persistence in the
+        game_allocations database table. This method passes game_id to leverage
+        that persistence layer.
+
         THREAD-SAFETY: Creates placeholder session immediately to prevent race
-        condition where two players with same game_id could get different ports.
+        condition where two players with same game_id could get different ports
+        within the same process.
         """
         async with self._port_lock:
-            # Check if game already has an allocated port (for second+ player)
+            # Check if game already has an allocated port in local session cache (for second+ player)
             if game_id in self.sessions:
                 port = self.sessions[game_id].civserver_port
                 existing_session = self.sessions[game_id]
                 player_count = len(existing_session.players)
                 logger.info(
-                    f"🔄 Game {game_id}: REUSING existing port {port}\n"
+                    f"🔄 Game {game_id}: REUSING existing port {port} from local session\n"
                     f"   Current players in session: {player_count}\n"
                     f"   Session phase: {existing_session.phase.value}"
                 )
                 return port
 
-            # Query metaserver for available multiplayer ports
-            logger.info(f"🔍 Game {game_id}: Querying metaserver for available multiplayer server")
-            available_ports = await self._query_metaserver_for_multiplayer_ports()
+            # Allocate port from metaserver with game_id for persistent mapping
+            # The metaserver will return the same port for the same game_id (reconnection case)
+            logger.info(f"🔍 Game {game_id}: Requesting port allocation from metaserver (with game_id persistence)")
+            port = await self._allocate_port_from_metaserver(game_id)
 
-            if not available_ports:
+            if port is None:
                 # No servers available - fail allocation
                 logger.error(
                     f"❌ Game {game_id}: No multiplayer servers available\n"
@@ -704,16 +704,14 @@ class GameSessionManager:
                     "Please wait for servers to become available or check metaserver status."
                 )
 
-            # Use port from metaserver query
-            port = available_ports[0]
-            logger.info(f"✅ Game {game_id}: Allocated port {port} from metaserver")
+            logger.info(f"✅ Game {game_id}: Allocated port {port} from metaserver (game_id persisted)")
             self._last_port_used = port
 
             total_sessions = len(self.sessions)
             logger.info(
                 f"🆕 Game {game_id}: Allocated server port {port}\n"
                 f"   Total active sessions: {total_sessions}\n"
-                f"   Port type will be determined by publite2 configuration"
+                f"   Game-port mapping persisted in metaserver database"
             )
 
             # Create placeholder session immediately to reserve this port for this game_id

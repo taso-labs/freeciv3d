@@ -408,6 +408,16 @@ class LLMWSHandler(websocket.WebSocketHandler):
             self.agent_id = msg_data.get('agent_id', f'agent-{self.id[:8]}')
             api_token = msg_data.get('api_token', '')
 
+            # Extract expected_turn for state verification on reconnection
+            # If provided, we'll verify the game state matches after reconnection
+            expected_turn = msg_data.get('expected_turn')
+            if expected_turn is not None:
+                try:
+                    expected_turn = int(expected_turn)
+                except (ValueError, TypeError):
+                    expected_turn = None
+                    logger.warning(f"Invalid expected_turn value for {self.agent_id}, ignoring state verification")
+
             # Token validation using config
             if not llm_config.validate_token(api_token):
                 error_response = error_handler.handle_authentication_error(
@@ -437,11 +447,18 @@ class LLMWSHandler(websocket.WebSocketHandler):
                     f"   Restored civserver_port: {previous_civserver_port}"
                 )
 
+            # Extract game_id BEFORE session creation so it can be persisted with the session
+            # This enables MySQL session persistence to link sessions with games
+            # LLM Gateway flattens nested 'data' field to top level before sending to proxy
+            game_id = msg_data.get('game_id', f'game_{uuid.uuid4().hex[:8]}')
+            self.game_id = game_id
+
             # Create new session if not reconnecting
             if not is_reconnecting:
                 self.session_info = session_manager.create_session(
                     self.agent_id,
-                    api_token
+                    api_token,
+                    game_id=game_id  # Link session to game for persistence
                 )
 
                 if not self.session_info:
@@ -456,12 +473,6 @@ class LLMWSHandler(websocket.WebSocketHandler):
             # Register agent first (needed for player_id calculation)
             llm_agents[self.agent_id] = self
             self.is_llm_agent = True
-
-            # Get game_id FIRST, then allocate/lookup civserver port
-            # This ensures both players in the same game connect to the SAME multiplayer server
-            # LLM Gateway flattens nested 'data' field to top level before sending to proxy
-            game_id = msg_data.get('game_id', f'game_{uuid.uuid4().hex[:8]}')
-            self.game_id = game_id
 
             # Allocate or reuse civserver port for this game_id
             # Reconnection: use stored port from session (game is still running there)
@@ -517,6 +528,37 @@ class LLMWSHandler(websocket.WebSocketHandler):
                         f"   Player ID: {self.civcom.player_id}\n"
                         f"   CivCom thread alive: {self.civcom.is_alive()}"
                     )
+
+                    # STATE VERIFICATION: Check if expected_turn matches actual game state
+                    # This catches the case where reconnection went to a different/reset game
+                    if expected_turn is not None:
+                        current_turn = self.civcom.game_turn if hasattr(self.civcom, 'game_turn') else 0
+                        if current_turn != expected_turn:
+                            logger.error(
+                                f"❌ STATE MISMATCH for {self.agent_id}:\n"
+                                f"   Expected turn: {expected_turn}\n"
+                                f"   Actual turn: {current_turn}\n"
+                                f"   Game may have been reset or connected to wrong server"
+                            )
+                            error_response = {
+                                'type': 'error',
+                                'code': 'E_STATE_MISMATCH',
+                                'message': f'Expected turn {expected_turn}, got turn {current_turn}. Game may have been reset.',
+                                'expected_turn': expected_turn,
+                                'actual_turn': current_turn,
+                                'recoverable': False
+                            }
+                            if correlation_id:
+                                error_response['correlation_id'] = correlation_id
+                            self.write_message(json.dumps(error_response))
+                            # Cleanup and abort
+                            self.buffer_enabled = False
+                            self.packet_buffer.clear()
+                            return
+                        else:
+                            logger.info(
+                                f"✅ State verification passed for {self.agent_id}: turn={current_turn}"
+                            )
                 else:
                     # New connection or no existing CivCom - create fresh
                     if is_reconnecting and not existing_civcom:
