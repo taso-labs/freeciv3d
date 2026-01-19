@@ -447,11 +447,18 @@ class LLMWSHandler(websocket.WebSocketHandler):
                     f"   Restored civserver_port: {previous_civserver_port}"
                 )
 
+            # Extract game_id BEFORE session creation so it can be persisted with the session
+            # This enables MySQL session persistence to link sessions with games
+            # LLM Gateway flattens nested 'data' field to top level before sending to proxy
+            game_id = msg_data.get('game_id', f'game_{uuid.uuid4().hex[:8]}')
+            self.game_id = game_id
+
             # Create new session if not reconnecting
             if not is_reconnecting:
                 self.session_info = session_manager.create_session(
                     self.agent_id,
-                    api_token
+                    api_token,
+                    game_id=game_id  # Link session to game for persistence
                 )
 
                 if not self.session_info:
@@ -466,12 +473,6 @@ class LLMWSHandler(websocket.WebSocketHandler):
             # Register agent first (needed for player_id calculation)
             llm_agents[self.agent_id] = self
             self.is_llm_agent = True
-
-            # Get game_id FIRST, then allocate/lookup civserver port
-            # This ensures both players in the same game connect to the SAME multiplayer server
-            # LLM Gateway flattens nested 'data' field to top level before sending to proxy
-            game_id = msg_data.get('game_id', f'game_{uuid.uuid4().hex[:8]}')
-            self.game_id = game_id
 
             # Allocate or reuse civserver port for this game_id
             # Reconnection: use stored port from session (game is still running there)
