@@ -23,7 +23,7 @@ from config_loader import llm_config
 from message_validator import MessageValidator, ValidationError
 from security import InputSanitizer, SecurityError, SecurityLogger
 from rate_limiter import DistributedRateLimiter
-from session_manager import session_manager, SessionState
+from session_manager import session_manager, SessionState, start_periodic_cleanup
 from error_handler import error_handler, ErrorSeverity, ErrorCategory
 from game_session_manager import game_session_manager
 from ruleset_mapper import RulesetMapper
@@ -93,6 +93,10 @@ except Exception as e:
 # Initialize distributed tracing (gracefully degrades if OpenTelemetry not available)
 ENABLE_CLOUD_TRACE = os.getenv("ENABLE_CLOUD_TRACE", "false").lower() == "true"
 init_tracing("freeciv-proxy", enable_cloud_trace=ENABLE_CLOUD_TRACE)
+
+# Start periodic session cleanup (runs every 5 minutes via Tornado PeriodicCallback)
+# This ensures expired sessions are cleaned up regardless of traffic patterns
+start_periodic_cleanup(interval_ms=300000)  # 5 minutes
 
 # Global registry for active LLM agents
 llm_agents = {}
@@ -271,8 +275,8 @@ class LLMWSHandler(websocket.WebSocketHandler):
                     self.close()
                     return
 
-                # Cleanup expired sessions periodically
-                session_manager.cleanup_expired_sessions()
+                # NOTE: Session cleanup is now handled by PeriodicCallback (see start_periodic_cleanup)
+                # rather than on every message, to ensure consistent cleanup regardless of traffic
 
                 # Distributed rate limiting by agent ID
                 if self.agent_id and not distributed_rate_limiter.check_limit(self.agent_id, 'message'):
