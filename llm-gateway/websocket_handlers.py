@@ -272,10 +272,17 @@ class AgentWebSocketHandler:
                 await asyncio.sleep(total_delay)
 
         # All attempts exhausted
+        error_type = type(last_error).__name__ if last_error else "Unknown"
         logger.error(
-            f"Agent {self.agent_id} failed to connect after {settings.max_retry_attempts} attempts"
+            f"Agent {self.agent_id} failed to connect after {settings.max_retry_attempts} attempts. "
+            f"Last error type: {error_type}"
         )
-        raise last_error or Exception("Connection failed after all retry attempts")
+        if last_error:
+            raise last_error
+        raise ConnectionError(
+            f"Connection failed after {settings.max_retry_attempts} retry attempts "
+            f"(no specific error captured)"
+        )
 
     async def _connect_to_proxy_and_forward(self, message: Dict[str, Any], span=None):
         """Connect to proxy LLM handler and forward the connect message"""

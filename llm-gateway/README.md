@@ -587,12 +587,13 @@ python3 -u freeciv-proxy.py 8002 > /proc/1/fd/1 2>&1 &
 uvicorn main:app --port 8003 > /proc/1/fd/1 2>&1 &
 ```
 
-**Trade-off**: This approach doesn't create local log files (`/docker/logs/*.log`). If you need local file logging for development debugging, you can modify `docker-entrypoint.sh` to use `tee`:
+**Trade-off**: This approach doesn't create local log files (`/docker/logs/*.log`). If you need local file logging for development debugging, you can modify `docker-entrypoint.sh` to use `tee`. Note that `tee` writes to both the file AND stdout by default:
 
 ```bash
 # Local development with file logging (modify docker-entrypoint.sh)
-python3 -u freeciv-proxy.py 8002 2>&1 | tee /docker/logs/freeciv-proxy-8002.log > /proc/1/fd/1 &
-uvicorn main:app --port 8003 2>&1 | tee /docker/logs/llm-gateway.log > /proc/1/fd/1 &
+# tee writes to both file and stdout; stdout goes to container logs
+python3 -u freeciv-proxy.py 8002 2>&1 | tee /docker/logs/freeciv-proxy-8002.log &
+uvicorn main:app --port 8003 2>&1 | tee /docker/logs/llm-gateway.log &
 ```
 
 **Why `/proc/1/fd/1`?** When the entrypoint script runs `exec sleep infinity`, background processes started with `| tee file &` may lose their connection to the container's log capture. Writing directly to `/proc/1/fd/1` (PID 1's stdout) ensures logs are always captured regardless of the main process.

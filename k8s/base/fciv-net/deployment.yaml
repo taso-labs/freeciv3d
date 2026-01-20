@@ -203,9 +203,11 @@ spec:
                   ports = [8080, 8002, 8003]
                   for p in ports:
                       s = socket.socket()
-                      s.settimeout(5)
-                      s.connect(('localhost', p))
-                      s.close()
+                      try:
+                          s.settimeout(5)
+                          s.connect(('localhost', p))
+                      finally:
+                          s.close()
             initialDelaySeconds: 90  # Increased to allow all services to start
             periodSeconds: 30  # Increased from 20s to reduce overhead
             timeoutSeconds: 15  # Increased to account for checking 3 ports
