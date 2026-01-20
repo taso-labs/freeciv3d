@@ -7,8 +7,7 @@
 
 -- Add composite index for common query pattern
 -- This is more efficient than using two separate indexes for multi-column conditions
-CREATE INDEX IF NOT EXISTS idx_game_released
-ON game_allocations(game_id, released_at);
+CREATE INDEX idx_game_released ON game_allocations(game_id, released_at);
 
 -- NOTE: Automatic cleanup via MySQL Event Scheduler was removed because:
 -- 1. Cloud SQL requires special configuration to enable Event Scheduler
