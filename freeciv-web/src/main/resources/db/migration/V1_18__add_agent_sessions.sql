@@ -2,12 +2,6 @@
 -- Purpose: Enable session recovery after freeciv-proxy restarts
 -- Previously sessions were stored only in-memory, meaning a proxy restart
 -- would lose all active sessions and force agents to re-authenticate.
---
--- IMPORTANT: MySQL Event Scheduler must be enabled for cleanup events to work.
--- Check status:  SHOW VARIABLES LIKE 'event_scheduler';
--- Enable:        SET GLOBAL event_scheduler = ON;
--- Grant perms:   GRANT EVENT ON freeciv_web.* TO 'your_user'@'localhost';
--- The Docker setup enables this automatically via init scripts.
 
 CREATE TABLE IF NOT EXISTS agent_sessions (
   session_id VARCHAR(64) NOT NULL PRIMARY KEY,
@@ -35,13 +29,10 @@ CREATE TABLE IF NOT EXISTS agent_sessions (
   -- The application code handles the relationship, enabling graceful degradation.
 );
 
--- Auto-cleanup expired sessions every 5 minutes
--- This mirrors the in-memory cleanup_expired_sessions() behavior
--- Removes sessions that are:
---   1. Past their expiration time
---   2. Already marked as expired or terminated
-CREATE EVENT IF NOT EXISTS agent_sessions_cleanup
-  ON SCHEDULE EVERY 5 MINUTE
-  DO DELETE FROM agent_sessions
-     WHERE expires_at < NOW()
-     OR state IN ('expired', 'terminated');
+-- NOTE: Automatic cleanup via MySQL Event Scheduler was removed because:
+-- 1. Cloud SQL requires special configuration to enable Event Scheduler
+-- 2. The EVENT privilege may not be available in all environments
+-- 3. Application-level cleanup in session_manager.py handles this already
+-- The Python cleanup_expired_sessions() method runs periodically and removes:
+--   - Sessions past their expiration time
+--   - Sessions marked as expired or terminated
