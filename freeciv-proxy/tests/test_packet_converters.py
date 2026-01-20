@@ -117,19 +117,19 @@ class TestCombatActionConverters:
         assert result['action_type'] == ACTION_NUKE_CITY
     
     def test_unit_pillage_conversion(self):
-        """Test unit_pillage includes extra_id as sub_target."""
+        """Test unit_pillage includes extra_id as sub_tgt_id (protocol field name)."""
         action = {
             'type': 'unit_pillage',
             'unit_id': 101,
             'tile_id': 500,
             'extra_id': 3
         }
-        
+
         result = _convert_action_to_packet(action)
-        
+
         assert result['pid'] == PACKET_UNIT_DO_ACTION
         assert result['action_type'] == ACTION_PILLAGE
-        assert result['sub_target'] == 3  # extra_id for what to pillage
+        assert result['sub_tgt_id'] == 3  # extra_id for what to pillage
     
     def test_unit_heal_conversion(self):
         """Test unit_heal converts to action_type 98."""
@@ -300,7 +300,7 @@ class TestEspionageActionConverters:
         result = _convert_action_to_packet(action)
         
         assert result['pid'] == PACKET_UNIT_DO_ACTION
-        assert result['sub_target'] == 5  # building_id
+        assert result['sub_tgt_id'] == 5  # building_id
         assert result['action_type'] == ACTION_SPY_SABOTAGE_CITY
     
     def test_spy_targeted_sabotage_city_conversion(self):
@@ -315,7 +315,7 @@ class TestEspionageActionConverters:
         result = _convert_action_to_packet(action)
         
         assert result['pid'] == PACKET_UNIT_DO_ACTION
-        assert result['sub_target'] == 7  # Required building_id
+        assert result['sub_tgt_id'] == 7  # Required building_id
         assert result['action_type'] == ACTION_SPY_TARGETED_SABOTAGE_CITY
     
     def test_spy_steal_tech_conversion(self):
@@ -343,7 +343,7 @@ class TestEspionageActionConverters:
         result = _convert_action_to_packet(action)
         
         assert result['pid'] == PACKET_UNIT_DO_ACTION
-        assert result['sub_target'] == 25  # tech_id
+        assert result['sub_tgt_id'] == 25  # tech_id
         assert result['action_type'] == ACTION_SPY_TARGETED_STEAL_TECH
     
     def test_spy_incite_city_conversion(self):

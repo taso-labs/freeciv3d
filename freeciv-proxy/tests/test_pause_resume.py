@@ -23,8 +23,9 @@ from unittest.mock import Mock, MagicMock, patch
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# Set required environment variables before importing modules
-os.environ.setdefault('CACHE_HMAC_SECRET', secrets.token_hex(32))
+# IMPORTANT: Set environment variables BEFORE importing modules that use them
+os.environ['CACHE_HMAC_SECRET'] = '8dc50280f151af309d728c951584576f205688dc82d7d295174f2ef1b3e32181'
+os.environ['LLM_API_TOKENS'] = 'test-token-123'
 
 from game_session_manager import GameSession, GamePhase, PlayerInfo
 from packet_constants import PACKET_CHAT_MSG_REQ
