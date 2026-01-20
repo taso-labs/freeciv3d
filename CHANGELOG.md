@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.15](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.14...freeciv3d-v0.3.15) (2026-01-20)
+
+
+### CI/CD
+
+* Add Flyway migration testing against MySQL 8.0 ([#70](https://github.com/taso-ventures/freeciv3d/issues/70)) ([93dcdd6](https://github.com/taso-ventures/freeciv3d/commit/93dcdd6d3302614536511fa03257f11b301152bc))
+
 ## [0.3.14](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.13...freeciv3d-v0.3.14) (2026-01-20)
 
 
