@@ -22,6 +22,11 @@ from unittest.mock import Mock
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# IMPORTANT: Set environment variables BEFORE importing modules that use them
+os.environ['CACHE_HMAC_SECRET'] = '8dc50280f151af309d728c951584576f205688dc82d7d295174f2ef1b3e32181'
+os.environ['LLM_API_TOKENS'] = 'test-token-123'
+os.environ['API_KEY_SECRET'] = 'test-api-key-secret-for-testing-purposes'
+
 from state_extractor import StateExtractor, StateFormat, civcom_registry
 from state_cache import StateCache
 from api_rate_limiter import APIRateLimiter

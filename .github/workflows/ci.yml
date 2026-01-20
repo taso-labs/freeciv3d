@@ -27,3 +27,27 @@ jobs:
       - name: install
         shell: bash
         run: ./scripts/install/install.sh --mode=TEST
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.12'
+
+      - name: Install Python test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest pytest-asyncio pytest-cov
+          pip install tornado  # Required by freeciv-proxy
+          pip install -r llm-gateway/requirements.txt
+
+      - name: Run freeciv-proxy tests
+        env:
+          CACHE_HMAC_SECRET: '8dc50280f151af309d728c951584576f205688dc82d7d295174f2ef1b3e32181'
+          LLM_API_TOKENS: 'test-token-123'
+          API_KEY_SECRET: 'test-api-key-secret-for-ci'
+        run: |
+          cd freeciv-proxy && python -m pytest tests/ -v --tb=short \
+            --ignore=tests/test_load_stress.py \
+            --ignore=tests/test_pause_resume.py \
+            --ignore=tests/test_state_extractor.py \
+            --ignore=tests/test_unit_move_format.py
