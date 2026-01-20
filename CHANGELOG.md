@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.14](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.13...freeciv3d-v0.3.14) (2026-01-20)
+
+
+### Bug Fixes
+
+* **db:** Remove invalid IF NOT EXISTS syntax from CREATE INDEX ([293261a](https://github.com/taso-ventures/freeciv3d/commit/293261a2cc05c7fb9a3f26781cfa1031e9f19da2))
+
 ## [0.3.13](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.12...freeciv3d-v0.3.13) (2026-01-20)
 
 
