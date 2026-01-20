@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.13](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.12...freeciv3d-v0.3.13) (2026-01-20)
+
+
+### Bug Fixes
+
+* **db:** Remove MySQL Event Scheduler dependency from migrations ([#66](https://github.com/taso-ventures/freeciv3d/issues/66)) ([1b33b0a](https://github.com/taso-ventures/freeciv3d/commit/1b33b0aae62d4bcb11744d4e1adf3d60b68b2911))
+* **tests:** Fix failing Python tests and add CI integration ([#67](https://github.com/taso-ventures/freeciv3d/issues/67)) ([18c0e84](https://github.com/taso-ventures/freeciv3d/commit/18c0e84b7081cca03edb270e93818bc624e4a2b6))
+
 ## [0.3.12](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.11...freeciv3d-v0.3.12) (2026-01-19)
 
 
