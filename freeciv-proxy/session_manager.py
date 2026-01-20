@@ -152,18 +152,22 @@ class MySQLSessionManager:
     MySQL-backed session manager for full persistence across proxy restarts.
 
     Sessions are stored in the agent_sessions table and survive process restarts.
-    Cleanup is handled by a MySQL EVENT that runs every 5 minutes.
+    Cleanup is handled by periodic calls to cleanup_expired_sessions() from the
+    application layer (via PeriodicCallback or during message handling).
     """
 
     def __init__(self,
                  db_config: Dict[str, Any],
                  session_timeout: int = 3600,
-                 max_concurrent_sessions: int = 100):
+                 max_concurrent_sessions: int = 100,
+                 cleanup_interval: int = 300):
         self.session_timeout = session_timeout
         self.max_concurrent_sessions = max_concurrent_sessions
+        self.cleanup_interval = cleanup_interval
         self.db_config = db_config
         self._pool = None
         self._pool_lock = threading.Lock()
+        self.last_cleanup = 0.0  # Timestamp of last cleanup run
 
         # Session security
         self.session_secret = self._get_secure_session_secret()
@@ -592,10 +596,20 @@ class MySQLSessionManager:
 
     def cleanup_expired_sessions(self) -> int:
         """
-        Clean up expired sessions.
-        Note: MySQL EVENT handles this automatically, but this method
-        can be called manually for immediate cleanup.
+        Clean up expired sessions with rate limiting.
+
+        To avoid excessive database queries, this method only runs if at least
+        cleanup_interval seconds have passed since the last cleanup.
         """
+        import time
+        now = time.time()
+
+        # Rate limit cleanup to avoid excessive DB queries on high traffic
+        if now - self.last_cleanup < self.cleanup_interval:
+            return 0
+
+        self.last_cleanup = now
+
         try:
             with self._get_connection() as conn:
                 with conn.cursor() as cursor:
@@ -1071,7 +1085,8 @@ class SessionManager:
                 self._mysql_backend = MySQLSessionManager(
                     db_config=db_config,
                     session_timeout=session_timeout,
-                    max_concurrent_sessions=max_concurrent_sessions
+                    max_concurrent_sessions=max_concurrent_sessions,
+                    cleanup_interval=cleanup_interval
                 )
                 if self._mysql_backend.is_available():
                     logger.info("SessionManager: MySQL backend initialized successfully")
@@ -1172,3 +1187,46 @@ session_manager = SessionManager(
     session_timeout=int(os.getenv('SESSION_TIMEOUT_SECONDS', '3600')),
     max_concurrent_sessions=int(os.getenv('MAX_CONCURRENT_SESSIONS', '100'))
 )
+
+# Periodic cleanup callback (lazy-initialized)
+_cleanup_callback = None
+
+
+def start_periodic_cleanup(interval_ms: int = 300000) -> None:
+    """
+    Start a periodic cleanup callback using Tornado's PeriodicCallback.
+
+    This should be called once during application startup (after IOLoop is available)
+    to ensure expired sessions are cleaned up at regular intervals, regardless of
+    traffic patterns.
+
+    Args:
+        interval_ms: Cleanup interval in milliseconds (default: 5 minutes)
+
+    Example:
+        from session_manager import start_periodic_cleanup
+        # Call after Tornado IOLoop is initialized
+        start_periodic_cleanup()
+    """
+    global _cleanup_callback
+
+    if _cleanup_callback is not None:
+        logger.warning("Periodic cleanup already started, ignoring duplicate call")
+        return
+
+    try:
+        from tornado.ioloop import PeriodicCallback
+
+        def do_cleanup():
+            try:
+                cleaned = session_manager.cleanup_expired_sessions()
+                if cleaned > 0:
+                    logger.debug(f"Periodic cleanup removed {cleaned} expired sessions")
+            except Exception as e:
+                logger.error(f"Periodic cleanup error: {e}")
+
+        _cleanup_callback = PeriodicCallback(do_cleanup, interval_ms)
+        _cleanup_callback.start()
+        logger.info(f"Started periodic session cleanup (interval: {interval_ms}ms)")
+    except ImportError:
+        logger.warning("Tornado not available, periodic cleanup disabled")
