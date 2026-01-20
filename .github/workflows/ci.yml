@@ -6,6 +6,48 @@ on:
   - workflow_dispatch
 
 jobs:
+  # Job 1: Validate Flyway migrations against MySQL 8.0
+  flyway-migrations:
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: testpassword
+          MYSQL_DATABASE: freeciv_web
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h localhost"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4.1.1
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Run Flyway migrations
+        run: |
+          # Download Flyway CLI
+          wget -qO- https://download.red-gate.com/maven/release/com/redgate/flyway/flyway-commandline/10.6.0/flyway-commandline-10.6.0-linux-x64.tar.gz | tar xvz
+
+          # Run migrations against test MySQL
+          ./flyway-10.6.0/flyway \
+            -url="jdbc:mysql://localhost:3306/freeciv_web?useSSL=false&allowPublicKeyRetrieval=true" \
+            -user=root \
+            -password=testpassword \
+            -locations="filesystem:freeciv-web/src/main/resources/db/migration" \
+            migrate
+
+          echo "✅ All Flyway migrations passed!"
+
   normal:
     runs-on: ubuntu-latest
     steps:
