@@ -28,8 +28,16 @@ function init_roads_image()
 {
   roads_data = new Uint8Array( 4 * map.xsize * map.ysize );
 
-  roads_texture = new THREE.DataTexture(roads_data, map.xsize, map.ysize);
+  roads_texture = new THREE.DataTexture(
+    roads_data,
+    map.xsize,
+    map.ysize,
+    THREE.RGBAFormat,
+    THREE.UnsignedByteType
+  );
+  roads_texture.colorSpace = THREE.NoColorSpace;
   roads_texture.flipY = true;
+  roads_texture.needsUpdate = true;
 
   for (let x = 0; x < map.xsize; x++) {
     for (let y = 0; y < map.ysize; y++) {

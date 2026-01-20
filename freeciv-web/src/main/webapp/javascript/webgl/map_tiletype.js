@@ -28,8 +28,16 @@ function init_map_tiletype_image()
 {
   maptiles_data = new Uint8Array( 4 * map.xsize * map.ysize );
 
-  maptiletypes = new THREE.DataTexture(maptiles_data, map.xsize, map.ysize);
+  maptiletypes = new THREE.DataTexture(
+    maptiles_data,
+    map.xsize,
+    map.ysize,
+    THREE.RGBAFormat,
+    THREE.UnsignedByteType
+  );
+  maptiletypes.colorSpace = THREE.NoColorSpace;
   maptiletypes.flipY = true;
+  maptiletypes.needsUpdate = true;
 
   for (let x = 0; x < map.xsize; x++) {
     for (let y = 0; y < map.ysize; y++) {
