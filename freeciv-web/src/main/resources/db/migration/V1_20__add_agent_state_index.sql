@@ -7,5 +7,4 @@
 -- benefit more from a composite index that can be scanned in a single operation
 -- rather than requiring MySQL to do index intersection.
 
-CREATE INDEX IF NOT EXISTS idx_agent_state
-ON agent_sessions(agent_id, state);
+CREATE INDEX idx_agent_state ON agent_sessions(agent_id, state);
