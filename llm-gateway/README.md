@@ -577,6 +577,26 @@ export LOG_LEVEL=DEBUG
 uvicorn main:app --log-level debug
 ```
 
+#### Container Logging (K8s vs Local)
+
+In Kubernetes deployments, container logs are captured from PID 1's stdout/stderr. The `docker-entrypoint.sh` writes process output directly to `/proc/1/fd/1` to ensure logs appear in `kubectl logs` and GKE Cloud Logging:
+
+```bash
+# K8s-compatible logging (current implementation)
+python3 -u freeciv-proxy.py 8002 > /proc/1/fd/1 2>&1 &
+uvicorn main:app --port 8003 > /proc/1/fd/1 2>&1 &
+```
+
+**Trade-off**: This approach doesn't create local log files (`/docker/logs/*.log`). If you need local file logging for development debugging, you can modify `docker-entrypoint.sh` to use `tee`:
+
+```bash
+# Local development with file logging (modify docker-entrypoint.sh)
+python3 -u freeciv-proxy.py 8002 2>&1 | tee /docker/logs/freeciv-proxy-8002.log > /proc/1/fd/1 &
+uvicorn main:app --port 8003 2>&1 | tee /docker/logs/llm-gateway.log > /proc/1/fd/1 &
+```
+
+**Why `/proc/1/fd/1`?** When the entrypoint script runs `exec sleep infinity`, background processes started with `| tee file &` may lose their connection to the container's log capture. Writing directly to `/proc/1/fd/1` (PID 1's stdout) ensures logs are always captured regardless of the main process.
+
 **Common Issues**:
 
 1. **"Connection refused" on port 8003**

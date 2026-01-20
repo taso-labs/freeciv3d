@@ -301,8 +301,10 @@ class LLMGateway:
             proxy_url = get_freeciv_proxy_url()
 
             # Connect to FreeCiv proxy with timeout parameters to detect dead connections
+            # open_timeout addresses E999 "timed out during opening handshake" errors
             websocket = await websockets.connect(
                 proxy_url,
+                open_timeout=WEBSOCKET_OPEN_TIMEOUT,  # 30s for handshake under load
                 ping_interval=WEBSOCKET_PING_INTERVAL,
                 ping_timeout=WEBSOCKET_PING_TIMEOUT,
                 close_timeout=WEBSOCKET_CLOSE_TIMEOUT

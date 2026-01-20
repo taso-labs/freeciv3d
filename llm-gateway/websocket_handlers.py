@@ -8,6 +8,7 @@ WebSocket handlers for LLM Gateway
 import asyncio
 import json
 import logging
+import random
 import time
 from typing import Dict, Any, Optional
 from fastapi import WebSocket, WebSocketDisconnect, FastAPI
@@ -21,7 +22,8 @@ try:
     from .utils.constants import (
         MAX_MESSAGE_SIZE_BYTES, ERROR_CODE_VALIDATION, ERROR_CODE_RATE_LIMIT,
         ERROR_CODE_NOT_AUTHENTICATED, ERROR_CODE_CONNECTION_LOST, ERROR_CODE_UNKNOWN,
-        WEBSOCKET_PING_INTERVAL, WEBSOCKET_PING_TIMEOUT, WEBSOCKET_CLOSE_TIMEOUT
+        WEBSOCKET_PING_INTERVAL, WEBSOCKET_PING_TIMEOUT, WEBSOCKET_CLOSE_TIMEOUT,
+        WEBSOCKET_OPEN_TIMEOUT
     )
     from .tracing import extract_trace_context, inject_trace_context, create_child_span
 except ImportError:
@@ -32,7 +34,8 @@ except ImportError:
     from utils.constants import (
         MAX_MESSAGE_SIZE_BYTES, ERROR_CODE_VALIDATION, ERROR_CODE_RATE_LIMIT,
         ERROR_CODE_NOT_AUTHENTICATED, ERROR_CODE_CONNECTION_LOST, ERROR_CODE_UNKNOWN,
-        WEBSOCKET_PING_INTERVAL, WEBSOCKET_PING_TIMEOUT, WEBSOCKET_CLOSE_TIMEOUT
+        WEBSOCKET_PING_INTERVAL, WEBSOCKET_PING_TIMEOUT, WEBSOCKET_CLOSE_TIMEOUT,
+        WEBSOCKET_OPEN_TIMEOUT
     )
     from tracing import extract_trace_context, inject_trace_context, create_child_span
 
@@ -191,28 +194,99 @@ class AgentWebSocketHandler:
                     }
                 )
 
+    async def _connect_to_proxy_with_retry(self, proxy_url: str) -> websockets.WebSocketClientProtocol:
+        """
+        Connect to proxy with retry logic and exponential backoff.
+
+        Addresses E999 "timed out during opening handshake" errors by:
+        1. Using explicit open_timeout (30s default)
+        2. Retrying with exponential backoff on transient failures
+        3. Adding jitter to prevent thundering herd on reconnects
+
+        Args:
+            proxy_url: WebSocket URL to connect to
+
+        Returns:
+            WebSocket connection on success
+
+        Raises:
+            Exception: After all retry attempts exhausted
+        """
+        last_error: Optional[Exception] = None
+
+        for attempt in range(settings.max_retry_attempts):
+            try:
+                logger.info(
+                    f"Agent {self.agent_id} connecting to proxy (attempt {attempt + 1}/{settings.max_retry_attempts}): {proxy_url}"
+                )
+
+                # Set max_size to 100MB to handle large FreeCiv game state packets
+                # FreeCiv sends packets with map data, player info, city data that exceed default 1MB
+                # Add open_timeout to prevent "timed out during opening handshake" errors
+                connection = await websockets.connect(
+                    proxy_url,
+                    max_size=100 * 1024 * 1024,  # 100MB for large game state packets
+                    max_queue=64,  # Increase queue size to handle multiple large frames
+                    open_timeout=WEBSOCKET_OPEN_TIMEOUT,  # 30s for handshake under load
+                    ping_interval=WEBSOCKET_PING_INTERVAL,  # Ping every 20s to detect dead connections
+                    ping_timeout=WEBSOCKET_PING_TIMEOUT,  # Wait up to 10s for pong response
+                    close_timeout=WEBSOCKET_CLOSE_TIMEOUT  # Timeout for graceful close
+                )
+
+                logger.info(
+                    f"Connected to proxy for agent {self.agent_id} on attempt {attempt + 1} "
+                    f"(max_size=100MB, open_timeout={WEBSOCKET_OPEN_TIMEOUT}s, ping_interval={WEBSOCKET_PING_INTERVAL}s)"
+                )
+                return connection
+
+            except asyncio.TimeoutError as e:
+                last_error = e
+                logger.warning(
+                    f"Agent {self.agent_id} proxy connection timed out (attempt {attempt + 1}/{settings.max_retry_attempts})"
+                )
+            except websockets.exceptions.WebSocketException as e:
+                last_error = e
+                logger.warning(
+                    f"Agent {self.agent_id} WebSocket error (attempt {attempt + 1}/{settings.max_retry_attempts}): {e}"
+                )
+            except ConnectionRefusedError as e:
+                last_error = e
+                logger.warning(
+                    f"Agent {self.agent_id} connection refused (attempt {attempt + 1}/{settings.max_retry_attempts}): {e}"
+                )
+            except Exception as e:
+                last_error = e
+                logger.warning(
+                    f"Agent {self.agent_id} unexpected error (attempt {attempt + 1}/{settings.max_retry_attempts}): {type(e).__name__}: {e}"
+                )
+
+            # Calculate exponential backoff delay with jitter
+            if attempt < settings.max_retry_attempts - 1:  # Don't wait after last attempt
+                base_delay = settings.initial_retry_delay * (settings.retry_backoff_multiplier ** attempt)
+                delay = min(base_delay, settings.max_retry_delay)
+                # Add 10-30% random jitter to prevent thundering herd
+                jitter = random.uniform(0.1, 0.3) * delay
+                total_delay = delay + jitter
+
+                logger.info(f"Agent {self.agent_id} waiting {total_delay:.2f}s before retry")
+                await asyncio.sleep(total_delay)
+
+        # All attempts exhausted
+        logger.error(
+            f"Agent {self.agent_id} failed to connect after {settings.max_retry_attempts} attempts"
+        )
+        raise last_error or Exception("Connection failed after all retry attempts")
+
     async def _connect_to_proxy_and_forward(self, message: Dict[str, Any], span=None):
         """Connect to proxy LLM handler and forward the connect message"""
         try:
             # Connect to the freeciv-proxy LLM handler endpoint
             proxy_url = f"ws://{settings.freeciv_proxy_host}:{settings.freeciv_proxy_port}{settings.freeciv_proxy_ws_path}"
-            logger.info(f"Connecting agent {self.agent_id} to proxy: {proxy_url}")
             if span:
                 span.set_attribute("proxy.url", proxy_url)
 
-            # Set max_size to 100MB to handle large FreeCiv game state packets
-            # FreeCiv sends packets with map data, player info, city data that exceed the default 1MB limit
-            # This prevents "frame exceeds limit of 1048576 bytes" errors (close code 1009)
-            # Add ping/timeout parameters to detect and close dead connections
-            self.proxy_connection = await websockets.connect(
-                proxy_url,
-                max_size=100 * 1024 * 1024,  # 100MB for large game state packets
-                max_queue=64,  # Increase queue size to handle multiple large frames
-                ping_interval=WEBSOCKET_PING_INTERVAL,  # Ping every 20s to detect dead connections
-                ping_timeout=WEBSOCKET_PING_TIMEOUT,  # Wait up to 10s for pong response
-                close_timeout=WEBSOCKET_CLOSE_TIMEOUT  # Timeout for graceful close
-            )
-            logger.info(f"Connected to proxy for agent {self.agent_id} (max_size=100MB, ping_interval={WEBSOCKET_PING_INTERVAL}s)")
+            # Use retry logic for resilient connection establishment
+            self.proxy_connection = await self._connect_to_proxy_with_retry(proxy_url)
 
             # Start listening for proxy messages in background
             asyncio.create_task(self._listen_to_proxy())
