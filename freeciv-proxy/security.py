@@ -30,9 +30,9 @@ class InputSanitizer:
         'city_id': r'^[0-9]{1,6}$',  # City IDs up to 6 digits
         'coordinates': r'^-?[0-9]{1,4}$',  # Coordinates -9999 to 9999
         'agent_id': r'^[a-zA-Z0-9_-]{1,50}$',  # Agent IDs alphanumeric with _ and -
-        'tech_name': r'^[a-zA-Z0-9_\s]{1,50}$',  # Technology names
-        'unit_type': r'^[a-zA-Z0-9_\s]{1,30}$',  # Unit types
-        'production_type': r'^[a-zA-Z0-9_\s]{1,30}$',  # Production types
+        'tech_name': r'^[a-zA-Z0-9_\s\'\.\-]{1,48}$',  # Technology names (allow apostrophe, period, hyphen)
+        'unit_type': r'^[a-zA-Z0-9_\s\'\.\-]{1,48}$',  # Unit types (allow apostrophe, period, hyphen)
+        'production_type': r'^[a-zA-Z0-9_\s\'\.\-]{1,48}$',  # Production types (allow apostrophe, period, hyphen)
         'game_phase': r'^[a-zA-Z0-9_]{1,20}$',  # Game phases
     }
 
