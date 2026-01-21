@@ -29,16 +29,8 @@ function init_borders_image()
 {
   borders_data = new Uint8Array( 4 * map.xsize * map.ysize );
 
-  borders_texture = new THREE.DataTexture(
-    borders_data,
-    map.xsize,
-    map.ysize,
-    THREE.RGBAFormat,
-    THREE.UnsignedByteType
-  );
-  borders_texture.colorSpace = THREE.NoColorSpace;
+  borders_texture = new THREE.DataTexture(borders_data, map.xsize, map.ysize);
   borders_texture.flipY = true;
-  borders_texture.needsUpdate = true;
 
   for (let x = 0; x < map.xsize; x++) {
     for (let y = 0; y < map.ysize; y++) {
