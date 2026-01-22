@@ -14,7 +14,7 @@ HEALTH_CHECK_TIMEOUT = 5.0  # Health check ping timeout
 CLEANUP_CYCLE_SECONDS = 60  # Connection cleanup cycle
 TOKEN_TTL_SECONDS = 86400  # Token time-to-live (24 hours)
 SESSION_TIMEOUT_SECONDS = 3600  # Session timeout (1 hour)
-SESSION_RESUMPTION_WINDOW = 60  # seconds to allow session resume after disconnect
+SESSION_RESUMPTION_WINDOW = 300  # seconds to allow session resume after disconnect (5 min, matches config.py)
 DEFAULT_AGENT_TIMEOUT = 600  # 10 minutes for longer games
 
 # Rate limiting constants
@@ -39,6 +39,7 @@ HEALTH_CHECK_INTERVAL = 30.0  # Health check interval
 WEBSOCKET_PING_INTERVAL = 20  # Send ping every 20 seconds to detect dead connections
 WEBSOCKET_PING_TIMEOUT = 10  # Wait up to 10 seconds for pong response
 WEBSOCKET_CLOSE_TIMEOUT = 10  # Timeout for graceful close handshake
+WEBSOCKET_OPEN_TIMEOUT = 30  # Timeout for WebSocket handshake under load (addresses E999 errors)
 
 # Observer URL polling constants (for race condition handling)
 OBSERVER_URL_MAX_RETRY_ATTEMPTS = 10

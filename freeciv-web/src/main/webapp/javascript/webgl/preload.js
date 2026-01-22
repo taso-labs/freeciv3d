@@ -73,6 +73,7 @@ function webgl_preload()
                 webgl_textures["roads"].wrapT = THREE.RepeatWrapping;
                 webgl_textures["roads"].magFilter = THREE.LinearFilter;
                 webgl_textures["roads"].minFilter = THREE.LinearFilter;
+                webgl_textures["roads"].colorSpace = THREE.SRGBColorSpace;
                 webgl_textures["roads"].needsUpdate = true;
             }
     })()
@@ -89,6 +90,7 @@ function webgl_preload()
                 webgl_textures["railroads"].wrapT = THREE.RepeatWrapping;
                 webgl_textures["railroads"].magFilter = THREE.LinearFilter;
                 webgl_textures["railroads"].minFilter = THREE.LinearFilter;
+                webgl_textures["railroads"].colorSpace = THREE.SRGBColorSpace;
                 webgl_textures["railroads"].needsUpdate = true;
             }
     })()
@@ -159,6 +161,7 @@ function webgl_preload()
                 webgl_textures["skybox"].wrapT = THREE.RepeatWrapping;
                 webgl_textures["skybox"].magFilter = THREE.LinearFilter;
                 webgl_textures["skybox"].minFilter = THREE.LinearFilter;
+                webgl_textures["skybox"].colorSpace = THREE.SRGBColorSpace;
                 webgl_textures["skybox"].needsUpdate = true;
             }
     })()
@@ -173,6 +176,7 @@ function webgl_preload()
           webgl_textures["water1"].wrapT = THREE.RepeatWrapping;
           webgl_textures["water1"].magFilter = THREE.LinearFilter;
           webgl_textures["water1"].minFilter = THREE.LinearFilter;
+          webgl_textures["water1"].colorSpace = THREE.NoColorSpace;
           webgl_textures["water1"].needsUpdate = true;
         }
       })()
@@ -187,6 +191,7 @@ function webgl_preload()
           webgl_textures["water2"].wrapT = THREE.RepeatWrapping;
           webgl_textures["water2"].magFilter = THREE.LinearFilter;
           webgl_textures["water2"].minFilter = THREE.LinearFilter;
+          webgl_textures["water2"].colorSpace = THREE.NoColorSpace;
           webgl_textures["water2"].needsUpdate = true;
         }
       })()
@@ -206,6 +211,7 @@ function handle_new_texture(url, terrain_name)
                 texture.wrapT = THREE.RepeatWrapping;
                 texture.magFilter = THREE.LinearFilter;
                 texture.minFilter = THREE.LinearFilter;
+                texture.colorSpace = THREE.SRGBColorSpace;
                 texture.needsUpdate = true;
                 webgl_textures[terrain_name] = texture;
   }

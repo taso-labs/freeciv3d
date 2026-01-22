@@ -944,9 +944,10 @@ class LLMActionValidator:
             return ownership_result
 
         # Embark/board actions require transport target
+        # Accept transport_id, target_unit_id, or target_id for flexibility
         if action_type in [ActionType.UNIT_EMBARK, ActionType.UNIT_BOARD, ActionType.UNIT_LOAD]:
-            if 'transport_id' not in action and 'target_unit_id' not in action:
-                return self._validation_error('E283', f'{action_type.value} requires transport_id or target_unit_id')
+            if 'transport_id' not in action and 'target_unit_id' not in action and 'target_id' not in action:
+                return self._validation_error('E283', f'{action_type.value} requires transport_id, target_unit_id, or target_id')
 
         # Airlift requires source and destination cities
         elif action_type == ActionType.UNIT_AIRLIFT:

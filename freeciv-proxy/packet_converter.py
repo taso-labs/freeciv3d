@@ -413,7 +413,7 @@ def _convert_action_to_packet_impl(
         return {
             "pid": PACKET_UNIT_DO_ACTION,
             "actor_id": action["unit_id"],
-            "target_id": action.get("transport_id", action.get("target_id", -1)),
+            "target_id": action.get("transport_id", action.get("target_unit_id", action.get("target_id", -1))),
             "sub_tgt_id": action.get("sub_tgt_id", -1),
             "sub_target": action.get("sub_tgt_id", -1),
             "name": "",
@@ -423,7 +423,7 @@ def _convert_action_to_packet_impl(
         return {
             "pid": PACKET_UNIT_DO_ACTION,
             "actor_id": action["unit_id"],
-            "target_id": action.get("transport_id", action.get("target_id", -1)),
+            "target_id": action.get("transport_id", action.get("target_unit_id", action.get("target_id", -1))),
             "sub_tgt_id": action.get("sub_tgt_id", -1),
             "sub_target": action.get("sub_tgt_id", -1),
             "name": "",

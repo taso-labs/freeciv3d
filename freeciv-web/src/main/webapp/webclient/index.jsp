@@ -55,13 +55,18 @@ var webgpu = <%= webgpu %>;
 
 <script type="text/javascript" src="/javascript/libs/stacktrace.min.js"></script>
 
-<script async src="https://ga.jspm.io/npm:es-module-shims@1.7.1/dist/es-module-shims.js"></script>
+<script async src="https://ga.jspm.io/npm:es-module-shims@2.8.0/dist/es-module-shims.js"></script>
 
 <% if (!webgpu) { %>
   <script type="importmap">
         {
                 "imports": {
                         "three": "/javascript/webgl/libs/three.module.min.js?ts=${initParam.buildTimeStamp}"
+                },
+                "scopes": {
+                        "/javascript/webgl/libs/": {
+                                "./three.core.min.js": "/javascript/webgl/libs/three.core.min.js?ts=${initParam.buildTimeStamp}"
+                        }
                 }
         }
   </script>

@@ -37,8 +37,11 @@ echo "Starting Freeciv-web services..."
 echo "=== Starting FreeCiv Proxy for LLM Gateway (Port 8002) ==="
 if [ -d "/docker/freeciv-proxy" ]; then
     cd /docker/freeciv-proxy
-    # Use tee to send logs to BOTH file AND stdout (for GCP capture)
-    python3 -u freeciv-proxy.py 8002 2>&1 | tee /docker/logs/freeciv-proxy-8002.log &
+    # IMPORTANT: Write directly to /proc/1/fd/1 (container stdout) for K8s log capture
+    # Using tee with backgrounded processes doesn't work reliably when shell is replaced by exec
+    # The -u flag ensures unbuffered Python output for real-time logging
+    export PYTHONUNBUFFERED=1
+    python3 -u freeciv-proxy.py 8002 > /proc/1/fd/1 2>&1 &
     PROXY_8002_PID=$!
     sleep 2
     if kill -0 $PROXY_8002_PID 2>/dev/null; then
@@ -57,8 +60,10 @@ if [ -d "/docker/llm-gateway" ]; then
     # Set Redis URL to use Docker service name instead of localhost
     # Docker internal networking requires using service names not localhost
     export GATEWAY_REDIS_URL="redis://fciv-redis:6379"
-    # Use tee to send logs to BOTH file AND stdout (for GCP capture)
-    uvicorn main:app --host 0.0.0.0 --port 8003 --log-level info 2>&1 | tee /docker/logs/llm-gateway.log &
+    # IMPORTANT: Write directly to /proc/1/fd/1 (container stdout) for K8s log capture
+    # Using tee with backgrounded processes doesn't work reliably when shell is replaced by exec
+    export PYTHONUNBUFFERED=1
+    uvicorn main:app --host 0.0.0.0 --port 8003 --log-level info > /proc/1/fd/1 2>&1 &
     GATEWAY_PID=$!
     sleep 2
     if kill -0 $GATEWAY_PID 2>/dev/null; then

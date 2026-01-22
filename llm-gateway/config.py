@@ -75,6 +75,7 @@ class Settings(BaseSettings):
     max_retry_delay: float = 30.0  # seconds
     retry_backoff_multiplier: float = 2.0
     connection_timeout: float = 10.0  # seconds
+    websocket_open_timeout: float = 30.0  # WebSocket handshake timeout (addresses E999 errors)
 
     # Feature flags
     enable_batch_actions: bool = True
@@ -166,6 +167,9 @@ def validate_settings() -> bool:
 
         if not (1.0 <= settings.connection_timeout <= 300.0):
             errors.append(f"Invalid connection_timeout: {settings.connection_timeout} (must be 1.0-300.0)")
+
+        if not (5.0 <= settings.websocket_open_timeout <= 120.0):
+            errors.append(f"Invalid websocket_open_timeout: {settings.websocket_open_timeout} (must be 5.0-120.0)")
 
         # Validate Redis URL format
         if not settings.redis_url.startswith(("redis://", "rediss://")):
