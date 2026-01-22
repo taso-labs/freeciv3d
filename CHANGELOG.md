@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.17](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.16...freeciv3d-v0.3.17) (2026-01-22)
+
+
+### Bug Fixes
+
+* **proxy:** Prevent mid-game reconnection failures (E142 + E120) ([#75](https://github.com/taso-ventures/freeciv3d/issues/75)) ([f4c9b85](https://github.com/taso-ventures/freeciv3d/commit/f4c9b85a70e5cea5cdec21b7b026bffa41aa274a))
+
 ## [0.3.16](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.15...freeciv3d-v0.3.16) (2026-01-22)
 
 
