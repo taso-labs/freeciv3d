@@ -107,6 +107,11 @@ MAX_LLM_AGENTS = llm_config.get_max_agents()
 MAX_PACKET_BUFFER_SIZE = 200  # Maximum number of packets to buffer (typical game sends ~150 RULESET packets)
 MAX_PACKET_BUFFER_BYTES = 5 * 1024 * 1024  # 5MB maximum buffer size (typical game ~1.2MB)
 
+# Reconnection state verification constants
+GAME_INFO_WAIT_TIMEOUT_SEC = 2.0  # Max wait for PACKET_GAME_INFO
+GAME_INFO_POLL_INTERVAL_SEC = 0.1  # Polling interval
+GAME_INFO_LOG_INTERVAL_SEC = 0.5  # Debug log frequency
+
 # Nation ID mapping for common civilizations
 # These IDs correspond to the FreeCiv nation definitions
 NATION_MAP = {
@@ -235,6 +240,37 @@ class LLMWSHandler(websocket.WebSocketHandler):
             'handler_id': self.id,
             'message': 'LLM agent handler ready. Send llm_connect message to authenticate.'
         }))
+
+    def _abort_with_state_mismatch(
+        self,
+        expected_turn: int,
+        actual_turn: int,
+        hint: str,
+        correlation_id: Optional[str] = None,
+        waited: Optional[float] = None
+    ) -> None:
+        """Send state mismatch error and cleanup connection."""
+        wait_info = f"\n   Waited: {waited:.1f}s for PACKET_GAME_INFO" if waited else ""
+        logger.error(
+            f"❌ STATE MISMATCH for {self.agent_id}:\n"
+            f"   Expected turn: {expected_turn}\n"
+            f"   Actual turn: {actual_turn}{wait_info}\n"
+            f"   {hint}"
+        )
+        error_response = {
+            'type': 'error',
+            'code': 'E_STATE_MISMATCH',
+            'message': f'Expected turn {expected_turn}, got turn {actual_turn}. Civserver game state was lost.',
+            'expected_turn': expected_turn,
+            'actual_turn': actual_turn,
+            'recoverable': False,
+            'hint': hint
+        }
+        if correlation_id:
+            error_response['correlation_id'] = correlation_id
+        self.write_message(json.dumps(error_response))
+        self.buffer_enabled = False
+        self.packet_buffer.clear()
 
     async def on_message(self, message):
         """Handle incoming WebSocket messages
@@ -538,27 +574,11 @@ class LLMWSHandler(websocket.WebSocketHandler):
                     if expected_turn is not None:
                         current_turn = getattr(self.civcom, 'game_turn', 0)
                         if current_turn != expected_turn:
-                            logger.error(
-                                f"❌ STATE MISMATCH (reused CivCom) for {self.agent_id}:\n"
-                                f"   Expected turn: {expected_turn}\n"
-                                f"   Actual turn: {current_turn}\n"
-                                f"   Game may have been reset or connected to wrong server"
+                            self._abort_with_state_mismatch(
+                                expected_turn, current_turn,
+                                'Game may have been reset or connected to wrong server',
+                                correlation_id
                             )
-                            error_response = {
-                                'type': 'error',
-                                'code': 'E_STATE_MISMATCH',
-                                'message': f'Expected turn {expected_turn}, got turn {current_turn}. Civserver game state was lost.',
-                                'expected_turn': expected_turn,
-                                'actual_turn': current_turn,
-                                'recoverable': False,
-                                'hint': 'Game may have been reset or connected to wrong server'
-                            }
-                            if correlation_id:
-                                error_response['correlation_id'] = correlation_id
-                            self.write_message(json.dumps(error_response))
-                            # Cleanup and abort
-                            self.buffer_enabled = False
-                            self.packet_buffer.clear()
                             return
                         else:
                             logger.info(
@@ -577,39 +597,26 @@ class LLMWSHandler(websocket.WebSocketHandler):
                     if is_reconnecting and expected_turn is not None:
                         # Wait for PACKET_GAME_INFO to set game_turn with retry loop
                         # This is more robust than a fixed sleep - handles network latency variations
-                        max_wait = 2.0
-                        waited = 0.0
+                        start_time = time.monotonic()
+                        last_log_time = start_time
                         current_turn = 0
-                        while waited < max_wait:
-                            current_turn = getattr(self.civcom, 'game_turn', 0)
-                            if current_turn > 0:  # game_turn initialized from PACKET_GAME_INFO
+                        while (time.monotonic() - start_time) < GAME_INFO_WAIT_TIMEOUT_SEC:
+                            if getattr(self.civcom, 'game_info_received', False):
+                                current_turn = getattr(self.civcom, 'game_turn', 0)
                                 break
-                            await asyncio.sleep(0.1)
-                            waited += 0.1
+                            now = time.monotonic()
+                            if (now - last_log_time) >= GAME_INFO_LOG_INTERVAL_SEC:
+                                logger.debug(f"Waiting for PACKET_GAME_INFO... ({now - start_time:.1f}s)")
+                                last_log_time = now
+                            await asyncio.sleep(GAME_INFO_POLL_INTERVAL_SEC)
 
+                        waited = time.monotonic() - start_time
                         if current_turn != expected_turn:
-                            logger.error(
-                                f"❌ STATE MISMATCH (new CivCom) for {self.agent_id}:\n"
-                                f"   Expected turn: {expected_turn}\n"
-                                f"   Actual turn: {current_turn}\n"
-                                f"   Waited: {waited:.1f}s for PACKET_GAME_INFO\n"
-                                f"   Civserver may have lost game state (--quitidle timeout?)"
+                            self._abort_with_state_mismatch(
+                                expected_turn, current_turn,
+                                'Game may have been reset due to civserver --quitidle timeout',
+                                correlation_id, waited
                             )
-                            error_response = {
-                                'type': 'error',
-                                'code': 'E_STATE_MISMATCH',
-                                'message': f'Expected turn {expected_turn}, got turn {current_turn}. Civserver game state was lost.',
-                                'expected_turn': expected_turn,
-                                'actual_turn': current_turn,
-                                'recoverable': False,
-                                'hint': 'Game may have been reset due to civserver --quitidle timeout'
-                            }
-                            if correlation_id:
-                                error_response['correlation_id'] = correlation_id
-                            self.write_message(json.dumps(error_response))
-                            # Cleanup and abort
-                            self.buffer_enabled = False
-                            self.packet_buffer.clear()
                             return
                         else:
                             logger.info(

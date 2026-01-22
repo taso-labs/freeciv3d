@@ -1048,7 +1048,7 @@ class StateExtractor:
             is_valid = True
             reason = None
 
-            # Check if unit has moves remaining (building a city consumes the unit)
+            # Check if unit has moves remaining this turn (required to perform any action)
             if moves_left <= 0:
                 is_valid = False
                 reason = "No moves left"
@@ -1378,6 +1378,9 @@ class StateExtractor:
                              action_id)
         else:
             # Unit is NOT on a transport - can embark
+            # NOTE: transport_id captured here may become stale if the transport moves,
+            # is destroyed, or fills its cargo capacity before action execution.
+            # The civserver will reject stale transport_ids with an appropriate error.
             # First, find available transports on the same tile
             available_transport_id = None
             if civcom and tile_index is not None:
