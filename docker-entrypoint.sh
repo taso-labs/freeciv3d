@@ -57,8 +57,9 @@ fi
 echo "=== Starting LLM Gateway API (Port 8003) ==="
 if [ -d "/docker/llm-gateway" ]; then
     cd /docker/llm-gateway
-    # Set Redis URL to use Docker service name instead of localhost
-    # Docker internal networking requires using service names not localhost
+    # Redis connection (no auth - protected by network isolation)
+    # Docker: fciv-redis on internal bridge network (not externally exposed)
+    # K8s: redis.freeciv.svc.cluster.local with NetworkPolicy restrictions (ClusterIP only)
     export GATEWAY_REDIS_URL="redis://fciv-redis:6379"
     # IMPORTANT: Write directly to /proc/1/fd/1 (container stdout) for K8s log capture
     # Using tee with backgrounded processes doesn't work reliably when shell is replaced by exec
