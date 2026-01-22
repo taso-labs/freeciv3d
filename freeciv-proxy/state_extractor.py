@@ -1378,6 +1378,22 @@ class StateExtractor:
                              action_id)
         else:
             # Unit is NOT on a transport - can embark
+            # First, find available transports on the same tile
+            available_transport_id = None
+            if civcom and tile_index is not None:
+                for other_unit_id, other_unit in civcom.player_units.items():
+                    if other_unit_id == unit_id:
+                        continue  # Skip self
+                    if other_unit.get('tile') != tile_index:
+                        continue  # Must be on same tile
+                    # Check if this unit has transport capacity
+                    other_type_id = other_unit.get('type_id')
+                    if other_type_id is not None:
+                        other_type = civcom.unit_types.get(other_type_id, {})
+                        if other_type.get('transport_capacity', 0) > 0:
+                            available_transport_id = other_unit_id
+                            break  # Found a transport
+
             embark_actions = [
                 (ACTION_TRANSPORT_BOARD, 'board'),
                 (ACTION_TRANSPORT_EMBARK, 'embark'),
@@ -1385,7 +1401,12 @@ class StateExtractor:
             ]
             for action_id, action_name in embark_actions:
                 if can_do_action(action_id):
-                    add_action(action_name, {}, True, None, action_id)
+                    if available_transport_id is not None:
+                        add_action(action_name, {'transport_id': available_transport_id},
+                                  True, None, action_id)
+                    else:
+                        add_action(action_name, {}, False,
+                                  "No transport available on this tile", action_id)
         
         # === UNIT MANAGEMENT ACTIONS ===
         if can_do_action(ACTION_DISBAND_UNIT):
