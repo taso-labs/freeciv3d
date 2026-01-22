@@ -536,10 +536,10 @@ class LLMWSHandler(websocket.WebSocketHandler):
                     # STATE VERIFICATION: Check if expected_turn matches actual game state
                     # This catches the case where reconnection went to a different/reset game
                     if expected_turn is not None:
-                        current_turn = self.civcom.game_turn if hasattr(self.civcom, 'game_turn') else 0
+                        current_turn = getattr(self.civcom, 'game_turn', 0)
                         if current_turn != expected_turn:
                             logger.error(
-                                f"❌ STATE MISMATCH for {self.agent_id}:\n"
+                                f"❌ STATE MISMATCH (reused CivCom) for {self.agent_id}:\n"
                                 f"   Expected turn: {expected_turn}\n"
                                 f"   Actual turn: {current_turn}\n"
                                 f"   Game may have been reset or connected to wrong server"
@@ -547,10 +547,11 @@ class LLMWSHandler(websocket.WebSocketHandler):
                             error_response = {
                                 'type': 'error',
                                 'code': 'E_STATE_MISMATCH',
-                                'message': f'Expected turn {expected_turn}, got turn {current_turn}. Game may have been reset.',
+                                'message': f'Expected turn {expected_turn}, got turn {current_turn}. Civserver game state was lost.',
                                 'expected_turn': expected_turn,
                                 'actual_turn': current_turn,
-                                'recoverable': False
+                                'recoverable': False,
+                                'hint': 'Game may have been reset or connected to wrong server'
                             }
                             if correlation_id:
                                 error_response['correlation_id'] = correlation_id
@@ -561,7 +562,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                             return
                         else:
                             logger.info(
-                                f"✅ State verification passed for {self.agent_id}: turn={current_turn}"
+                                f"✅ State verification passed for {self.agent_id} (reused CivCom): turn={current_turn}"
                             )
                 else:
                     # New connection or no existing CivCom - create fresh
@@ -569,6 +570,51 @@ class LLMWSHandler(websocket.WebSocketHandler):
                         logger.warning(f"⚠️ Reconnecting but no existing CivCom found for {self.agent_id} - creating new")
                     self._connect_to_civserver(civserver_port, game_id)
                     logger.info(f"✓ Agent {self.agent_id} civcom connection established to port {civserver_port}")
+
+                    # FIX: State verification for fresh CivCom on reconnection (E120 detection)
+                    # When we can't reuse CivCom and create a new one, verify the civserver
+                    # hasn't lost game state (e.g., due to --quitidle timeout)
+                    if is_reconnecting and expected_turn is not None:
+                        # Wait for PACKET_GAME_INFO to set game_turn with retry loop
+                        # This is more robust than a fixed sleep - handles network latency variations
+                        max_wait = 2.0
+                        waited = 0.0
+                        current_turn = 0
+                        while waited < max_wait:
+                            current_turn = getattr(self.civcom, 'game_turn', 0)
+                            if current_turn > 0:  # game_turn initialized from PACKET_GAME_INFO
+                                break
+                            await asyncio.sleep(0.1)
+                            waited += 0.1
+
+                        if current_turn != expected_turn:
+                            logger.error(
+                                f"❌ STATE MISMATCH (new CivCom) for {self.agent_id}:\n"
+                                f"   Expected turn: {expected_turn}\n"
+                                f"   Actual turn: {current_turn}\n"
+                                f"   Waited: {waited:.1f}s for PACKET_GAME_INFO\n"
+                                f"   Civserver may have lost game state (--quitidle timeout?)"
+                            )
+                            error_response = {
+                                'type': 'error',
+                                'code': 'E_STATE_MISMATCH',
+                                'message': f'Expected turn {expected_turn}, got turn {current_turn}. Civserver game state was lost.',
+                                'expected_turn': expected_turn,
+                                'actual_turn': current_turn,
+                                'recoverable': False,
+                                'hint': 'Game may have been reset due to civserver --quitidle timeout'
+                            }
+                            if correlation_id:
+                                error_response['correlation_id'] = correlation_id
+                            self.write_message(json.dumps(error_response))
+                            # Cleanup and abort
+                            self.buffer_enabled = False
+                            self.packet_buffer.clear()
+                            return
+                        else:
+                            logger.info(
+                                f"✅ State verification passed for {self.agent_id} (new CivCom): turn={current_turn} (waited {waited:.1f}s)"
+                            )
 
                 # If reconnecting, send /take command to reclaim player slot from AI
                 # The civserver converts disconnected players to AI, so we need to take back our slot
@@ -687,68 +733,92 @@ class LLMWSHandler(websocket.WebSocketHandler):
                         f"   Applied: {game_session.game_config}"
                     )
 
-                # Get nation preference from message or use default
-                nation_name = msg_data.get('nation', 'random')
-                leader_name = msg_data.get('leader_name', self.agent_id)
-                nation_id = self._get_nation_id(nation_name)
-                if nation_id is None:
-                    logger.error(f"Failed to find nation '{nation_name}' for {self.agent_id}")
-                    return
+                # FIX: Skip nation selection during mid-game reconnection (E142 fix)
+                # If game has already started, sending PACKET_NATION_SELECT_REQ is invalid and causes E142
+                # Instead, we just need to register the player back with the game session
+                skip_nation_selection = (
+                    is_reconnecting and
+                    game_session.game_started
+                )
 
-                # Wait briefly for connection to stabilize
-                await asyncio.sleep(0.5)
+                if not skip_nation_selection:
+                    # Get nation preference from message or use default
+                    nation_name = msg_data.get('nation', 'random')
+                    leader_name = msg_data.get('leader_name', self.agent_id)
+                    nation_id = self._get_nation_id(nation_name)
+                    if nation_id is None:
+                        logger.error(f"Failed to find nation '{nation_name}' for {self.agent_id}")
+                        return
 
-                # Send PACKET_NATION_SELECT_REQ immediately with self-assigned player_id
-                logger.debug(f"Sending PACKET_NATION_SELECT_REQ for {self.agent_id}: nation={nation_name} (id={nation_id})")
-                nation_packet = json.dumps({
-                    "pid": PACKET_NATION_SELECT_REQ,  # PACKET_NATION_SELECT_REQ from packets.def:426
-                    "player_no": self.player_id,
-                    "nation_no": nation_id,
-                    "is_male": True,
-                    "name": leader_name,
-                    "style": 0
-                })
-                self.civcom.queue_to_civserver(nation_packet)
-                logger.info(f"Sent PACKET_NATION_SELECT_REQ for {nation_name} (player_id={self.player_id}) - Leader: {leader_name}")
+                    # Wait briefly for connection to stabilize
+                    await asyncio.sleep(0.5)
 
-                # Mark nation selected in game session
-                game_session.mark_nation_selected(self.agent_id)
-
-                # Wait briefly for nation selection to process
-                await asyncio.sleep(0.5)
-
-                # Check auto_ready flag
-                # When auto_ready=False, agent must explicitly send player_ready message
-                auto_ready = msg_data.get('auto_ready', True)
-                self.auto_ready = auto_ready  # Store for auth_success response
-
-                if auto_ready:
-                    # Send PACKET_PLAYER_READY immediately after nation selection
-                    logger.info(
-                        f"✅ Nation selected for {self.agent_id} - sending PACKET_PLAYER_READY (auto_ready=True)\n"
-                        f"   Player ID: {self.player_id}"
-                    )
-
-                    ready_packet = {
-                        "pid": PACKET_PLAYER_READY,  # PACKET_PLAYER_READY from packets.def:434
+                    # Send PACKET_NATION_SELECT_REQ immediately with self-assigned player_id
+                    logger.debug(f"Sending PACKET_NATION_SELECT_REQ for {self.agent_id}: nation={nation_name} (id={nation_id})")
+                    nation_packet = json.dumps({
+                        "pid": PACKET_NATION_SELECT_REQ,  # PACKET_NATION_SELECT_REQ from packets.def:426
                         "player_no": self.player_id,
-                        "is_ready": True
-                    }
+                        "nation_no": nation_id,
+                        "is_male": True,
+                        "name": leader_name,
+                        "style": 0
+                    })
+                    self.civcom.queue_to_civserver(nation_packet)
+                    logger.info(f"Sent PACKET_NATION_SELECT_REQ for {nation_name} (player_id={self.player_id}) - Leader: {leader_name}")
 
-                    # Send PACKET_PLAYER_READY to civserver
-                    self.civcom.queue_to_civserver(json.dumps(ready_packet))
-                    self.civcom.send_packets_to_civserver()
+                    # Mark nation selected in game session
+                    game_session.mark_nation_selected(self.agent_id)
 
-                    # Mark player as ready in game session (triggers game start when all ready)
-                    game_session.mark_player_ready(self.agent_id)
+                    # Wait briefly for nation selection to process
+                    await asyncio.sleep(0.5)
 
-                    logger.info(f"📤 PACKET_PLAYER_READY sent for {self.agent_id} (player_no={self.player_id})")
+                    # Check auto_ready flag
+                    # When auto_ready=False, agent must explicitly send player_ready message
+                    auto_ready = msg_data.get('auto_ready', True)
+                    self.auto_ready = auto_ready  # Store for auth_success response
+
+                    if auto_ready:
+                        # Send PACKET_PLAYER_READY immediately after nation selection
+                        logger.info(
+                            f"✅ Nation selected for {self.agent_id} - sending PACKET_PLAYER_READY (auto_ready=True)\n"
+                            f"   Player ID: {self.player_id}"
+                        )
+
+                        ready_packet = {
+                            "pid": PACKET_PLAYER_READY,  # PACKET_PLAYER_READY from packets.def:434
+                            "player_no": self.player_id,
+                            "is_ready": True
+                        }
+
+                        # Send PACKET_PLAYER_READY to civserver
+                        self.civcom.queue_to_civserver(json.dumps(ready_packet))
+                        self.civcom.send_packets_to_civserver()
+
+                        # Mark player as ready in game session (triggers game start when all ready)
+                        game_session.mark_player_ready(self.agent_id)
+
+                        logger.info(f"📤 PACKET_PLAYER_READY sent for {self.agent_id} (player_no={self.player_id})")
+                    else:
+                        logger.info(
+                            f"⏸️ Nation selected for {self.agent_id} - NOT sending PACKET_PLAYER_READY (auto_ready=False)\n"
+                            f"   Player ID: {self.player_id}\n"
+                            f"   Agent must send 'player_ready' message to mark ready and start game"
+                        )
                 else:
+                    # Mid-game reconnection: skip nation selection entirely
+                    # The player already has a nation and the game is running
+                    civcom_status = "reused" if (existing_civcom and self.civcom is existing_civcom) else "new"
                     logger.info(
-                        f"⏸️ Nation selected for {self.agent_id} - NOT sending PACKET_PLAYER_READY (auto_ready=False)\n"
-                        f"   Player ID: {self.player_id}\n"
-                        f"   Agent must send 'player_ready' message to mark ready and start game"
+                        f"🔄 Skipping nation selection for {self.agent_id} (mid-game reconnection)\n"
+                        f"   Game already started: {game_session.game_started}\n"
+                        f"   CivCom connection: {civcom_status}\n"
+                        f"   Restored player_id: {self.player_id}"
                     )
+                    # Re-register player with game session (handles both new and existing cases)
+                    game_session.add_player(self.agent_id, self.player_id, self)
+                    # For mid-game reconnection, auto_ready is irrelevant (game already running)
+                    auto_ready = True
+                    self.auto_ready = auto_ready
 
                 # Send auth_success in FLAT format (Gateway will transform to nested for agent)
                 # Game will start when all players are ready (~5-7 seconds after last player joins)
