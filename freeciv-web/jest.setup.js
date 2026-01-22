@@ -642,15 +642,20 @@ global.is_attached_observer = function() {
   return global.observe_player !== null && global.observe_player !== '';
 };
 
-// Player/city globals
+// Player/city/unit globals
 global.players = {};
 global.cities = {};
+global.units = {};
 global.client = {
   conn: {
     playing: null,
     observer: false,
   },
 };
+
+// Unit spread tracking for observer mode
+global.observer_last_unit_spread = null;
+global.SPREAD_CHANGE_THRESHOLD = 5;
 
 // Constants
 global.CAPITAL_PRIMARY = 1;
@@ -662,6 +667,17 @@ global.center_tile_mapcanvas = jest.fn();
 global.city_tile = jest.fn((city) => city ? { x: city.id || 0, y: city.id || 0 } : null);
 global.network_init = jest.fn();
 global.get_invalid_username_reason = jest.fn(() => null);
+
+// Tile index to tile object conversion for unit positioning
+// By default, creates a tile at (index % 100, floor(index / 100))
+global.index_to_tile = jest.fn((index) => ({
+  x: index % 100,
+  y: Math.floor(index / 100)
+}));
+
+// Logging function mock
+global.freelog = jest.fn();
+global.LOG_DEBUG = 0;
 
 // =============================================================================
 // TEST UTILITIES
@@ -710,6 +726,7 @@ global.resetAllMocks = () => {
   // Reset observer globals
   global.observing = false;
   global.observer_follow_player = null;
+  global.observer_last_unit_spread = null;
   if (global.observer_auto_center_interval) {
     clearInterval(global.observer_auto_center_interval);
   }
@@ -718,6 +735,7 @@ global.resetAllMocks = () => {
   global.embed_mode = false;
   global.players = {};
   global.cities = {};
+  global.units = {};
   global.client = { conn: { playing: null, observer: false } };
 
   // Reset embed mode globals
@@ -767,6 +785,19 @@ global.createMockCity = (overrides = {}) => ({
   size: 1,
   capital: 0,
   tile: 0,
+  ...overrides,
+});
+
+/**
+ * Create mock unit data
+ * @param {Object} overrides - Properties to override
+ * @returns {Object} Mock unit object
+ */
+global.createMockUnit = (overrides = {}) => ({
+  id: 1,
+  owner: 0,
+  tile: 100,  // Will resolve to {x: 0, y: 1} via index_to_tile
+  type: 0,
   ...overrides,
 });
 
