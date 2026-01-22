@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.3.16](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.15...freeciv3d-v0.3.16) (2026-01-22)
+
+
+### Bug Fixes
+
+* Chrome black tiles, WebSocket resilience, and K8s observability ([#72](https://github.com/taso-ventures/freeciv3d/issues/72)) ([44fba21](https://github.com/taso-ventures/freeciv3d/commit/44fba21b7ace038a453510b31df331f6c9ed692d))
+* **k8s:** Add GATEWAY_REDIS_URL env var to fciv-net deployment ([#74](https://github.com/taso-ventures/freeciv3d/issues/74)) ([a04109f](https://github.com/taso-ventures/freeciv3d/commit/a04109fadea65e07a03bfecf32353c04894be4c1))
+
+
+### Documentation
+
+* **docker:** Document Redis trusted network security assumption ([8fe596a](https://github.com/taso-ventures/freeciv3d/commit/8fe596a99017d4c6728d8f97f4acc524d443a407))
+
 ## [0.3.15](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.14...freeciv3d-v0.3.15) (2026-01-20)
 
 
