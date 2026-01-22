@@ -110,6 +110,8 @@ spec:
               value: "redis.freeciv.svc.cluster.local"
             - name: REDIS_PORT
               value: "6379"
+            - name: GATEWAY_REDIS_URL
+              value: "redis://redis.freeciv.svc.cluster.local:6379"
 
             # Game server configuration
             - name: FREECIV_WEB_PORT
