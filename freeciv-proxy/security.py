@@ -203,7 +203,7 @@ class InputSanitizer:
                 sanitized['city_id'] = cls.sanitize_city_id(action['city_id'])
             if 'production_type' in action:
                 sanitized['production_type'] = cls.sanitize_string_field(
-                    action['production_type'], 'production_type', 30
+                    action['production_type'], 'production_type'
                 )
             if 'player_id' in action:
                 sanitized['player_id'] = cls.sanitize_player_id(action['player_id'])
@@ -211,7 +211,7 @@ class InputSanitizer:
         elif action_type == 'tech_research':
             if 'tech_name' in action:
                 sanitized['tech_name'] = cls.sanitize_string_field(
-                    action['tech_name'], 'tech_name', 50
+                    action['tech_name'], 'tech_name'
                 )
             if 'player_id' in action:
                 sanitized['player_id'] = cls.sanitize_player_id(action['player_id'])
