@@ -1047,31 +1047,36 @@ class StateExtractor:
         if can_do_action(ACTION_FOUND_CITY):
             is_valid = True
             reason = None
-            
+
+            # Check if unit has moves remaining (building a city consumes the unit)
+            if moves_left <= 0:
+                is_valid = False
+                reason = "No moves left"
+
             # Check citymindist constraint
-            if civcom and tile_index is not None:
+            if is_valid and civcom and tile_index is not None:
                 can_found, found_reason = civcom.can_city_be_founded_at(tile_index)
                 if not can_found:
                     is_valid = False
                     reason = found_reason
-            
+
             # Check if on ocean
-            if civcom and tile_index is not None:
+            if is_valid and civcom and tile_index is not None:
                 tile = civcom.tiles.get(tile_index)
                 if tile:
                     terrain_id = tile.get('terrain')
                     if terrain_id is not None and civcom.get_terrain_class(terrain_id) == TC_OCEAN:
                         is_valid = False
                         reason = "Cannot found city on ocean"
-            
+
             # Check if already has a city here
-            if civcom:
+            if is_valid and civcom:
                 for city_id, city in civcom.player_cities.items():
                     if city.get('tile') == tile_index:
                         is_valid = False
                         reason = "Tile already has a city"
                         break
-            
+
             add_action('build_city', {}, is_valid, reason, ACTION_FOUND_CITY)
         
         # === JOIN CITY ACTION ===
