@@ -45,7 +45,10 @@ if [ "$5" = "longturn" ]; then
     fi
   fi
 else
-  addArgs --quitidle 20
+  # 300 seconds (5 minutes) allows time for reconnection after WebSocket disruptions
+  # Previously 20 seconds caused civserver to exit during network issues, destroying game state
+  # Fix for mid-game reconnection failures (E142 + E120)
+  addArgs --quitidle 300
 fi
 addArgs --saves "${savesdir}"
 

@@ -345,6 +345,7 @@ class CivCom(Thread):
         self.known_techs = []
         self.visible_tiles = []
         self.game_turn = 1
+        self.game_info_received = False  # True after PACKET_GAME_INFO received
         self.turn_started = True  # True when in active turn, False after end_turn until PACKET_BEGIN_TURN
         self.turn_advance_event = asyncio.Event()  # Event for efficient turn waiting (replaces polling)
         self.turn_advance_event.set()  # Start with event set (turn is active)
@@ -1290,6 +1291,7 @@ class CivCom(Thread):
                 if new_turn > self.game_turn:
                     logger.info(f"Turn advanced: {self.game_turn} -> {new_turn}")
                 self.game_turn = new_turn
+                self.game_info_received = True  # Mark that we received real game info from server
                 # Extract citymindist (minimum distance between cities) from game info
                 # This is critical for validating city founding actions
                 citymindist = packet.get('citymindist')

@@ -1047,31 +1047,36 @@ class StateExtractor:
         if can_do_action(ACTION_FOUND_CITY):
             is_valid = True
             reason = None
-            
+
+            # Check if unit has moves remaining this turn (required to perform any action)
+            if moves_left <= 0:
+                is_valid = False
+                reason = "No moves left"
+
             # Check citymindist constraint
-            if civcom and tile_index is not None:
+            if is_valid and civcom and tile_index is not None:
                 can_found, found_reason = civcom.can_city_be_founded_at(tile_index)
                 if not can_found:
                     is_valid = False
                     reason = found_reason
-            
+
             # Check if on ocean
-            if civcom and tile_index is not None:
+            if is_valid and civcom and tile_index is not None:
                 tile = civcom.tiles.get(tile_index)
                 if tile:
                     terrain_id = tile.get('terrain')
                     if terrain_id is not None and civcom.get_terrain_class(terrain_id) == TC_OCEAN:
                         is_valid = False
                         reason = "Cannot found city on ocean"
-            
+
             # Check if already has a city here
-            if civcom:
+            if is_valid and civcom:
                 for city_id, city in civcom.player_cities.items():
                     if city.get('tile') == tile_index:
                         is_valid = False
                         reason = "Tile already has a city"
                         break
-            
+
             add_action('build_city', {}, is_valid, reason, ACTION_FOUND_CITY)
         
         # === JOIN CITY ACTION ===
@@ -1373,6 +1378,25 @@ class StateExtractor:
                              action_id)
         else:
             # Unit is NOT on a transport - can embark
+            # NOTE: transport_id captured here may become stale if the transport moves,
+            # is destroyed, or fills its cargo capacity before action execution.
+            # The civserver will reject stale transport_ids with an appropriate error.
+            # First, find available transports on the same tile
+            available_transport_id = None
+            if civcom and tile_index is not None:
+                for other_unit_id, other_unit in civcom.player_units.items():
+                    if other_unit_id == unit_id:
+                        continue  # Skip self
+                    if other_unit.get('tile') != tile_index:
+                        continue  # Must be on same tile
+                    # Check if this unit has transport capacity
+                    other_type_id = other_unit.get('type_id')
+                    if other_type_id is not None:
+                        other_type = civcom.unit_types.get(other_type_id, {})
+                        if other_type.get('transport_capacity', 0) > 0:
+                            available_transport_id = other_unit_id
+                            break  # Found a transport
+
             embark_actions = [
                 (ACTION_TRANSPORT_BOARD, 'board'),
                 (ACTION_TRANSPORT_EMBARK, 'embark'),
@@ -1380,7 +1404,12 @@ class StateExtractor:
             ]
             for action_id, action_name in embark_actions:
                 if can_do_action(action_id):
-                    add_action(action_name, {}, True, None, action_id)
+                    if available_transport_id is not None:
+                        add_action(action_name, {'transport_id': available_transport_id},
+                                  True, None, action_id)
+                    else:
+                        add_action(action_name, {}, False,
+                                  "No transport available on this tile", action_id)
         
         # === UNIT MANAGEMENT ACTIONS ===
         if can_do_action(ACTION_DISBAND_UNIT):
