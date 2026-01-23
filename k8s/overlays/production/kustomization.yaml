@@ -138,6 +138,42 @@ patches:
       kind: Deployment
       name: fciv-net
 
+  # Production scheduling: tolerations, node affinity, and pod anti-affinity
+  # - Tolerations: Allow scheduling on high-memory nodes (tainted with workload=high-memory)
+  # - Node affinity: Prefer high-memory pool if available, but allow primary pool
+  # - Pod anti-affinity: Spread replicas across nodes for HA
+  - target:
+      kind: Deployment
+      name: fciv-net
+    patch: |-
+      - op: add
+        path: /spec/template/spec/tolerations
+        value:
+          - key: workload
+            operator: Equal
+            value: high-memory
+            effect: NoSchedule
+      - op: add
+        path: /spec/template/spec/affinity
+        value:
+          nodeAffinity:
+            preferredDuringSchedulingIgnoredDuringExecution:
+              - weight: 10
+                preference:
+                  matchExpressions:
+                    - key: cloud.google.com/gke-nodepool
+                      operator: In
+                      values:
+                        - clashai-production-gke-highmem-pool
+          podAntiAffinity:
+            preferredDuringSchedulingIgnoredDuringExecution:
+              - weight: 100
+                podAffinityTerm:
+                  labelSelector:
+                    matchLabels:
+                      app: fciv-net
+                  topologyKey: kubernetes.io/hostname
+
 # ConfigMap generator for production-specific config
 configMapGenerator:
   - name: production-config
