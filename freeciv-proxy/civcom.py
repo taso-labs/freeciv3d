@@ -1654,8 +1654,22 @@ class CivCom(Thread):
             elif packet_type == PACKET_RULESET_UNIT:
                 unit_id = packet.get('id')
                 unit_name = packet.get('name')
+
+                # EXTENSIVE LOGGING: Track packet reception and parsing
+                logger.info(f"[PACKET_RULESET_UNIT] Received packet for unit_id={unit_id}")
+                logger.info(f"[PACKET_RULESET_UNIT] Raw packet keys: {list(packet.keys())}")
+                logger.info(f"[PACKET_RULESET_UNIT] Extracted name field: name='{unit_name}' (type={type(unit_name).__name__}, len={len(unit_name) if unit_name else 0})")
+
+                # Log if we're about to skip this unit
+                if unit_id is None:
+                    logger.warning(f"[PACKET_RULESET_UNIT] SKIPPING: unit_id is None")
+                elif not unit_name:
+                    logger.warning(f"[PACKET_RULESET_UNIT] SKIPPING: unit_name is falsy ('{unit_name}'). Full packet: {packet}")
+
                 if unit_id is not None and unit_name:
                     self.unit_types[unit_id] = packet
+                    logger.info(f"[PACKET_RULESET_UNIT] ✓ STORED unit_id={unit_id}, name='{unit_name}', total_units={len(self.unit_types)}")
+
                     # Check for pending utype_actions from PACKET_WEB_RULESET_UNIT_ADDITION
                     # (handles case where addition packet arrived before base packet)
                     if hasattr(self, '_pending_unit_additions') and unit_id in self._pending_unit_additions:
@@ -1692,8 +1706,21 @@ class CivCom(Thread):
             elif packet_type == PACKET_RULESET_BUILDING:
                 building_id = packet.get('id')
                 building_name = packet.get('name')
+
+                # EXTENSIVE LOGGING: Track packet reception and parsing
+                logger.info(f"[PACKET_RULESET_BUILDING] Received packet for building_id={building_id}")
+                logger.info(f"[PACKET_RULESET_BUILDING] Raw packet keys: {list(packet.keys())}")
+                logger.info(f"[PACKET_RULESET_BUILDING] Extracted name field: name='{building_name}' (type={type(building_name).__name__}, len={len(building_name) if building_name else 0})")
+
+                # Log if we're about to skip this building
+                if building_id is None:
+                    logger.warning(f"[PACKET_RULESET_BUILDING] SKIPPING: building_id is None")
+                elif not building_name:
+                    logger.warning(f"[PACKET_RULESET_BUILDING] SKIPPING: building_name is falsy ('{building_name}'). Full packet: {packet}")
+
                 if building_id is not None and building_name:
                     self.improvements[building_id] = packet
+                    logger.info(f"[PACKET_RULESET_BUILDING] ✓ STORED building_id={building_id}, name='{building_name}', total_buildings={len(self.improvements)}")
                     logger.debug(f"Registered building: {building_name} (id={building_id})")
 
             # RULESET tech packet - defines technologies (Alphabet, Bronze Working, etc.)
@@ -2117,10 +2144,25 @@ class CivCom(Thread):
             # Generate production options from unit_types and improvements
             # Filter by server-provided can_build bitvectors (tech prerequisites, obsolescence, etc.)
 
+            logger.info(f"[CITY_PROD] City '{city.get('name')}': Iterating {len(self.unit_types)} unit_types, {len(self.improvements)} improvements")
+
+            # Track what we're iterating over
+            units_checked = 0
+            units_with_empty_name = 0
+            units_buildable = 0
+
             # Units - only include those the city can actually build
             for unit_type_id, unit_type in self.unit_types.items():
+                units_checked += 1
                 unit_name = unit_type.get('name', '')
+
+                # EXTENSIVE LOGGING: Track each unit iteration
+                if units_checked <= 3:  # Log first 3 for debugging
+                    logger.info(f"[CITY_PROD] Unit iteration {units_checked}: unit_type_id={unit_type_id}, has_name_key={'name' in unit_type}, name='{unit_name}', len={len(unit_name) if unit_name else 0}")
+
                 if not unit_name:
+                    units_with_empty_name += 1
+                    logger.warning(f"[CITY_PROD] SKIPPED unit_type_id={unit_type_id} due to empty name. Keys in unit_type: {list(unit_type.keys())[:10]}")
                     continue
 
                 # Check if city can build this unit (tech prereqs, not obsolete, etc.)
@@ -2128,6 +2170,7 @@ class CivCom(Thread):
                 if not self.can_city_build_unit(city, unit_id_int):
                     continue
 
+                units_buildable += 1
                 actions.append({
                     'type': 'city_production',
                     'city_id': city_id,
@@ -2137,11 +2180,27 @@ class CivCom(Thread):
                     'production_value': unit_type_id,
                     'reason': 'finished' if shield_stock == 0 else 'coinage'
                 })
+                logger.info(f"[CITY_PROD] ✓ Added unit production action: '{unit_name}' for city '{city.get('name')}'")
+
+            logger.info(f"[CITY_PROD] City '{city.get('name')}': units_checked={units_checked}, empty_names={units_with_empty_name}, buildable={units_buildable}")
+
+            # Track building iteration
+            buildings_checked = 0
+            buildings_with_empty_name = 0
+            buildings_buildable = 0
 
             # Buildings (improvements) - only include those the city can actually build
             for building_id, building in self.improvements.items():
+                buildings_checked += 1
                 building_name = building.get('name', '')
+
+                # EXTENSIVE LOGGING: Track each building iteration
+                if buildings_checked <= 3:  # Log first 3 for debugging
+                    logger.info(f"[CITY_PROD] Building iteration {buildings_checked}: building_id={building_id}, has_name_key={'name' in building}, name='{building_name}', len={len(building_name) if building_name else 0}")
+
                 if not building_name:
+                    buildings_with_empty_name += 1
+                    logger.warning(f"[CITY_PROD] SKIPPED building_id={building_id} due to empty name. Keys in building: {list(building.keys())[:10]}")
                     continue
 
                 # Check if city can build this improvement (tech prereqs, not already built, etc.)
@@ -2149,6 +2208,7 @@ class CivCom(Thread):
                 if not self.can_city_build_improvement(city, building_id_int):
                     continue
 
+                buildings_buildable += 1
                 actions.append({
                     'type': 'city_production',
                     'city_id': city_id,
@@ -2158,6 +2218,9 @@ class CivCom(Thread):
                     'production_value': building_id,
                     'reason': 'finished' if shield_stock == 0 else 'coinage'
                 })
+                logger.info(f"[CITY_PROD] ✓ Added building production action: '{building_name}' for city '{city.get('name')}'")
+
+            logger.info(f"[CITY_PROD] City '{city.get('name')}': buildings_checked={buildings_checked}, empty_names={buildings_with_empty_name}, buildable={buildings_buildable}")
         
         # Log summary before caching
         logger.info(f"[CITY_PROD] Generated {len(actions)} city_production actions for {city_count} cities (skipped: {skipped_owner} wrong owner, {skipped_mid_production} mid-production)")
@@ -2267,12 +2330,24 @@ class CivCom(Thread):
         # CRITICAL FIX: Transform city_production format for agent-clash
         # civcom format: {'type': 'city_production', 'production_name': 'Granary'}
         # agent-clash expects: {'type': 'city_production', 'target': {'production': 'Granary'}}
+        logger.info(f"[TRANSFORM] Starting format transformation for {len(all_actions)} actions")
+        transformed_count = 0
         for action in all_actions:
             if action.get('type') == 'city_production' and 'production_name' in action:
+                production_name = action['production_name']
+                logger.info(f"[TRANSFORM] Transforming city_production action: city={action.get('city_name')}, production_name='{production_name}' (len={len(production_name)})")
+
+                # Check if production_name is empty BEFORE transformation
+                if not production_name or production_name == '':
+                    logger.error(f"[TRANSFORM] ⚠️⚠️⚠️ FOUND EMPTY production_name in action! This should never happen! Full action: {action}")
+
                 if 'target' not in action:
                     action['target'] = {}
-                action['target']['production'] = action['production_name']
-                logger.info(f"[TRANSFORM] city_production: {action.get('city_name')} -> {action['production_name']}")
+                action['target']['production'] = production_name
+                transformed_count += 1
+                logger.info(f"[TRANSFORM] ✓ Transformed: {action.get('city_name')} -> '{production_name}'")
+
+        logger.info(f"[TRANSFORM] Completed transformation: {transformed_count} city_production actions transformed")
 
         return all_actions
 
