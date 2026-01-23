@@ -51,6 +51,7 @@ from packet_constants import (
     PACKET_SERVER_JOIN_REPLY,
     PACKET_CLIENT_INFO,
     PACKET_BEGIN_TURN,  # Turn start signal from server
+    PACKET_SPACESHIP_INFO,  # Spaceship status for victory tracking
     get_packet_name
 )
 
@@ -352,6 +353,7 @@ class CivCom(Thread):
         self.player_id = None  # Will be set from PACKET_PLAYER_INFO
         self.nations = {}  # Will be populated from PACKET_RULESET_NATION (pid=148)
         self.research_info = {}  # {player_id: PACKET_RESEARCH_INFO} - tracks tech progress
+        self.spaceship_info = {}  # {player_id: spaceship_data} - tracks spaceship progress per player
         self.initial_units_received = False  # Set True when first PACKET_UNIT_INFO for our player arrives
 
         # RULESET packet storage - mirrors FreeCiv web client architecture
@@ -650,6 +652,61 @@ class CivCom(Thread):
             return False
             
         return bool(improvements_bitvector[byte_index] & (1 << bit_index))
+
+    def is_wonder(self, improvement_id: int) -> bool:
+        """Check if an improvement is a wonder (Great or Small Wonder).
+
+        Wonders are identified by their soundtag starting with 'w'.
+        This matches the FreeCiv web client's is_wonder() implementation.
+
+        Args:
+            improvement_id: The improvement ID to check
+
+        Returns:
+            True if the improvement is a wonder, False otherwise
+        """
+        impr = self.improvements.get(improvement_id)
+        if not impr:
+            return False
+        soundtag = impr.get('soundtag', '')
+        return soundtag.startswith('w')
+
+    def player_has_wonder(self, player_id: int, improvement_name: str) -> bool:
+        """Check if a player has built a specific wonder.
+
+        Iterates through all cities owned by the player to check if any
+        has the specified wonder built.
+
+        Args:
+            player_id: The player ID to check
+            improvement_name: Name of the wonder (e.g., 'Apollo Program', 'Pyramids')
+
+        Returns:
+            True if the player has the wonder, False otherwise
+        """
+        for city in self.player_cities.values():
+            # Check if this city belongs to the player
+            if city.get('owner') == player_id:
+                if self.city_has_improvement(city, improvement_name):
+                    return True
+        return False
+
+    def get_player_wonders(self, player_id: int) -> list:
+        """Get list of all wonders a player has built.
+
+        Args:
+            player_id: The player ID to check
+
+        Returns:
+            List of wonder names the player has built
+        """
+        wonders = []
+        for impr_id, impr in self.improvements.items():
+            if self.is_wonder(impr_id):
+                wonder_name = impr.get('name', '')
+                if wonder_name and self.player_has_wonder(player_id, wonder_name):
+                    wonders.append(wonder_name)
+        return wonders
 
     def can_city_build_unit(self, city: dict, unit_type_id: int) -> bool:
         """Check if a city can build a specific unit type.
@@ -1447,6 +1504,7 @@ class CivCom(Thread):
             elif packet_type == PACKET_CITY_INFO:
                 city_id = packet.get('id')
                 owner = packet.get('owner')
+                logger.info(f"[CITY DEBUG] Received PACKET_CITY_INFO: city_id={city_id}, owner={owner}, self.username={self.username}, self.player_id={self.player_id}")
                 if city_id is not None and owner is not None:
                     # Calculate x/y from tile index
                     tile_idx = packet.get('tile')
@@ -1455,7 +1513,7 @@ class CivCom(Thread):
                         xsize = self.map_info.get('width', 80)
                         x = tile_idx % xsize
                         y = tile_idx // xsize
-                    
+
                     city_data = {
                         'id': city_id,
                         'owner': owner,
@@ -1476,10 +1534,13 @@ class CivCom(Thread):
 
                     # Convert player_cities to dict if it's still a list
                     if not isinstance(self.player_cities, dict):
+                        logger.info(f"[CITY DEBUG] Converting player_cities from {type(self.player_cities)} to dict")
                         self.player_cities = {}
 
                     self.player_cities[city_id] = city_data
-                    logger.info(f"✓ Stored city {city_id} ({city_data['name']}, size={city_data['size']}) for owner {owner}")
+                    logger.info(f"[CITY DEBUG] ✓ Stored city {city_id} ({city_data['name']}, size={city_data['size']}) for owner {owner}. Total cities now: {len(self.player_cities)}")
+                else:
+                    logger.warning(f"[CITY DEBUG] PACKET_CITY_INFO missing required fields: city_id={city_id}, owner={owner}")
 
             # Web city info addition packet - contains buildable units/improvements as bitvectors
             # This packet follows PACKET_CITY_INFO and provides additional web-specific data
@@ -1677,6 +1738,37 @@ class CivCom(Thread):
                             f"techs_researched={packet.get('techs_researched')}"
                         )
 
+            # SPACESHIP INFO packet - tracks spaceship construction and launch status per player
+            # Used for Space Race victory condition tracking
+            # Packet structure from packets.def: player_num, sship_state, structurals, components, etc.
+            elif packet_type == PACKET_SPACESHIP_INFO:
+                player_num = packet.get('player_num')
+                if player_num is not None:
+                    # Store spaceship data for this player
+                    # sship_state: 0=NONE, 1=STARTED, 2=LAUNCHED, 3=ARRIVED
+                    self.spaceship_info[player_num] = {
+                        'state': packet.get('sship_state', 0),
+                        'structurals': packet.get('structurals', 0),
+                        'components': packet.get('components', 0),
+                        'modules': packet.get('modules', 0),
+                        'fuel': packet.get('fuel', 0),
+                        'propulsion': packet.get('propulsion', 0),
+                        'habitation': packet.get('habitation', 0),
+                        'life_support': packet.get('life_support', 0),
+                        'solar_panels': packet.get('solar_panels', 0),
+                        'success_rate': packet.get('success_rate', 0.0),
+                        'travel_time': packet.get('travel_time', 0.0),
+                        'launch_year': packet.get('launch_year', 9999),
+                        'population': packet.get('population', 0),
+                        'mass': packet.get('mass', 0),
+                    }
+                    logger.debug(
+                        f"Updated spaceship info for player {player_num}: "
+                        f"state={packet.get('sship_state')}, "
+                        f"structurals={packet.get('structurals')}, "
+                        f"modules={packet.get('modules')}"
+                    )
+
             # RULESET terrain packet - defines terrain types (Plains, Ocean, Hills, etc.)
             # Used for movement cost calculations and action validity checks
             elif packet_type == PACKET_RULESET_TERRAIN:
@@ -1741,6 +1833,8 @@ class CivCom(Thread):
 
     def build_llm_optimized_state(self, player_id):
         """Build compressed state for LLMs (target < 4KB)"""
+        logger.info(f"[LLM_STATE] build_llm_optimized_state() called for player_id={player_id}")
+
         # Ensure we always have valid game state values (defensive against early queries)
         game_turn = getattr(self, 'game_turn', 1)
         game_phase = getattr(self, 'game_phase', 'movement')
@@ -1754,6 +1848,15 @@ class CivCom(Thread):
             'current_player': player_id
         }
 
+        # Get legal actions FIRST so we can log them
+        legal_actions = self._get_legal_actions_optimized(player_id)
+
+        # DEBUG: Log legal_actions summary
+        city_prod_actions = [a for a in legal_actions if a.get('type') == 'city_production']
+        logger.info(f"[LLM_STATE] legal_actions total={len(legal_actions)}, city_production={len(city_prod_actions)}")
+        for i, action in enumerate(city_prod_actions[:3]):  # Log first 3
+            logger.info(f"[LLM_STATE] city_production[{i}]: {action}")
+
         # Basic game state structure for LLM consumption
         state = {
             'turn': game_turn,
@@ -1763,7 +1866,7 @@ class CivCom(Thread):
             'strategic': self._build_strategic_view(player_id),
             'tactical': self._build_tactical_view(player_id),
             'economic': self._build_economic_view(player_id),
-            'legal_actions': self._get_legal_actions_optimized(player_id)
+            'legal_actions': legal_actions
         }
         return state
 
@@ -1862,29 +1965,40 @@ class CivCom(Thread):
             list: List of complete unit action dicts with full validation info
         """
         actions = []
-        
+
         # Import StateExtractor to reuse unit action generation logic
         from state_extractor import StateExtractor
-        
+
         # Handle both dict and list formats for player_units
         units = self.player_units
+        logger.info(f"[UNIT ACTIONS DEBUG] _get_unit_actions called for player {player_id}: "
+                   f"player_units type={type(units).__name__}, length={len(units) if hasattr(units, '__len__') else 'N/A'}")
+
         if isinstance(units, list):
             units = {str(u.get('id', i)): u for i, u in enumerate(units) if isinstance(u, dict)}
         elif not isinstance(units, dict):
+            logger.warning(f"[UNIT ACTIONS DEBUG] player_units is invalid format: {type(units).__name__}, returning empty")
             return actions  # Return empty if invalid format
-        
+
+        logger.info(f"[UNIT ACTIONS DEBUG] After conversion: units dict has {len(units)} entries")
+
         # Create StateExtractor instance for action generation
         # Pass self as civcom to ensure consistent data source
         extractor = StateExtractor(civcom=self)
-        
+
         unit_count = 0
+        units_with_no_moves = 0
         for unit_id, unit in units.items():
             if unit_count >= max_units:
                 break
-            
+
             # Only include units with moves remaining
-            if unit.get('moves_left', 0) <= 0:
+            moves_left = unit.get('moves_left', 0)
+            if moves_left <= 0:
+                units_with_no_moves += 1
                 continue
+
+            logger.info(f"[UNIT ACTIONS DEBUG] Processing unit {unit_id}: moves_left={moves_left}, type={unit.get('type')}")
             
             unit_count += 1
             
@@ -1894,14 +2008,22 @@ class CivCom(Thread):
                 result = extractor.get_unit_actions(int(unit_id), player_id)
                 if result.get('error'):
                     # Skip units with errors
+                    logger.warning(f"[UNIT ACTIONS DEBUG] Unit {unit_id} returned error: {result.get('error')}")
                     continue
-                
+
+                # DEBUG: Log what StateExtractor returned
+                actions_from_extractor = result.get('actions', [])
+                logger.info(f"[UNIT ACTIONS DEBUG] Unit {unit_id} StateExtractor returned {len(actions_from_extractor)} actions: "
+                           f"{[a.get('action') for a in actions_from_extractor[:10]]}")
+
                 # Keep all actions with full detail from StateExtractor
                 # Format: {'action': 'move', 'params': {...}, 'is_valid': True, 'unit_id': ...}
                 # We need to preserve ALL fields for validation
-                for action in result.get('actions', []):
+                filtered_count = 0
+                for action in actions_from_extractor:
                     # Skip low-value generic actions
                     if action.get('action') in ('skip', 'sentry', 'continue_work'):
+                        filtered_count += 1
                         continue
                     
                     # Add type field for LLM categorization while preserving all other fields
@@ -1914,62 +2036,82 @@ class CivCom(Thread):
                         action_copy['type'] = 'unit_action'
                     
                     actions.append(action_copy)
+
+                # DEBUG: Log filtering results
+                logger.info(f"[UNIT ACTIONS DEBUG] Unit {unit_id} after filtering: "
+                           f"kept {len(actions_from_extractor) - filtered_count} actions, filtered {filtered_count} (skip/sentry/continue_work)")
+
             except Exception as e:
                 # Log at warning level so errors are visible, but continue processing other units
                 logger.warning(f"Failed to get actions for unit {unit_id}: {e}")
                 continue
-        
+
+        logger.info(f"[UNIT ACTIONS DEBUG] _get_unit_actions returning {len(actions)} actions "
+                   f"(processed {unit_count} units, skipped {units_with_no_moves} with no moves)")
+
         return actions
 
     def _get_city_production_actions(self, player_id, max_cities=3):
         """Get per-city production change actions (CACHED per turn).
-        
+
         Only returns production actions if:
         - shield_stock == 0 (production just finished, need new selection)
         - OR production is Coinage (infinite production, can always change)
-        
+
         Args:
             player_id: The player ID
             max_cities: Maximum number of cities to generate actions for
-            
+
         Returns:
             list: List of city production action dicts
         """
+        logger.info(f"[CITY_PROD] _get_city_production_actions() called for player_id={player_id}, max_cities={max_cities}")
+
         turn = self.game_turn
         cache_key = f"{turn}_{player_id}_city_actions"
-        
+
         # Check cache first
         if cache_key in self._action_cache:
-            return self._action_cache[cache_key]
-        
+            cached = self._action_cache[cache_key]
+            logger.info(f"[CITY_PROD] Returning cached city actions: {len(cached)} actions")
+            return cached
+
         actions = []
-        
+
         # Handle both dict and list formats for player_cities
         cities = self.player_cities
+        logger.info(f"[CITY_PROD] player_cities type={type(cities).__name__}, count={len(cities) if cities else 0}")
+
         if isinstance(cities, list):
             cities = {str(c.get('id', i)): c for i, c in enumerate(cities) if isinstance(c, dict)}
         elif not isinstance(cities, dict):
+            logger.warning(f"[CITY_PROD] Invalid cities format: {type(cities)}, returning empty")
             self._action_cache[cache_key] = actions
             return actions  # Return empty if invalid format
-        
+
         city_count = 0
+        skipped_owner = 0
+        skipped_mid_production = 0
+
         for city_id, city in cities.items():
             if city_count >= max_cities:
                 break
-            
+
             # Check if city owner matches player
             if city.get('owner') != player_id:
+                skipped_owner += 1
                 continue
-            
-            # Only include cities that need production selection:
-            # 1. Production just finished (shield_stock == 0)
-            # 2. OR producing Coinage (infinite, can always change)
+
+            # Log city state for debugging
             shield_stock = city.get('shield_stock', 0)
             is_coinage = self._is_city_producing_coinage(city)
-            
-            if shield_stock != 0 and not is_coinage:
-                continue  # Skip cities that are mid-production
-            
+            logger.info(f"[CITY_PROD] City '{city.get('name')}' (id={city_id}): shield_stock={shield_stock}, is_coinage={is_coinage}")
+
+            # REMOVED overly restrictive filter - agents should be able to change production
+            # at any time. FreeCiv allows mid-production changes (with shield penalty).
+            # Previously this skipped all cities with shield_stock > 0, which meant
+            # agents could NEVER change production since cities are always building.
+
             city_count += 1
 
             # Generate production options from unit_types and improvements
@@ -2017,9 +2159,16 @@ class CivCom(Thread):
                     'reason': 'finished' if shield_stock == 0 else 'coinage'
                 })
         
+        # Log summary before caching
+        logger.info(f"[CITY_PROD] Generated {len(actions)} city_production actions for {city_count} cities (skipped: {skipped_owner} wrong owner, {skipped_mid_production} mid-production)")
+        if actions:
+            # Log first action as sample
+            sample = actions[0]
+            logger.info(f"[CITY_PROD] Sample action: type={sample.get('type')}, city_name={sample.get('city_name')}, production_name={sample.get('production_name')}")
+
         # Cache for this turn
         self._action_cache[cache_key] = actions
-        
+
         return actions
 
     def _get_tech_research_actions(self, player_id):
@@ -2081,27 +2230,30 @@ class CivCom(Thread):
 
     def _get_legal_actions_optimized(self, player_id):
         """Pre-compute top legal actions for LLM with per-category limits.
-        
+
         Generates actions using helper methods with smart caching:
         - Unit actions: NOT cached (regenerated every call)
         - City production: Cached per turn, only when shield_stock==0 OR Coinage
         - Tech research: Cached per turn, only when researching==A_UNSET
-        
+
         Per-category limits (not global):
         - Unit actions: max 5 units
-        - City production: max 3 cities  
+        - City production: max 3 cities
         - Tech research: all researchable techs (when needed)
-        
+
         Args:
             player_id: The player ID
-            
+
         Returns:
             list: Combined list of all legal actions from all categories
         """
+        logger.info(f"[LEGAL ACTIONS DEBUG] _get_legal_actions_optimized called for player {player_id}")
         all_actions = []
-        
+
         # Get unit actions (NOT CACHED - always fresh)
+        logger.info(f"[LEGAL ACTIONS DEBUG] Calling _get_unit_actions for player {player_id}")
         unit_actions = self._get_unit_actions(player_id, max_units=5)
+        logger.info(f"[LEGAL ACTIONS DEBUG] _get_unit_actions returned {len(unit_actions)} actions")
         all_actions.extend(unit_actions)
         
         # Get city production actions (CACHED per turn, with smart filtering)
@@ -2111,7 +2263,17 @@ class CivCom(Thread):
         # Get tech research actions (CACHED per turn, only when needed)
         tech_actions = self._get_tech_research_actions(player_id)
         all_actions.extend(tech_actions)
-        
+
+        # CRITICAL FIX: Transform city_production format for agent-clash
+        # civcom format: {'type': 'city_production', 'production_name': 'Granary'}
+        # agent-clash expects: {'type': 'city_production', 'target': {'production': 'Granary'}}
+        for action in all_actions:
+            if action.get('type') == 'city_production' and 'production_name' in action:
+                if 'target' not in action:
+                    action['target'] = {}
+                action['target']['production'] = action['production_name']
+                logger.info(f"[TRANSFORM] city_production: {action.get('city_name')} -> {action['production_name']}")
+
         return all_actions
 
     def _score_and_filter_actions(self, actions, max_actions):
@@ -2175,10 +2337,18 @@ class CivCom(Thread):
         cities_dict = getattr(self, 'player_cities', {})
         player_cities_dict = {}
         if isinstance(cities_dict, dict):
+            # Debug: Show all cities and their owners before filtering
+            if cities_dict:
+                logger.info(f"[CITY DEBUG] CivCom[{self.username}] has {len(cities_dict)} total cities before filtering:")
+                for city_id, city in cities_dict.items():
+                    logger.info(f"[CITY DEBUG]   city_id={city_id}, owner={city.get('owner')}, name={city.get('name')}")
+            else:
+                logger.info(f"[CITY DEBUG] CivCom[{self.username}] has ZERO cities stored in player_cities!")
+
             for city_id, city in cities_dict.items():
                 if city.get('owner') == player_id:
                     player_cities_dict[str(city_id)] = city
-            logger.debug(f"Filtered {len(player_cities_dict)} cities for player {player_id} from {len(cities_dict)} total")
+            logger.info(f"[CITY DEBUG] ✓ Filtered {len(player_cities_dict)} cities for player {player_id} from {len(cities_dict)} total")
 
         # Ensure we always have valid game state values (defensive against early queries)
         game_turn = getattr(self, 'game_turn', 1)
@@ -2193,6 +2363,66 @@ class CivCom(Thread):
             'current_player': player_id
         }
 
+        # Build techs dict from research_info (format: {'player0': [...], 'player1': [...]})
+        techs_dict = {}
+        research_info = getattr(self, 'research_info', {})
+        tech_defs = getattr(self, 'techs', {})
+
+        # Debug: Show what tech IDs are registered
+        if tech_defs:
+            tech_ids = sorted(tech_defs.keys())
+            logger.debug(f"[TECH DEBUG] Building techs dict: research_info has {len(research_info)} players, tech_defs has {len(tech_defs)} techs")
+            logger.debug(f"[TECH DEBUG] Registered tech IDs: min={min(tech_ids)}, max={max(tech_ids)}, sample={tech_ids[:5]}")
+            # Show a sample tech definition to verify structure
+            if tech_ids:
+                sample_id = tech_ids[0]
+                sample_tech = tech_defs[sample_id]
+                logger.debug(f"[TECH DEBUG] Sample tech {sample_id}: has 'name'={('name' in sample_tech)}, name={sample_tech.get('name', 'MISSING')}")
+        else:
+            logger.debug(f"[TECH DEBUG] Building techs dict: research_info has {len(research_info)} players, tech_defs is EMPTY")
+
+        for player_id_key, research_packet in research_info.items():
+            # inventions[tech_id] contains state: '0'=UNKNOWN, '1'=PREREQS_KNOWN, '2'=KNOWN
+            inventions = research_packet.get('inventions', [])
+            known_tech_names = []
+
+            logger.debug(f"[TECH DEBUG] Player {player_id_key}: inventions array length={len(inventions)}, techs_researched={research_packet.get('techs_researched')}")
+
+            # Count tech states and collect KNOWN tech indices for debugging
+            # NOTE: inventions array has 88 entries (indices 0-87), but tech IDs are 1-87
+            # Test hypothesis: inventions[i] maps to tech_id (i+1)
+            state_counts = {}
+            known_indices = []
+            for array_index, state in enumerate(inventions):
+                state_counts[state] = state_counts.get(state, 0) + 1
+                if state == '2':  # KNOWN
+                    known_indices.append(array_index)
+                    # Try off-by-one mapping: inventions[i] → tech_id (i+1)
+                    tech_id = array_index + 1
+                    tech_def = tech_defs.get(tech_id)
+                    logger.debug(f"[TECH DEBUG] array_index={array_index}, trying tech_id={tech_id}: found={tech_def is not None}")
+                    if tech_def and 'name' in tech_def:
+                        known_tech_names.append(tech_def['name'])
+                        logger.debug(f"[TECH DEBUG] Player {player_id_key} knows tech_id={tech_id} (array_index={array_index}): {tech_def['name']}")
+                    else:
+                        logger.warning(f"[TECH DEBUG] Player {player_id_key} has KNOWN tech at array_index={array_index} (tried tech_id={tech_id}) but tech_def not found")
+
+            logger.debug(f"[TECH DEBUG] Player {player_id_key} tech states: {state_counts}, known_indices: {known_indices}, known techs: {known_tech_names}")
+            techs_dict[f'player{player_id_key}'] = known_tech_names
+
+        # Build wonders dict for all players (format: {'player0': [...], 'player1': [...]})
+        wonders_dict = {}
+        for p in all_players_raw:
+            if isinstance(p, dict) and 'id' in p:
+                pid = p['id']
+                wonders_dict[f'player{pid}'] = self.get_player_wonders(pid)
+
+        # Build spaceship dict for all players (format: {'player0': {...}, 'player1': {...}})
+        spaceship_dict = {}
+        spaceship_info = getattr(self, 'spaceship_info', {})
+        for pid, sship_data in spaceship_info.items():
+            spaceship_dict[f'player{pid}'] = sship_data
+
         return {
             'turn': game_turn,
             'phase': game_phase,
@@ -2201,7 +2431,9 @@ class CivCom(Thread):
             'cities': player_cities_dict,  # Dict of player's cities keyed by ID
             'visible_tiles': getattr(self, 'visible_tiles', []),
             'players': players_dict,  # Dict of all players keyed by ID
-            'techs': getattr(self, 'known_techs', []),
+            'techs': techs_dict,  # Dict of techs per player keyed by 'player{id}'
+            'wonders': wonders_dict,  # Dict of wonders per player keyed by 'player{id}'
+            'spaceship': spaceship_dict,  # Dict of spaceship data per player keyed by 'player{id}'
             'map': map_info,
             'game': game_dict  # Required field - must always be present
         }

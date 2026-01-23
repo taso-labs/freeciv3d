@@ -467,6 +467,14 @@ class StateExtractor:
         try:
             if format_type == StateFormat.DELTA and since_turn is not None:
                 state = self._extract_delta_state(game_id, player_id, since_turn, civcom)
+            elif format_type == StateFormat.LLM_OPTIMIZED:
+                # CRITICAL FIX: Use civcom.build_llm_optimized_state() directly
+                # It already includes legal_actions from _get_legal_actions_optimized()
+                # Don't use get_full_state() which lacks legal_actions
+                logger.info(f"[STATE_EXTRACTOR] Using civcom.build_llm_optimized_state() for player {player_id}")
+                state = civcom.build_llm_optimized_state(player_id)
+                legal_count = len(state.get('legal_actions', []))
+                logger.info(f"[STATE_EXTRACTOR] Got state with {legal_count} legal_actions")
             else:
                 raw_state = civcom.get_full_state(player_id)
 
@@ -483,8 +491,6 @@ class StateExtractor:
 
                 if format_type == StateFormat.FULL:
                     state = self._format_full_state(raw_state, player_id)
-                elif format_type == StateFormat.LLM_OPTIMIZED:
-                    state = self._format_llm_optimized_state(raw_state, player_id)
                 else:
                     raise ValidationError(f"Unsupported format: {format_type}", parameter="format", value=format_type.value)
 
@@ -619,8 +625,11 @@ class StateExtractor:
                 cause=e
             )
 
-    def _normalize_action_format(self, action: Dict[str, Any]) -> Dict[str, Any]:
+    def _normalize_action_format(self, action: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Convert internal action format to packet-converter format.
+
+        Returns:
+            Dict with normalized action, or None if action is invalid and should be skipped.
         
         Internal format (from _generate_unit_actions):
             {
@@ -687,10 +696,22 @@ class StateExtractor:
         
         elif action_type in ['change_production', 'city_production']:
             production = params.get('to', params.get('production', ''))
+
+            # VALIDATION: Skip invalid city_production actions without a production target
+            # This prevents sending malformed actions to agents that will always fail
+            if not production or production == '':
+                logger.warning(
+                    f"Skipping invalid city_production action: no production target. "
+                    f"action_type={action_type}, params={params}, city_id={action.get('city_id', 0)}"
+                )
+                return None  # Skip this action - it will fail if sent to agents
+
             return {
                 'type': 'city_production',
                 'city_id': action.get('city_id', 0),
-                'production_type': production,
+                'target': {
+                    'production': production  # Wrap in target object for agent-clash
+                },
                 'is_valid': True,
                 'priority': action.get('priority', 4)
             }
@@ -1877,6 +1898,7 @@ class StateExtractor:
             'players': self._ensure_dict(raw_state.get('players')),
             'units': self._ensure_dict(raw_state.get('units')),
             'cities': self._ensure_dict(raw_state.get('cities')),
+            'techs': raw_state.get('techs', {}),  # Dict of techs per player
             'timestamp': time.time(),
             'player_perspective': player_id
         }
@@ -1913,6 +1935,15 @@ class StateExtractor:
         scores = {p['id']: self._calculate_player_score(state, p['id']) for p in players}
         player_rank = sorted(scores.items(), key=lambda x: x[1], reverse=True)
 
+        # Extract wonders for this player
+        wonders = state.get('wonders', {}).get(f'player{player_id}', [])
+
+        # Check for Apollo Program (required for Space Race)
+        apollo_built = 'Apollo Program' in wonders
+
+        # Extract spaceship data for this player
+        spaceship = state.get('spaceship', {}).get(f'player{player_id}', {})
+
         return {
             'victory_progress': {
                 'current_score': scores[player_id],
@@ -1922,6 +1953,18 @@ class StateExtractor:
             'tech_position': {
                 'researched': self._extract_player_techs(state, player_id),
                 'research_points': player.get('science', 0)
+            },
+            'wonders': {
+                'built': wonders,
+                'apollo_program': apollo_built
+            },
+            'spaceship': {
+                'state': spaceship.get('state', 0),  # 0=NONE, 1=STARTED, 2=LAUNCHED, 3=ARRIVED
+                'structurals': spaceship.get('structurals', 0),
+                'components': spaceship.get('components', 0),
+                'modules': spaceship.get('modules', 0),
+                'success_rate': spaceship.get('success_rate', 0.0),
+                'launched': spaceship.get('state', 0) >= 2  # LAUNCHED or ARRIVED
             },
             'diplomatic_status': self._get_diplomatic_summary(state, player_id),
             'relative_strength': self._assess_relative_strength(state, player_id)
@@ -2177,14 +2220,23 @@ class StateExtractor:
             try:
                 actions = civcom._get_legal_actions_optimized(player_id)
                 logger.info(f"Generated {len(actions)} actions via civcom._get_legal_actions_optimized()")
-                
+
                 # Add priority field if not present (for sorting)
+                # AND transform civcom format to agent-clash expected format
                 for action in actions:
                     if 'priority' not in action:
                         action['priority'] = self._get_default_priority(action.get('type'))
                     if 'is_valid' not in action:
                         action['is_valid'] = True
-                
+
+                    # CRITICAL FIX: Transform city_production format for agent-clash
+                    # civcom format: {'type': 'city_production', 'production_name': 'Granary'}
+                    # agent-clash expects: {'type': 'city_production', 'target': {'production': 'Granary'}}
+                    if action.get('type') == 'city_production' and 'production_name' in action:
+                        if 'target' not in action:
+                            action['target'] = {}
+                        action['target']['production'] = action['production_name']
+
                 return actions
             except Exception as e:
                 logger.warning(f"Failed to use _get_legal_actions_optimized: {e}, falling back to legacy generator")
