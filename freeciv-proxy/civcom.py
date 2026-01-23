@@ -2175,7 +2175,9 @@ class CivCom(Thread):
                     'type': 'city_production',
                     'city_id': city_id,
                     'city_name': city.get('name', ''),
-                    'production_name': unit_name,
+                    'target': {
+                        'production_type': unit_name
+                    },
                     'production_kind': VUT_UTYPE,
                     'production_value': unit_type_id,
                     'reason': 'finished' if shield_stock == 0 else 'coinage'
@@ -2213,7 +2215,9 @@ class CivCom(Thread):
                     'type': 'city_production',
                     'city_id': city_id,
                     'city_name': city.get('name', ''),
-                    'production_name': building_name,
+                    'target': {
+                        'production_type': building_name
+                    },
                     'production_kind': VUT_IMPROVEMENT,
                     'production_value': building_id,
                     'reason': 'finished' if shield_stock == 0 else 'coinage'
@@ -2227,7 +2231,8 @@ class CivCom(Thread):
         if actions:
             # Log first action as sample
             sample = actions[0]
-            logger.info(f"[CITY_PROD] Sample action: type={sample.get('type')}, city_name={sample.get('city_name')}, production_name={sample.get('production_name')}")
+            production_type = sample.get('target', {}).get('production_type', '')
+            logger.info(f"[CITY_PROD] Sample action: type={sample.get('type')}, city_name={sample.get('city_name')}, production_type='{production_type}'")
 
         # Cache for this turn
         self._action_cache[cache_key] = actions
@@ -2326,28 +2331,6 @@ class CivCom(Thread):
         # Get tech research actions (CACHED per turn, only when needed)
         tech_actions = self._get_tech_research_actions(player_id)
         all_actions.extend(tech_actions)
-
-        # CRITICAL FIX: Transform city_production format for agent-clash
-        # civcom format: {'type': 'city_production', 'production_name': 'Granary'}
-        # agent-clash expects: {'type': 'city_production', 'target': {'production': 'Granary'}}
-        logger.info(f"[TRANSFORM] Starting format transformation for {len(all_actions)} actions")
-        transformed_count = 0
-        for action in all_actions:
-            if action.get('type') == 'city_production' and 'production_name' in action:
-                production_name = action['production_name']
-                logger.info(f"[TRANSFORM] Transforming city_production action: city={action.get('city_name')}, production_name='{production_name}' (len={len(production_name)})")
-
-                # Check if production_name is empty BEFORE transformation
-                if not production_name or production_name == '':
-                    logger.error(f"[TRANSFORM] ⚠️⚠️⚠️ FOUND EMPTY production_name in action! This should never happen! Full action: {action}")
-
-                if 'target' not in action:
-                    action['target'] = {}
-                action['target']['production'] = production_name
-                transformed_count += 1
-                logger.info(f"[TRANSFORM] ✓ Transformed: {action.get('city_name')} -> '{production_name}'")
-
-        logger.info(f"[TRANSFORM] Completed transformation: {transformed_count} city_production actions transformed")
 
         return all_actions
 
