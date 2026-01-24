@@ -3690,7 +3690,6 @@ class LLMWSHandler(websocket.WebSocketHandler):
             logger.info(f"LLM agent {self.agent_id} connected to civserver on port {port}")
 
             # Give thread a moment to initialize and detect any immediate crashes
-            import time
             time.sleep(0.2)
             logger.debug(f"After initialization delay: CivCom thread is_alive={self.civcom.is_alive()}")
 

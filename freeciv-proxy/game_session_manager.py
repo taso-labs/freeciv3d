@@ -26,6 +26,10 @@ logger = logging.getLogger("freeciv-proxy")
 DEFAULT_GAME_TIMEOUT = 60  # seconds - default timeout if unknown
 MAX_GAME_TIMEOUT = 3600  # 1 hour max - prevents command injection via oversized values
 
+# Constants for metaserver allocation retry logic
+METASERVER_MAX_RETRIES = 3  # Number of retry attempts for port allocation
+METASERVER_BASE_DELAY = 1.0  # Base delay in seconds for exponential backoff
+
 
 class GamePhase(Enum):
     """Game session phases"""
@@ -106,7 +110,7 @@ class GameSession:
             slot = self._next_ai_slot
             self._next_ai_slot += 1
             logger.info(
-                f"🎯 Allocated AI slot {slot} for game {self.game_id}\n"
+                f"Allocated AI slot {slot} for game {self.game_id}, "
                 f"   Next available slot: {self._next_ai_slot}\n"
                 f"   Total players in session: {len(self.players)}"
             )
@@ -158,7 +162,7 @@ class GameSession:
 
                 # Success logging
                 logger.info(
-                    f"✅ Game {self.game_id} PAUSED (attempt {attempt + 1}/{MAX_RETRIES}): {disconnect_reason}\n"
+                    f"Game {self.game_id} PAUSED (attempt {attempt + 1}/{MAX_RETRIES}): {disconnect_reason}, "
                     f"   Original timeout: {self.original_timeout}s\n"
                     f"   Players: {list(self.players.keys())}"
                 )
@@ -167,11 +171,10 @@ class GameSession:
             except Exception as e:
                 logger.warning(f"Game {self.game_id}: Pause attempt {attempt + 1}/{MAX_RETRIES} failed: {e}")
                 if attempt < MAX_RETRIES - 1:
-                    import time
                     time.sleep(RETRY_DELAY)
 
         # All retries failed
-        logger.error(f"❌ Game {self.game_id}: Failed to pause after {MAX_RETRIES} attempts")
+        logger.error(f"Game {self.game_id}: Failed to pause after {MAX_RETRIES} attempts")
         return False
 
     def resume_game(self, civcom: Any) -> bool:
@@ -208,7 +211,7 @@ class GameSession:
 
             self.is_paused = False
             logger.info(
-                f"▶️ Game {self.game_id} RESUMED: timeout restored to {timeout}s\n"
+                f"Game {self.game_id} RESUMED: timeout restored to {timeout}s, "
                 f"   Players: {list(self.players.keys())}"
             )
             return True
@@ -313,7 +316,7 @@ class GameSession:
 
         self.config_applied = True
         self.game_config = config
-        logger.info(f"Game {self.game_id}: ✅ Configuration applied successfully")
+        logger.info(f"Game {self.game_id}: Configuration applied successfully")
         return True
 
     def add_player(self, agent_id: str, player_id: int, handler: Any) -> bool:
@@ -329,7 +332,7 @@ class GameSession:
                 existing_info = self.players[agent_id]
                 existing_info.handler = handler
             logger.info(
-                f"Game {self.game_id}: 🔄 Reconnected player {agent_id} "
+                f"Game {self.game_id}: Reconnected player {agent_id} "
                 f"(player_id={player_id}, nation_selected={existing_info.nation_selected})"
             )
             return True
@@ -499,7 +502,7 @@ class GameSession:
             logger.info(f"Game {self.game_id}: All {len(self.players)} players ready - sending /start command")
             civcom.queue_to_civserver(json.dumps({"pid": PACKET_CHAT_MSG_REQ, "message": "/start"}))
             civcom.send_packets_to_civserver()
-            logger.info(f"Game {self.game_id}: ✅ /start command sent to civserver")
+            logger.info(f"Game {self.game_id}: /start command sent to civserver")
 
             # Mark as started
             self.game_started = True
@@ -520,7 +523,7 @@ class GameSession:
                         current_turn = state.get('turn', 0)
 
                         if current_turn > 0:
-                            logger.info(f"✅ Game {self.game_id}: Game start verified! Turn={current_turn}")
+                            logger.info(f"Game {self.game_id}: Game start verified, turn={current_turn}")
                             game_confirmed = True
                             break
 
@@ -533,7 +536,7 @@ class GameSession:
 
             if not game_confirmed:
                 logger.warning(
-                    f"⚠️ Game {self.game_id}: Could not verify game start after {max_wait}s\n"
+                    f"Game {self.game_id}: Could not verify game start after {max_wait}s, "
                     f"   This may indicate civserver didn't start the game properly.\n"
                     f"   Proceeding anyway, but agents may receive empty game state."
                 )
@@ -565,9 +568,9 @@ class GameSession:
                     # Schedule write on IOLoop to handle potential thread context issues
                     # This ensures write_message is called from the main Tornado thread
                     IOLoop.current().add_callback(player_info.handler.write_message, message_json)
-                    logger.info(f"✅ Scheduled game_ready to {player_info.agent_id} (player_id={player_info.player_id})")
+                    logger.info(f"Scheduled game_ready to {player_info.agent_id} (player_id={player_info.player_id})")
                 except Exception as e:
-                    logger.error(f"❌ Failed to schedule game_ready to {player_info.agent_id}: {e}")
+                    logger.error(f"Failed to schedule game_ready to {player_info.agent_id}: {e}")
                     import traceback
                     logger.error(f"Traceback: {traceback.format_exc()}")
 
@@ -614,45 +617,76 @@ class GameSessionManager:
         - Return the same port if game_id already has an active allocation (reconnection)
         - Allocate a new port and store the mapping if game_id is new
 
+        Includes retry logic with exponential backoff for transient failures (e.g., 503
+        when no local servers are available on the current pod in Kubernetes).
+
         Args:
             game_id: Unique game identifier (e.g., match_id from agent-clash)
 
         Returns:
-            Allocated port number, or None if allocation failed
+            Allocated port number, or None if allocation failed after all retries
         """
-        try:
-            async with aiohttp.ClientSession(self.metaserver_url) as session:
-                # Make POST request with type=multiplayer and game_id for persistent mapping
-                # The endpoint will return the same port for the same game_id on reconnection
-                async with session.post(
-                    "/meta/allocate",
-                    params={"type": "multiplayer", "game_id": game_id},
-                    timeout=aiohttp.ClientTimeout(total=5),
-                ) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        if data.get("success") and "port" in data:
-                            port = data["port"]
-                            reused = data.get("reused", False)
-                            logger.info(
-                                f"Metaserver allocated port {port} for game {game_id}\n"
-                                f"   Reused existing allocation: {reused}"
-                            )
-                            return port
+        for attempt in range(METASERVER_MAX_RETRIES):
+            try:
+                async with aiohttp.ClientSession(self.metaserver_url) as session:
+                    # Make POST request with type=multiplayer and game_id for persistent mapping
+                    # The endpoint will return the same port for the same game_id on reconnection
+                    async with session.post(
+                        "/meta/allocate",
+                        params={"type": "multiplayer", "game_id": game_id},
+                        timeout=aiohttp.ClientTimeout(total=5),
+                    ) as response:
+                        if response.status == 200:
+                            data = await response.json()
+                            if data.get("success") and "port" in data:
+                                port = data["port"]
+                                reused = data.get("reused", False)
+                                logger.info(
+                                    f"Metaserver allocated port {port} for game {game_id}, "
+                                    f"reused existing allocation: {reused}"
+                                )
+                                return port
+                            else:
+                                logger.error(f"Metaserver allocate returned unexpected response: {data}")
+                                return None
+                        elif response.status == 503:
+                            # No available servers on this pod - may be transient in K8s
+                            # Retry with exponential backoff to allow load balancer to route
+                            # to a different pod with available servers
+                            if attempt < METASERVER_MAX_RETRIES - 1:
+                                delay = METASERVER_BASE_DELAY * (2 ** attempt)
+                                logger.warning(
+                                    f"Metaserver reports no local servers available (503), "
+                                    f"attempt {attempt + 1}/{METASERVER_MAX_RETRIES}, retrying in {delay:.1f}s"
+                                )
+                                await asyncio.sleep(delay)
+                                continue
+                            else:
+                                logger.warning(
+                                    f"Metaserver reports no available servers after {METASERVER_MAX_RETRIES} attempts"
+                                )
+                                return None
                         else:
-                            logger.error(f"Metaserver allocate returned unexpected response: {data}")
+                            logger.error(f"Metaserver allocate failed with status {response.status}")
                             return None
-                    elif response.status == 503:
-                        # No available servers
-                        logger.warning(f"Metaserver reports no available multiplayer servers (503)")
-                        return None
-                    else:
-                        logger.error(f"Metaserver allocate failed with status {response.status}")
-                        return None
 
-        except Exception as e:
-            logger.error(f"Error allocating port from metaserver for game {game_id}: {e}")
-            return None
+            except Exception as e:
+                if attempt < METASERVER_MAX_RETRIES - 1:
+                    delay = METASERVER_BASE_DELAY * (2 ** attempt)
+                    logger.warning(
+                        f"Error allocating port from metaserver for game {game_id}: {e}, "
+                        f"attempt {attempt + 1}/{METASERVER_MAX_RETRIES}, retrying in {delay:.1f}s"
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+                else:
+                    logger.error(
+                        f"Error allocating port from metaserver for game {game_id} "
+                        f"after {METASERVER_MAX_RETRIES} attempts: {e}"
+                    )
+                    return None
+
+        return None  # Should not reach here, but for safety
 
     async def allocate_civserver_port(self, game_id: str) -> int:
         """Allocate a civserver port for a game by querying metaserver with game_id.
@@ -677,7 +711,7 @@ class GameSessionManager:
                 existing_session = self.sessions[game_id]
                 player_count = len(existing_session.players)
                 logger.info(
-                    f"🔄 Game {game_id}: REUSING existing port {port} from local session\n"
+                    f"Game {game_id}: REUSING existing port {port} from local session, "
                     f"   Current players in session: {player_count}\n"
                     f"   Session phase: {existing_session.phase.value}"
                 )
@@ -685,13 +719,13 @@ class GameSessionManager:
 
             # Allocate port from metaserver with game_id for persistent mapping
             # The metaserver will return the same port for the same game_id (reconnection case)
-            logger.info(f"🔍 Game {game_id}: Requesting port allocation from metaserver (with game_id persistence)")
+            logger.info(f"Game {game_id}: Requesting port allocation from metaserver (with game_id persistence)")
             port = await self._allocate_port_from_metaserver(game_id)
 
             if port is None:
                 # No servers available - fail allocation
                 logger.error(
-                    f"❌ Game {game_id}: No multiplayer servers available\n"
+                    f"Game {game_id}: No multiplayer servers available, "
                     f"   Metaserver returned no available ports\n"
                     f"   This means either:\n"
                     f"   1. All multiplayer servers are in use\n"
@@ -704,12 +738,12 @@ class GameSessionManager:
                     "Please wait for servers to become available or check metaserver status."
                 )
 
-            logger.info(f"✅ Game {game_id}: Allocated port {port} from metaserver (game_id persisted)")
+            logger.info(f"Game {game_id}: Allocated port {port} from metaserver (game_id persisted)")
             self._last_port_used = port
 
             total_sessions = len(self.sessions)
             logger.info(
-                f"🆕 Game {game_id}: Allocated server port {port}\n"
+                f"Game {game_id}: Allocated server port {port}, "
                 f"   Total active sessions: {total_sessions}\n"
                 f"   Game-port mapping persisted in metaserver database"
             )
