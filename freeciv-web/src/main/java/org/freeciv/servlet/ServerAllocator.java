@@ -35,6 +35,8 @@ import javax.sql.DataSource;
 import org.freeciv.util.Constants;
 import org.json.JSONObject;
 
+import java.util.logging.Logger;
+
 /**
  * Server allocation API for LLM game arena integration
  * Allocates available FreeCiv servers from the pool
@@ -48,11 +50,38 @@ import org.json.JSONObject;
 public class ServerAllocator extends HttpServlet {
 
 	private static final long serialVersionUID = 1L;
+	private static final Logger logger = Logger.getLogger(ServerAllocator.class.getName());
+
+	// Connection timeout for local port check (milliseconds)
+	private static final int LOCAL_PORT_CHECK_TIMEOUT_MS = 500;
 
 	// Maximum age in seconds for a game allocation to be considered valid for reuse
 	// After this time, the allocation is considered stale and a new port is assigned
 	// 24 hours allows for long-running LLM games with extended pauses
 	private static final int MAX_ALLOCATION_AGE_SECONDS = 86400; // 24 hours
+
+	/**
+	 * Check if a port is actively listening on the local machine.
+	 *
+	 * In Kubernetes, each pod runs its own FreeCiv servers (ports 6000-6009).
+	 * The metaserver database tracks all servers globally with host='localhost',
+	 * but a port listed in the DB might not be running on THIS pod.
+	 *
+	 * This method validates that the allocated port is actually available
+	 * on the local machine before returning it to the client.
+	 *
+	 * @param port The port number to check
+	 * @return true if the port is listening locally, false otherwise
+	 */
+	private boolean isPortListeningLocally(int port) {
+		try (java.net.Socket socket = new java.net.Socket()) {
+			socket.connect(new java.net.InetSocketAddress("127.0.0.1", port), LOCAL_PORT_CHECK_TIMEOUT_MS);
+			return true;
+		} catch (java.io.IOException e) {
+			// Connection refused or timeout - port is not listening
+			return false;
+		}
+	}
 
 	@Override
 	public void doPost(HttpServletRequest request, HttpServletResponse response)
@@ -142,16 +171,32 @@ public class ServerAllocator extends HttpServlet {
 						}
 					}
 
-					// Find an available server of the requested type in Pregame state
+					// Find available servers of the requested type in Pregame state
 					// SKIP LOCKED prevents race conditions: if another thread locked a row, skip it instead of waiting
-					String query = "SELECT host, port FROM servers WHERE type = ? AND state = 'Pregame' AND available != 0 ORDER BY port LIMIT 1 FOR UPDATE SKIP LOCKED";
+					// Get all candidates (no LIMIT 1) to find one that's actually running on this pod
+					String query = "SELECT host, port FROM servers WHERE type = ? AND state = 'Pregame' AND available != 0 ORDER BY port FOR UPDATE SKIP LOCKED";
 					try (PreparedStatement statement = conn.prepareStatement(query)) {
 						statement.setString(1, gameType);
 
 						try (ResultSet rs = statement.executeQuery()) {
-							if (rs.next()) {
+							boolean allocated = false;
+							int candidatesChecked = 0;
+
+							// Iterate through candidates, pick first that's actually listening locally
+							// This handles Kubernetes distributed state where DB shows ports that
+							// may not be running on this specific pod
+							while (rs.next() && !allocated) {
 								String host = rs.getString("host");
 								int port = rs.getInt("port");
+								candidatesChecked++;
+
+								// Verify the port is actually running on this pod
+								if (!isPortListeningLocally(port)) {
+									// Port not listening locally - try next candidate
+									// This happens in K8s when the metaserver DB has ports from other pods
+									logger.info("Port " + port + " not listening locally, trying next candidate");
+									continue;
+								}
 
 								// Calculate proxy port (proxy port = game port + 1000)
 								// Game ports: 6000-6009, Proxy ports: 7000-7009
@@ -195,20 +240,22 @@ public class ServerAllocator extends HttpServlet {
 
 										out.write(jsonResponse.toString());
 										response.setStatus(HttpServletResponse.SC_OK);
-									} else {
-										conn.rollback();
-										response.setStatus(HttpServletResponse.SC_CONFLICT);
-										JSONObject errorJson = new JSONObject();
-										errorJson.put("error", "Server allocation race condition. Please retry.");
-										out.write(errorJson.toString());
+										allocated = true;
 									}
+									// If update failed (race condition), continue to next candidate
 								}
-							} else {
+							}
+
+							if (!allocated) {
 								conn.rollback();
-								// No available servers
+								// No available servers running on this pod
 								response.setStatus(HttpServletResponse.SC_SERVICE_UNAVAILABLE);
 								JSONObject errorJson = new JSONObject();
-								errorJson.put("error", "No available servers of type '" + gameType + "'. Please wait and retry.");
+								if (candidatesChecked > 0) {
+									errorJson.put("error", "No servers listening locally on this pod. Checked " + candidatesChecked + " candidates. Please retry.");
+								} else {
+									errorJson.put("error", "No available servers of type '" + gameType + "'. Please wait and retry.");
+								}
 								out.write(errorJson.toString());
 							}
 						}
