@@ -165,13 +165,14 @@ function start_observer_follow_intervals()
     OBSERVER_AUTO_CENTER_MS
   );
 
-  // Initial center with polling to wait for FOLLOWED PLAYER's cities to load
-  // IMPORTANT: Check for the followed player's cities specifically, not just any cities
-  // This fixes a race condition where another player's cities load first
+  // Initial center with polling to wait for FOLLOWED PLAYER's cities OR units to load
+  // IMPORTANT: Check for the followed player's cities/units specifically, not just any cities
+  // This fixes a race condition where another player's data loads first
   var initial_center_attempts = 0;
   observer_initial_center_interval = setInterval(function() {
     initial_center_attempts++;
-    if (has_cities_for_player(observer_follow_player)) {
+    // Check for cities first (preferred), then units (fallback for turn 1)
+    if (has_cities_for_player(observer_follow_player) || has_units_for_player(observer_follow_player)) {
       clearInterval(observer_initial_center_interval);
       observer_initial_center_interval = null;
       observer_center_on_followed_player();
@@ -179,7 +180,7 @@ function start_observer_follow_intervals()
     } else if (initial_center_attempts >= MAX_INITIAL_CENTER_ATTEMPTS) {
       clearInterval(observer_initial_center_interval);
       observer_initial_center_interval = null;
-      console.warn('[Observer] Cities for player', observer_follow_player, 'not loaded after', MAX_INITIAL_CENTER_ATTEMPTS, 'attempts, giving up initial center');
+      console.warn('[Observer] Cities/units for player', observer_follow_player, 'not loaded after', MAX_INITIAL_CENTER_ATTEMPTS, 'attempts, giving up initial center');
     }
   }, INITIAL_CENTER_POLL_INTERVAL_MS);
 }
@@ -202,8 +203,25 @@ function has_cities_for_player(player_id)
 }
 
 /****************************************************************************
+  Check if any units exist for the specified player.
+  Used to determine when to stop polling for initial center (turn 1 fallback).
+****************************************************************************/
+function has_units_for_player(player_id)
+{
+  if (typeof units === 'undefined' || player_id === null) return false;
+
+  for (var unit_id in units) {
+    var punit = units[unit_id];
+    if (punit['owner'] === player_id) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/****************************************************************************
   Center view on followed player's main population center.
-  Priority: 1) Capital city, 2) Largest city by size, 3) Any city
+  Priority: 1) Capital city, 2) Largest city by size, 3) Units (turn 1 fallback)
 ****************************************************************************/
 function observer_center_on_followed_player()
 {
@@ -234,16 +252,122 @@ function observer_center_on_followed_player()
     }
   }
 
-  // Center on target
+  // Center on target city if found
   if (target_city) {
     var ptile = city_tile(target_city);
     if (ptile) {
       center_tile_mapcanvas(ptile);
-      freelog(LOG_DEBUG, '[Observer] Centered on ' + (target_city['name'] || 'Unknown') + ' size: ' + (target_city['size'] || 0));
+      freelog(LOG_DEBUG, '[Observer] Centered on ' + (target_city['name'] || 'Unknown') +
+              ' size: ' + (target_city['size'] || 0));
     }
-  } else {
-    freelog(LOG_DEBUG, '[Observer] No cities found for player ' + observer_follow_player);
+    // Reset unit spread tracker when centering on city (fresh calc next time we fall back to units)
+    observer_last_unit_spread = null;
+    return;
   }
+
+  // Priority 3: Fall back to units when no cities exist (e.g., turn 1)
+  if (center_on_player_units_with_zoom(observer_follow_player)) {
+    return;
+  }
+
+  // No cities or units found
+  freelog(LOG_DEBUG, '[Observer] No cities or units found for player ' + observer_follow_player);
+}
+
+// Track last spread to avoid jarring zoom changes
+var observer_last_unit_spread = null;
+var SPREAD_CHANGE_THRESHOLD = 5;  // Only recalc zoom if spread changes by >5 tiles
+
+/****************************************************************************
+  Calculate the centroid and spread of all units owned by a player.
+  Returns: { centroid: {x, y}, spread: number, count: number, tile: {x, y} }
+  Returns null if player has no units.
+****************************************************************************/
+function get_player_units_centroid_and_spread(player_id)
+{
+  var sum_x = 0, sum_y = 0, count = 0;
+  var min_x = Infinity, max_x = -Infinity;
+  var min_y = Infinity, max_y = -Infinity;
+
+  for (var unit_id in units) {
+    var punit = units[unit_id];
+    if (punit['owner'] === player_id) {
+      var ptile = index_to_tile(punit['tile']);
+      if (ptile) {
+        sum_x += ptile['x'];
+        sum_y += ptile['y'];
+        count++;
+        min_x = Math.min(min_x, ptile['x']);
+        max_x = Math.max(max_x, ptile['x']);
+        min_y = Math.min(min_y, ptile['y']);
+        max_y = Math.max(max_y, ptile['y']);
+      }
+    }
+  }
+
+  if (count === 0) return null;
+
+  var centroid_x = Math.floor(sum_x / count);
+  var centroid_y = Math.floor(sum_y / count);
+  var spread = Math.max(max_x - min_x, max_y - min_y);
+
+  return {
+    centroid: { x: centroid_x, y: centroid_y },
+    spread: spread,
+    count: count,
+    tile: { x: centroid_x, y: centroid_y }
+  };
+}
+
+/****************************************************************************
+  Calculate camera height (zoom) based on unit spread.
+  - Close zoom (dy=300) for spread 0-2 tiles
+  - Wide zoom (dy=600) for spread 20+ tiles
+****************************************************************************/
+function calculate_zoom_for_unit_spread(spread)
+{
+  var MIN_ZOOM_DY = 300;
+  var MAX_ZOOM_DY = 600;
+  var SPREAD_MIN = 2;
+  var SPREAD_MAX = 20;
+
+  if (spread <= SPREAD_MIN) return MIN_ZOOM_DY;
+  if (spread >= SPREAD_MAX) return MAX_ZOOM_DY;
+
+  var zoom_factor = (spread - SPREAD_MIN) / (SPREAD_MAX - SPREAD_MIN);
+  return Math.floor(MIN_ZOOM_DY + zoom_factor * (MAX_ZOOM_DY - MIN_ZOOM_DY));
+}
+
+/****************************************************************************
+  Center view on player's units with dynamic zoom.
+  Used when player has no cities (e.g., turn 1).
+  Zoom only updates if spread changes significantly (>5 tiles).
+****************************************************************************/
+function center_on_player_units_with_zoom(player_id)
+{
+  var unit_data = get_player_units_centroid_and_spread(player_id);
+  if (!unit_data) return false;
+
+  // Only recalculate zoom if spread changed significantly or first time
+  var should_update_zoom = (
+    observer_last_unit_spread === null ||
+    Math.abs(unit_data.spread - observer_last_unit_spread) >= SPREAD_CHANGE_THRESHOLD
+  );
+
+  if (should_update_zoom) {
+    var target_dy = calculate_zoom_for_unit_spread(unit_data.spread);
+    camera_dy = target_dy;
+    observer_last_unit_spread = unit_data.spread;
+    freelog(LOG_DEBUG, '[Observer] Zoom updated: spread=' + unit_data.spread +
+            ' tiles, dy=' + target_dy);
+  }
+
+  center_tile_mapcanvas(unit_data.tile);
+
+  freelog(LOG_DEBUG, '[Observer] Centered on ' + unit_data.count +
+          ' unit(s) at (' + unit_data.centroid.x + ',' + unit_data.centroid.y + ')');
+
+  return true;
 }
 
 /****************************************************************************
@@ -264,6 +388,7 @@ function cleanup_observer_follow_mode()
     observer_player_search_interval = null;
   }
   observer_follow_player = null;
+  observer_last_unit_spread = null;
 }
 
 /****************************************************************************

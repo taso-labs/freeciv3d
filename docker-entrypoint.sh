@@ -7,6 +7,8 @@ export DB_HOST="${DB_HOST:-127.0.0.1}"
 export DB_USER="${DB_USER:-docker}"
 export DB_PASSWORD="${DB_PASSWORD:-changeme}"
 export DB_NAME="${DB_NAME:-freeciv_web}"
+export DB_POOL_SIZE="${DB_POOL_SIZE:-20}"
+export DB_POOL_MAX="${DB_POOL_MAX:-25}"
 
 # Generate Tomcat context.xml with database configuration BEFORE starting services
 # Note: Directory pre-created in Dockerfile with group-write permissions (775)
@@ -22,6 +24,8 @@ sed -e "s|#DB_HOST#|${DB_HOST}|g" \
     -e "s|#DB_USER#|${DB_USER}|g" \
     -e "s|#DB_PASSWORD#|${DB_PASSWORD_ESCAPED}|g" \
     -e "s|#DB_NAME#|${DB_NAME}|g" \
+    -e "s|#DB_POOL_SIZE#|${DB_POOL_SIZE}|g" \
+    -e "s|#DB_POOL_MAX#|${DB_POOL_MAX}|g" \
     /docker/config/web.context.tmpl > /var/lib/tomcat10/conf/Catalina/localhost/ROOT.xml
 echo "✓ Tomcat database configuration ready"
 

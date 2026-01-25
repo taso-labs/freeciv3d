@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.3.19](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.18...freeciv3d-v0.3.19) (2026-01-24)
+
+
+### Bug Fixes
+
+* **proxy:** Resolve match start failures with time module and port allocation fixes ([#79](https://github.com/taso-ventures/freeciv3d/issues/79)) ([a647395](https://github.com/taso-ventures/freeciv3d/commit/a647395a5db1aef4c2537deb1b29dcc7043a8fe2))
+
+## [0.3.18](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.17...freeciv3d-v0.3.18) (2026-01-23)
+
+
+### Features
+
+* **k8s:** Add production readiness for 500-user beta launch ([#77](https://github.com/taso-ventures/freeciv3d/issues/77)) ([1a517d8](https://github.com/taso-ventures/freeciv3d/commit/1a517d8950e1b0a52781589310cef506dc4d3eed))
+
+## [0.3.17](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.16...freeciv3d-v0.3.17) (2026-01-22)
+
+
+### Bug Fixes
+
+* **proxy:** Prevent mid-game reconnection failures (E142 + E120) ([#75](https://github.com/taso-ventures/freeciv3d/issues/75)) ([f4c9b85](https://github.com/taso-ventures/freeciv3d/commit/f4c9b85a70e5cea5cdec21b7b026bffa41aa274a))
+
 ## [0.3.16](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.15...freeciv3d-v0.3.16) (2026-01-22)
 
 

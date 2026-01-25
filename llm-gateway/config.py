@@ -47,7 +47,7 @@ class Settings(BaseSettings):
     agent_timeout: int = 600  # seconds (10 minutes for longer games)
     max_connections_per_agent: int = 2
     heartbeat_interval: int = 30  # seconds
-    session_resumption_window: int = 300  # 5 minutes - extended from 60s for network resilience
+    session_resumption_window: int = 3600  # 1 hour - extended for hours-long LLM matches (AGE-298)
 
     # Security settings
     allowed_origins: List[str] = [
@@ -126,9 +126,9 @@ def validate_settings() -> bool:
         if not (MIN_AGENT_TIMEOUT <= settings.agent_timeout <= MAX_AGENT_TIMEOUT):
             errors.append(f"Invalid agent_timeout: {settings.agent_timeout} (must be {MIN_AGENT_TIMEOUT}-{MAX_AGENT_TIMEOUT})")
 
-        # Validate session resumption window (extended to 600s max for network resilience)
-        if not (0 <= settings.session_resumption_window <= 600):
-            errors.append(f"Invalid session_resumption_window: {settings.session_resumption_window} (must be 0-600)")
+        # Validate session resumption window (extended to 2 hours max for long LLM matches)
+        if not (0 <= settings.session_resumption_window <= 7200):
+            errors.append(f"Invalid session_resumption_window: {settings.session_resumption_window} (must be 0-7200)")
 
         # Validate game and connection limits
         if not (MIN_CONCURRENT_GAMES <= settings.max_concurrent_games <= MAX_CONCURRENT_GAMES):
