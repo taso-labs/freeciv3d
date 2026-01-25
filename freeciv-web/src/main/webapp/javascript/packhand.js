@@ -580,6 +580,15 @@ function handle_ruleset_control(packet)
 {
   ruleset_control = packet;
 
+  // Observer mode fix: Don't reset state if already running as observer.
+  // When multiple observers connect to the same game, the server may send
+  // ruleset packets that would incorrectly reset the first observer's state
+  // from C_S_RUNNING back to C_S_PREPARING, breaking map rendering.
+  if (client_state() === C_S_RUNNING && client_is_observer()) {
+    console.log('[Observer] Skipping state reset in handle_ruleset_control - already running as observer');
+    return;
+  }
+
   update_client_state(C_S_PREPARING);
 
   /* Clear out any effects belonging to the previous ruleset. */
