@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.20](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.19...freeciv3d-v0.3.20) (2026-01-25)
+
+
+### Bug Fixes
+
+* Observer mode regression and P3 display black terrain ([#82](https://github.com/taso-ventures/freeciv3d/issues/82)) ([b70b023](https://github.com/taso-ventures/freeciv3d/commit/b70b0234dbe1bf8d4682576c2fb83662b6de9419))
+
 ## [0.3.19](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.18...freeciv3d-v0.3.19) (2026-01-24)
 
 
