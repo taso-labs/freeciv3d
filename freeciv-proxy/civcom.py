@@ -52,6 +52,10 @@ from packet_constants import (
     PACKET_CLIENT_INFO,
     PACKET_BEGIN_TURN,  # Turn start signal from server
     PACKET_SPACESHIP_INFO,  # Spaceship status for victory tracking
+    PACKET_NATION_SELECT_REQ,  # Client nation selection packet
+    PACKET_PLAYER_READY,  # Player ready signal
+    PACKET_PLAYER_RESEARCH,  # Player research selection
+    PACKET_UNIT_ORDERS,  # Unit order queue for pathfinding
     get_packet_name
 )
 
