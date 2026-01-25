@@ -626,109 +626,67 @@ class StateExtractor:
 
         Returns:
             Dict with normalized action, or None if action is invalid and should be skipped.
-        
-        Internal format (from _generate_unit_actions):
-            {
-                'action': 'move',
-                'params': {'direction': 'n', 'target': {'x': ..., 'y': ...}},
-                'is_valid': bool,
-                'reason': str (optional),
-                'action_id': int (optional)
-            }
-        
-        Packet-converter format:
-            {
-                'type': 'unit_move',
-                'unit_id': int,
-                'dest_x': int,
-                'dest_y': int
-            }
         """
-        action_type = action.get('action', '')
-        params = action.get('params', {})
-        
-        # Skip invalid actions
         if not action.get('is_valid', True):
-            # Return a minimal valid action or skip
             logger.debug(f"Skipping invalid action: {action.get('reason', 'no reason')}")
             return None
-        
-        # Build normalized action based on type
+
+        action_type = action.get('action', '')
+        params = action.get('params', {})
+        unit_id = action.get('unit_id', 0)
+        priority = action.get('priority')
+
+        # Action type mappings with default priorities
         if action_type == 'move':
-            # Extract coordinates from nested target format
             target = params.get('target', {})
             return {
                 'type': 'unit_move',
-                'unit_id': action.get('unit_id', 0),  # Will be filled by caller if available
+                'unit_id': unit_id,
                 'dest_x': int(target.get('x', 0)),
                 'dest_y': int(target.get('y', 0)),
                 'is_valid': True,
-                'priority': action.get('priority', 5)
+                'priority': priority if priority is not None else 5
             }
-        
-        elif action_type == 'build_city':
-            return {
-                'type': 'unit_build_city',
-                'unit_id': action.get('unit_id', 0),
-                'is_valid': True,
-                'priority': action.get('priority', 5)
-            }
-        
-        elif action_type == 'fortify':
-            return {
-                'type': 'unit_fortify',
-                'unit_id': action.get('unit_id', 0),
-                'is_valid': True,
-                'priority': action.get('priority', 3)
-            }
-        
-        elif action_type == 'skip' or action_type == 'sentry':
-            return {
-                'type': 'unit_' + action_type,
-                'unit_id': action.get('unit_id', 0),
-                'is_valid': True,
-                'priority': action.get('priority', 1)
-            }
-        
-        elif action_type in ['change_production', 'city_production']:
-            production = params.get('to', params.get('production', ''))
 
-            # Skip invalid city_production actions without a production target
-            if not production or production == '':
-                logger.warning(f"Skipping invalid city_production action: no production target for city_id={action.get('city_id', 0)}")
+        if action_type == 'build_city':
+            return {'type': 'unit_build_city', 'unit_id': unit_id, 'is_valid': True, 'priority': priority or 5}
+
+        if action_type == 'fortify':
+            return {'type': 'unit_fortify', 'unit_id': unit_id, 'is_valid': True, 'priority': priority or 3}
+
+        if action_type in ('skip', 'sentry'):
+            return {'type': f'unit_{action_type}', 'unit_id': unit_id, 'is_valid': True, 'priority': priority or 1}
+
+        if action_type in ('change_production', 'city_production'):
+            production = params.get('to', params.get('production', ''))
+            if not production:
+                logger.warning(f"Skipping city_production with no target for city_id={action.get('city_id', 0)}")
                 return None
             return {
                 'type': 'city_production',
                 'city_id': action.get('city_id', 0),
-                'target': {
-                    'production': production  # Wrap in target object for agent-clash
-                },
+                'target': {'production': production},
                 'is_valid': True,
-                'priority': action.get('priority', 4)
+                'priority': priority or 4
             }
-        
-        elif action_type == 'research_tech' or action_type == 'tech_research':
+
+        if action_type in ('research_tech', 'tech_research'):
             return {
                 'type': 'tech_research',
                 'tech': action.get('tech', params.get('to', '')),
                 'tech_id': action.get('tech_id'),
                 'is_valid': True,
-                'priority': action.get('priority', 3)
+                'priority': priority or 3
             }
-        
-        elif action_type == 'end_turn':
-            return {
-                'type': 'end_turn',
-                'is_valid': True,
-                'priority': 10
-            }
-        
-        else:
-            # Return as-is for unknown types, with type field added if needed
-            normalized = dict(action)
-            if 'type' not in normalized and 'action' in normalized:
-                normalized['type'] = normalized.pop('action')
-            return normalized
+
+        if action_type == 'end_turn':
+            return {'type': 'end_turn', 'is_valid': True, 'priority': 10}
+
+        # Unknown types: add 'type' field if missing
+        normalized = dict(action)
+        if 'type' not in normalized and 'action' in normalized:
+            normalized['type'] = normalized.pop('action')
+        return normalized
 
     def get_unit_actions(self, unit_id: int, player_id: int) -> Dict[str, Any]:
         """
@@ -2206,26 +2164,12 @@ class StateExtractor:
         civcom = self._get_civcom_for_player(player_id)
         
         if civcom and hasattr(civcom, '_get_legal_actions_optimized'):
-            # Use the optimized action generator with smart caching
             try:
                 actions = civcom._get_legal_actions_optimized(player_id)
-
-                # Add priority field if not present and transform format for agent-clash
+                # Ensure all actions have priority and is_valid fields
                 for action in actions:
-                    if 'priority' not in action:
-                        action['priority'] = self._get_default_priority(action.get('type'))
-                    if 'is_valid' not in action:
-                        action['is_valid'] = True
-
-                    # Transform city_production format for agent-clash:
-                    # civcom format: {'type': 'city_production', 'production_name': 'Granary'}
-                    # agent-clash expects: {'type': 'city_production', 'target': {'production': 'Granary'}}
-                    if action.get('type') == 'city_production' and 'production_name' in action:
-                        production_name = action['production_name']
-                        if 'target' not in action:
-                            action['target'] = {}
-                        action['target']['production'] = production_name
-
+                    action.setdefault('priority', self._get_default_priority(action.get('type')))
+                    action.setdefault('is_valid', True)
                 return actions
             except Exception as e:
                 logger.warning(f"Failed to use _get_legal_actions_optimized: {e}, falling back to legacy generator")

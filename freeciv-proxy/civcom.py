@@ -1819,6 +1819,21 @@ class CivCom(Thread):
             logger.debug(f"Could not parse packet for state storage: {e}")
 
     # LLM-optimized state query methods
+    def _normalize_to_dict(self, collection):
+        """Normalize a collection (list or dict) to dict format keyed by ID.
+
+        Args:
+            collection: Either a list of dicts with 'id' fields, or already a dict
+
+        Returns:
+            dict: Collection as dict keyed by string ID, or empty dict if invalid
+        """
+        if isinstance(collection, dict):
+            return collection
+        if isinstance(collection, list):
+            return {str(item.get('id', i)): item for i, item in enumerate(collection) if isinstance(item, dict)}
+        return {}
+
     def handle_state_query(self, player_id, format='full'):
         """Handle LLM state query requests with different formats"""
         if format == 'llm_optimized':
@@ -1929,83 +1944,53 @@ class CivCom(Thread):
 
     def _get_unit_actions(self, player_id, max_units=5):
         """Get per-unit legal actions (NOT CACHED - regenerated every call).
-        
+
         Unit actions are not cached because every unit move affects what other units can do.
-        
-        Uses StateExtractor.get_unit_actions() to ensure consistency with
-        unit_actions_query endpoint - same logic, same results.
-        
-        Returns complete action format from StateExtractor with all validation fields:
-        - 'action': action name (e.g., 'move', 'build_city', 'fortify')
-        - 'params': dict of action parameters (e.g., {'direction': 'n'} for move)
-        - 'is_valid': boolean indicating if action can be executed
-        - 'reason': optional string explaining why action is invalid
-        - 'action_id': FreeCiv action constant ID
-        - 'unit_id': unit ID this action applies to
-        - 'type': added field for LLM categorization ('unit_move' or 'unit_action')
-        
+        Uses StateExtractor.get_unit_actions() for consistency with unit_actions_query endpoint.
+
         Args:
             player_id: The player ID
             max_units: Maximum number of units to generate actions for
-            
+
         Returns:
             list: List of complete unit action dicts with full validation info
         """
-        actions = []
-
-        # Import StateExtractor to reuse unit action generation logic
         from state_extractor import StateExtractor
 
-        # Handle both dict and list formats for player_units
-        units = self.player_units
-        if isinstance(units, list):
-            units = {str(u.get('id', i)): u for i, u in enumerate(units) if isinstance(u, dict)}
-        elif not isinstance(units, dict):
-            return actions  # Return empty if invalid format
+        units = self._normalize_to_dict(self.player_units)
+        if not units:
+            return []
 
-        # Create StateExtractor instance for action generation
         extractor = StateExtractor(civcom=self)
-
+        actions = []
+        skip_actions = {'skip', 'sentry', 'continue_work'}
         unit_count = 0
+
         for unit_id, unit in units.items():
             if unit_count >= max_units:
                 break
-
-            # Only include units with moves remaining
             if unit.get('moves_left', 0) <= 0:
                 continue
 
             unit_count += 1
 
-            # Use StateExtractor's get_unit_actions which calls _generate_unit_actions
             try:
                 result = extractor.get_unit_actions(int(unit_id), player_id)
                 if result.get('error'):
                     logger.warning(f"Unit {unit_id} returned error: {result.get('error')}")
                     continue
 
-                actions_from_extractor = result.get('actions', [])
-
-                # Keep all actions with full detail from StateExtractor
-                for action in actions_from_extractor:
-                    # Skip low-value generic actions
-                    if action.get('action') in ('skip', 'sentry', 'continue_work'):
+                for action in result.get('actions', []):
+                    action_name = action.get('action')
+                    if action_name in skip_actions:
                         continue
 
-                    # Add type field for LLM categorization while preserving all other fields
                     action_copy = action.copy()
-                    action_name = action_copy.get('action')
-
-                    if action_name == 'move':
-                        action_copy['type'] = 'unit_move'
-                    else:
-                        action_copy['type'] = 'unit_action'
-
+                    action_copy['type'] = 'unit_move' if action_name == 'move' else 'unit_action'
                     actions.append(action_copy)
 
             except Exception as e:
                 logger.warning(f"Failed to get actions for unit {unit_id}: {e}")
-                continue
 
         return actions
 
@@ -2019,88 +2004,63 @@ class CivCom(Thread):
         Returns:
             list: List of city production action dicts
         """
-        turn = self.game_turn
-        cache_key = f"{turn}_{player_id}_city_actions"
-
-        # Check cache first
+        cache_key = f"{self.game_turn}_{player_id}_city_actions"
         if cache_key in self._action_cache:
             return self._action_cache[cache_key]
 
+        cities = self._normalize_to_dict(self.player_cities)
         actions = []
-
-        # Handle both dict and list formats for player_cities
-        cities = self.player_cities
-        if isinstance(cities, list):
-            cities = {str(c.get('id', i)): c for i, c in enumerate(cities) if isinstance(c, dict)}
-        elif not isinstance(cities, dict):
-            self._action_cache[cache_key] = actions
-            return actions  # Return empty if invalid format
-
         city_count = 0
+
         for city_id, city in cities.items():
             if city_count >= max_cities:
                 break
-
-            # Check if city owner matches player
             if city.get('owner') != player_id:
                 continue
 
-            shield_stock = city.get('shield_stock', 0)
             city_count += 1
+            shield_stock = city.get('shield_stock', 0)
+            reason = 'finished' if shield_stock == 0 else 'coinage'
+            city_name = city.get('name', '')
 
-            # Generate production options from unit_types and improvements
-            # Filter by server-provided can_build bitvectors (tech prerequisites, obsolescence, etc.)
-
-            # Units - only include those the city can actually build
+            # Add buildable units
             for unit_type_id, unit_type in self.unit_types.items():
                 unit_name = unit_type.get('name', '')
                 if not unit_name:
                     continue
-
-                # Check if city can build this unit (tech prereqs, not obsolete, etc.)
                 unit_id_int = int(unit_type_id) if isinstance(unit_type_id, str) else unit_type_id
                 if not self.can_city_build_unit(city, unit_id_int):
                     continue
+                actions.append(self._make_production_action(
+                    city_id, city_name, unit_name, VUT_UTYPE, unit_type_id, reason
+                ))
 
-                actions.append({
-                    'type': 'city_production',
-                    'city_id': city_id,
-                    'city_name': city.get('name', ''),
-                    'target': {
-                        'production_type': unit_name
-                    },
-                    'production_kind': VUT_UTYPE,
-                    'production_value': unit_type_id,
-                    'reason': 'finished' if shield_stock == 0 else 'coinage'
-                })
-
-            # Buildings (improvements) - only include those the city can actually build
+            # Add buildable improvements
             for building_id, building in self.improvements.items():
                 building_name = building.get('name', '')
                 if not building_name:
                     continue
-
-                # Check if city can build this improvement (tech prereqs, not already built, etc.)
                 building_id_int = int(building_id) if isinstance(building_id, str) else building_id
                 if not self.can_city_build_improvement(city, building_id_int):
                     continue
+                actions.append(self._make_production_action(
+                    city_id, city_name, building_name, VUT_IMPROVEMENT, building_id, reason
+                ))
 
-                actions.append({
-                    'type': 'city_production',
-                    'city_id': city_id,
-                    'city_name': city.get('name', ''),
-                    'target': {
-                        'production_type': building_name
-                    },
-                    'production_kind': VUT_IMPROVEMENT,
-                    'production_value': building_id,
-                    'reason': 'finished' if shield_stock == 0 else 'coinage'
-                })
-
-        # Cache for this turn
         self._action_cache[cache_key] = actions
-
         return actions
+
+    def _make_production_action(self, city_id, city_name, production_name, kind, value, reason):
+        """Create a city production action dict."""
+        return {
+            'type': 'city_production',
+            'city_id': city_id,
+            'city_name': city_name,
+            'target': {'production_type': production_name},
+            'production_kind': kind,
+            'production_value': value,
+            'reason': reason
+        }
 
     def _get_tech_research_actions(self, player_id):
         """Get tech research selection actions (CACHED per turn).
@@ -2205,46 +2165,15 @@ class CivCom(Thread):
         return [action for score, action in scored_actions[:max_actions]]
 
     def get_full_state(self, player_id):
-        """Get complete game state - returns dict format for units/cities/players"""
-        # Ensure map_info has valid dimensions
-        map_info = getattr(self, 'map_info', {})
-        if not map_info or map_info.get('width', 0) < 1 or map_info.get('height', 0) < 1:
-            map_info = {'width': 80, 'height': 50, 'tiles': [], 'visibility': {}}
-
-        # Convert players list to dict keyed by ID
+        """Get complete game state - returns dict format for units/cities/players."""
+        map_info = self._get_valid_map_info()
         all_players_raw = getattr(self, 'all_players', [])
-        players_dict = {}
-        if isinstance(all_players_raw, list):
-            for p in all_players_raw:
-                if isinstance(p, dict) and 'id' in p:
-                    players_dict[str(p['id'])] = p
-        elif isinstance(all_players_raw, dict):
-            players_dict = all_players_raw
+        players_dict = self._normalize_to_dict(all_players_raw)
+        player_units_dict = self._filter_by_owner(self.player_units, player_id)
+        player_cities_dict = self._filter_by_owner(self.player_cities, player_id)
 
-        # Keep units as dict, filtering by player_id
-        units_dict = getattr(self, 'player_units', {})
-        player_units_dict = {}
-        if isinstance(units_dict, dict):
-            for unit_id, unit in units_dict.items():
-                if unit.get('owner') == player_id:
-                    player_units_dict[str(unit_id)] = unit
-            logger.info(f"✓ Filtered {len(player_units_dict)} units for player {player_id} from {len(units_dict)} total")
-
-        # Keep cities as dict, filtering by player_id
-        cities_dict = getattr(self, 'player_cities', {})
-        player_cities_dict = {}
-        if isinstance(cities_dict, dict):
-            for city_id, city in cities_dict.items():
-                if city.get('owner') == player_id:
-                    player_cities_dict[str(city_id)] = city
-            logger.debug(f"Filtered {len(player_cities_dict)} cities for player {player_id} from {len(cities_dict)} total")
-
-        # Ensure we always have valid game state values (defensive against early queries)
         game_turn = getattr(self, 'game_turn', 1)
         game_phase = getattr(self, 'game_phase', 'movement')
-
-        # CRITICAL: Always include 'game' dict at top level for agent-clash compatibility
-        # This dict is REQUIRED by freeciv_state.py validation
         game_dict = {
             'turn': game_turn,
             'phase': game_phase,
@@ -2252,53 +2181,66 @@ class CivCom(Thread):
             'current_player': player_id
         }
 
-        # Build techs dict from research_info (format: {'player0': [...], 'player1': [...]})
-        techs_dict = {}
-        research_info = getattr(self, 'research_info', {})
-        tech_defs = getattr(self, 'techs', {})
-
-        for player_id_key, research_packet in research_info.items():
-            # inventions[tech_id] contains state: '0'=UNKNOWN, '1'=PREREQS_KNOWN, '2'=KNOWN
-            inventions = research_packet.get('inventions', [])
-            known_tech_names = []
-
-            # inventions array maps: inventions[i] → tech_id (i+1)
-            for array_index, state in enumerate(inventions):
-                if state == '2':  # KNOWN
-                    tech_id = array_index + 1
-                    tech_def = tech_defs.get(tech_id)
-                    if tech_def and 'name' in tech_def:
-                        known_tech_names.append(tech_def['name'])
-
-            techs_dict[f'player{player_id_key}'] = known_tech_names
-
-        # Build wonders dict for all players (format: {'player0': [...], 'player1': [...]})
-        wonders_dict = {}
-        for p in all_players_raw:
-            if isinstance(p, dict) and 'id' in p:
-                pid = p['id']
-                wonders_dict[f'player{pid}'] = self.get_player_wonders(pid)
-
-        # Build spaceship dict for all players (format: {'player0': {...}, 'player1': {...}})
-        spaceship_dict = {}
-        spaceship_info = getattr(self, 'spaceship_info', {})
-        for pid, sship_data in spaceship_info.items():
-            spaceship_dict[f'player{pid}'] = sship_data
+        techs_dict = self._build_techs_dict()
+        wonders_dict = self._build_wonders_dict(all_players_raw)
+        spaceship_dict = self._build_spaceship_dict()
 
         return {
             'turn': game_turn,
             'phase': game_phase,
             'player_id': player_id,
-            'units': player_units_dict,  # Dict of player's units keyed by ID
-            'cities': player_cities_dict,  # Dict of player's cities keyed by ID
+            'units': player_units_dict,
+            'cities': player_cities_dict,
             'visible_tiles': getattr(self, 'visible_tiles', []),
-            'players': players_dict,  # Dict of all players keyed by ID
-            'techs': techs_dict,  # Dict of techs per player keyed by 'player{id}'
-            'wonders': wonders_dict,  # Dict of wonders per player keyed by 'player{id}'
-            'spaceship': spaceship_dict,  # Dict of spaceship data per player keyed by 'player{id}'
+            'players': players_dict,
+            'techs': techs_dict,
+            'wonders': wonders_dict,
+            'spaceship': spaceship_dict,
             'map': map_info,
-            'game': game_dict  # Required field - must always be present
+            'game': game_dict
         }
+
+    def _get_valid_map_info(self):
+        """Return map_info with valid dimensions or a default."""
+        map_info = getattr(self, 'map_info', {})
+        if not map_info or map_info.get('width', 0) < 1 or map_info.get('height', 0) < 1:
+            return {'width': 80, 'height': 50, 'tiles': [], 'visibility': {}}
+        return map_info
+
+    def _filter_by_owner(self, collection, owner_id):
+        """Filter a collection dict to items owned by owner_id."""
+        collection = self._normalize_to_dict(collection)
+        return {str(k): v for k, v in collection.items() if v.get('owner') == owner_id}
+
+    def _build_techs_dict(self):
+        """Build techs dict from research_info (format: {'player0': [...], ...})."""
+        research_info = getattr(self, 'research_info', {})
+        tech_defs = getattr(self, 'techs', {})
+        techs_dict = {}
+
+        for pid, research_packet in research_info.items():
+            inventions = research_packet.get('inventions', [])
+            known_tech_names = [
+                tech_defs.get(idx + 1, {}).get('name')
+                for idx, state in enumerate(inventions)
+                if state == '2' and tech_defs.get(idx + 1, {}).get('name')
+            ]
+            techs_dict[f'player{pid}'] = known_tech_names
+
+        return techs_dict
+
+    def _build_wonders_dict(self, all_players_raw):
+        """Build wonders dict for all players (format: {'player0': [...], ...})."""
+        return {
+            f'player{p["id"]}': self.get_player_wonders(p['id'])
+            for p in all_players_raw
+            if isinstance(p, dict) and 'id' in p
+        }
+
+    def _build_spaceship_dict(self):
+        """Build spaceship dict for all players (format: {'player0': {...}, ...})."""
+        spaceship_info = getattr(self, 'spaceship_info', {})
+        return {f'player{pid}': data for pid, data in spaceship_info.items()}
 
     def get_state_delta(self, player_id):
         """Get state changes since last query"""
