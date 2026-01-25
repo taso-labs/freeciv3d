@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.19](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.18...freeciv3d-v0.3.19) (2026-01-24)
+
+
+### Bug Fixes
+
+* **proxy:** Resolve match start failures with time module and port allocation fixes ([#79](https://github.com/taso-ventures/freeciv3d/issues/79)) ([a647395](https://github.com/taso-ventures/freeciv3d/commit/a647395a5db1aef4c2537deb1b29dcc7043a8fe2))
+
 ## [0.3.18](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.17...freeciv3d-v0.3.18) (2026-01-23)
 
 
