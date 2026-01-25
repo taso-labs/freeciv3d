@@ -539,6 +539,6 @@ void main()
     // Fog of war, and unknown tiles, are stored as a vertex color in vColor.r.
     c = c * vColor.r;
 
-    gl_FragColor.rgb = c * shade_factor;
+    gl_FragColor = vec4(c * shade_factor, 1.0);
 
 }

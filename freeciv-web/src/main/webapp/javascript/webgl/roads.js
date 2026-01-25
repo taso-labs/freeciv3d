@@ -30,6 +30,11 @@ function init_roads_image()
 
   roads_texture = new THREE.DataTexture(roads_data, map.xsize, map.ysize);
   roads_texture.flipY = true;
+  // Prevent color space conversion - texture contains raw integer data, not colors
+  roads_texture.colorSpace = THREE.NoColorSpace;
+  roads_texture.magFilter = THREE.NearestFilter;
+  roads_texture.minFilter = THREE.NearestFilter;
+  roads_texture.generateMipmaps = false;
 
   for (let x = 0; x < map.xsize; x++) {
     for (let y = 0; y < map.ysize; y++) {

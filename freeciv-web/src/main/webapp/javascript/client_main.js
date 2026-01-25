@@ -34,7 +34,14 @@ var width_offset = 10;
 **************************************************************************/
 function set_client_state(newstate)
 {
-  freelog(LOG_DEBUG, '[ClientState] set_client_state called with: ' + newstate + ' current: ' + civclient_state);
+  var stateNames = {0: 'C_S_INITIAL', 1: 'C_S_PREPARING', 2: 'C_S_RUNNING', 3: 'C_S_OVER'};
+  freelog(LOG_DEBUG, '[ClientState] set_client_state called with: ' + stateNames[newstate] + ' current: ' + stateNames[civclient_state]);
+
+  // Observer mode debugging: Log state transitions with context
+  if (typeof observing !== 'undefined' && observing) {
+    freelog(LOG_DEBUG, '[Observer] State transition: ' + stateNames[civclient_state] + ' -> ' + stateNames[newstate]);
+  }
+
   if (civclient_state != newstate) {
     civclient_state = newstate;
     freelog(LOG_DEBUG, '[ClientState] State changed, entering switch');
