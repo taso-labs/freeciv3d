@@ -2500,14 +2500,8 @@ class LLMWSHandler(websocket.WebSocketHandler):
         player_units = {uid: unit for uid, unit in units.items()
                         if unit.get('owner') == self.player_id}
 
-        # DEBUG: Log units before processing
-        logger.info(f"[DEBUG _get_legal_actions_optimized] Agent {self.agent_id}: "
-                   f"total units={len(units)}, player_units={len(player_units)}, player_id={self.player_id}")
-
         if state_extractor:
             # Use the comprehensive action generation from state_extractor
-            units_with_actions = 0
-            units_skipped = 0
             for unit_id_str, unit in player_units.items():
                 try:
                     unit_id = int(unit_id_str)
@@ -2516,7 +2510,6 @@ class LLMWSHandler(websocket.WebSocketHandler):
                     if result.get('error'):
                         error_code = result.get('error_code', '')
                         # E500 = internal error (warning), others like E230 = expected (debug)
-                        units_skipped += 1
                         if error_code.startswith('E5'):
                             logger.warning(f"Error getting actions for unit {unit_id}: {result.get('error')}")
                         else:
@@ -2527,20 +2520,10 @@ class LLMWSHandler(websocket.WebSocketHandler):
                     formatted_actions = self._format_unit_actions_for_response(unit_id, result)
                     if formatted_actions:
                         actions_by_actor[unit_id_str] = formatted_actions
-                        units_with_actions += 1
-                        logger.info(f"[DEBUG] Unit {unit_id} generated {len(formatted_actions)} actions")
-                    else:
-                        units_skipped += 1
-                        logger.info(f"[DEBUG] Unit {unit_id} had no formatted actions")
 
                 except (ValueError, TypeError) as e:
-                    units_skipped += 1
                     logger.warning(f"Invalid unit_id '{unit_id_str}': {e}")
                     continue
-
-            # DEBUG: Log summary after processing all units
-            logger.info(f"[DEBUG _get_legal_actions_optimized] Agent {self.agent_id} unit processing: "
-                       f"with_actions={units_with_actions}, skipped={units_skipped}, total_player_units={len(player_units)}")
         else:
             # Fallback: generate basic actions without state_extractor
             logger.warning("StateExtractor unavailable, using fallback action generation")

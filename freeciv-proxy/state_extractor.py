@@ -468,13 +468,9 @@ class StateExtractor:
             if format_type == StateFormat.DELTA and since_turn is not None:
                 state = self._extract_delta_state(game_id, player_id, since_turn, civcom)
             elif format_type == StateFormat.LLM_OPTIMIZED:
-                # CRITICAL FIX: Use civcom.build_llm_optimized_state() directly
-                # It already includes legal_actions from _get_legal_actions_optimized()
-                # Don't use get_full_state() which lacks legal_actions
-                logger.info(f"[STATE_EXTRACTOR] Using civcom.build_llm_optimized_state() for player {player_id}")
+                # Use civcom.build_llm_optimized_state() directly as it already
+                # includes legal_actions from _get_legal_actions_optimized()
                 state = civcom.build_llm_optimized_state(player_id)
-                legal_count = len(state.get('legal_actions', []))
-                logger.info(f"[STATE_EXTRACTOR] Got state with {legal_count} legal_actions")
             else:
                 raw_state = civcom.get_full_state(player_id)
 
@@ -697,30 +693,10 @@ class StateExtractor:
         elif action_type in ['change_production', 'city_production']:
             production = params.get('to', params.get('production', ''))
 
-            # EXTENSIVE LOGGING: Track where empty production names come from
-            logger.info(f"[NORMALIZE_ACTION] Processing city_production action:")
-            logger.info(f"[NORMALIZE_ACTION]   action_type={action_type}")
-            logger.info(f"[NORMALIZE_ACTION]   params keys={list(params.keys())}")
-            logger.info(f"[NORMALIZE_ACTION]   params.get('to')='{params.get('to')}'")
-            logger.info(f"[NORMALIZE_ACTION]   params.get('production')='{params.get('production')}'")
-            logger.info(f"[NORMALIZE_ACTION]   extracted production='{production}' (len={len(production) if production else 0})")
-            logger.info(f"[NORMALIZE_ACTION]   full action dict keys={list(action.keys())[:15]}")
-
-            # Also check if action has production_name directly
-            if 'production_name' in action:
-                logger.info(f"[NORMALIZE_ACTION]   action['production_name']='{action.get('production_name')}'")
-
-            # VALIDATION: Skip invalid city_production actions without a production target
-            # This prevents sending malformed actions to agents that will always fail
+            # Skip invalid city_production actions without a production target
             if not production or production == '':
-                logger.warning(
-                    f"[NORMALIZE_ACTION] ⚠️ SKIPPING invalid city_production action: no production target. "
-                    f"action_type={action_type}, params={params}, city_id={action.get('city_id', 0)}, "
-                    f"full_action={action}"
-                )
-                return None  # Skip this action - it will fail if sent to agents
-
-            logger.info(f"[NORMALIZE_ACTION] ✓ Valid city_production action with production='{production}'")
+                logger.warning(f"Skipping invalid city_production action: no production target for city_id={action.get('city_id', 0)}")
+                return None
             return {
                 'type': 'city_production',
                 'city_id': action.get('city_id', 0),
@@ -2230,43 +2206,26 @@ class StateExtractor:
         civcom = self._get_civcom_for_player(player_id)
         
         if civcom and hasattr(civcom, '_get_legal_actions_optimized'):
-            # Use the new optimized action generator with smart caching
-            logger.debug("Using civcom._get_legal_actions_optimized() for action generation")
+            # Use the optimized action generator with smart caching
             try:
                 actions = civcom._get_legal_actions_optimized(player_id)
-                logger.info(f"[STATE_EXTRACTOR] Generated {len(actions)} actions via civcom._get_legal_actions_optimized()")
 
-                # Log city_production actions received from civcom
-                city_prod_actions = [a for a in actions if a.get('type') == 'city_production']
-                logger.info(f"[STATE_EXTRACTOR] Received {len(city_prod_actions)} city_production actions from civcom")
-                for i, action in enumerate(city_prod_actions[:3]):  # Log first 3
-                    prod_name = action.get('production_name', '<MISSING>')
-                    logger.info(f"[STATE_EXTRACTOR] city_prod[{i}]: production_name='{prod_name}', city_name='{action.get('city_name')}', keys={list(action.keys())}")
-
-                # Add priority field if not present (for sorting)
-                # AND transform civcom format to agent-clash expected format
+                # Add priority field if not present and transform format for agent-clash
                 for action in actions:
                     if 'priority' not in action:
                         action['priority'] = self._get_default_priority(action.get('type'))
                     if 'is_valid' not in action:
                         action['is_valid'] = True
 
-                    # CRITICAL FIX: Transform city_production format for agent-clash
+                    # Transform city_production format for agent-clash:
                     # civcom format: {'type': 'city_production', 'production_name': 'Granary'}
                     # agent-clash expects: {'type': 'city_production', 'target': {'production': 'Granary'}}
                     if action.get('type') == 'city_production' and 'production_name' in action:
                         production_name = action['production_name']
-                        logger.info(f"[STATE_EXTRACTOR] Transforming action with production_name='{production_name}' (len={len(production_name) if production_name else 0})")
-
-                        # Check for empty production_name
-                        if not production_name or production_name == '':
-                            logger.error(f"[STATE_EXTRACTOR] ⚠️⚠️⚠️ FOUND EMPTY production_name! Full action: {action}")
-
                         if 'target' not in action:
                             action['target'] = {}
                         action['target']['production'] = production_name
 
-                logger.info(f"[STATE_EXTRACTOR] Returning {len(actions)} actions after transformation")
                 return actions
             except Exception as e:
                 logger.warning(f"Failed to use _get_legal_actions_optimized: {e}, falling back to legacy generator")
