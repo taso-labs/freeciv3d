@@ -372,7 +372,12 @@ class CivCom(Thread):
         # Cache keys: "{turn}_{player_id}_city_actions" and "{turn}_{player_id}_tech_actions"
         # Unit actions are NOT cached because every unit move affects other units' possibilities
         self._action_cache = {}  # {cache_key: list of action dicts}
-        
+
+        # Wonder cache - stores per-player wonder lists to avoid O(n×m) lookup
+        # Cache keys: "{player_id}_wonders"
+        # Invalidated when city info packets arrive (improvement construction changes)
+        self._wonder_cache = {}  # {player_id: [wonder_names]}
+
         # Game settings from PACKET_GAME_INFO
         self.citymindist = DEFAULT_CITYMINDIST  # Minimum distance between cities
         self.game_timeout = None  # Turn timeout for pause/resume functionality
@@ -693,7 +698,10 @@ class CivCom(Thread):
         return False
 
     def get_player_wonders(self, player_id: int) -> list:
-        """Get list of all wonders a player has built.
+        """Get list of all wonders a player has built (CACHED).
+
+        Uses wonder cache to avoid O(n×m) iteration over improvements×cities.
+        Cache is invalidated when city info packets arrive (improvement changes).
 
         Args:
             player_id: The player ID to check
@@ -701,12 +709,22 @@ class CivCom(Thread):
         Returns:
             List of wonder names the player has built
         """
+        cache_key = f"{player_id}_wonders"
+
+        # Check cache first
+        if cache_key in self._wonder_cache:
+            return self._wonder_cache[cache_key]
+
+        # Cache miss - build wonder list
         wonders = []
         for impr_id, impr in self.improvements.items():
             if self.is_wonder(impr_id):
                 wonder_name = impr.get('name', '')
                 if wonder_name and self.player_has_wonder(player_id, wonder_name):
                     wonders.append(wonder_name)
+
+        # Store in cache
+        self._wonder_cache[cache_key] = wonders
         return wonders
 
     def can_city_build_unit(self, city: dict, unit_type_id: int) -> bool:
@@ -1538,6 +1556,8 @@ class CivCom(Thread):
                         self.player_cities = {}
 
                     self.player_cities[city_id] = city_data
+                    # Invalidate wonder cache for this player (city improvements may have changed)
+                    self._wonder_cache.pop(f"{owner}_wonders", None)
                     logger.info(f"✓ Stored city {city_id} ({city_data['name']}, size={city_data['size']}) for owner {owner}")
 
             # Web city info addition packet - contains buildable units/improvements as bitvectors
@@ -1742,31 +1762,40 @@ class CivCom(Thread):
             # Packet structure from packets.def: player_num, sship_state, structurals, components, etc.
             elif packet_type == PACKET_SPACESHIP_INFO:
                 player_num = packet.get('player_num')
-                if player_num is not None:
+                # Validate packet structure and required fields
+                if player_num is not None and isinstance(player_num, int):
+                    # Validate spaceship state is valid (0-3)
+                    sship_state = packet.get('sship_state', 0)
+                    if not isinstance(sship_state, int) or not (0 <= sship_state <= 3):
+                        logger.warning(f"Invalid sship_state for player {player_num}: {sship_state}, defaulting to 0")
+                        sship_state = 0
+
                     # Store spaceship data for this player
                     # sship_state: 0=NONE, 1=STARTED, 2=LAUNCHED, 3=ARRIVED
                     self.spaceship_info[player_num] = {
-                        'state': packet.get('sship_state', 0),
-                        'structurals': packet.get('structurals', 0),
-                        'components': packet.get('components', 0),
-                        'modules': packet.get('modules', 0),
-                        'fuel': packet.get('fuel', 0),
-                        'propulsion': packet.get('propulsion', 0),
-                        'habitation': packet.get('habitation', 0),
-                        'life_support': packet.get('life_support', 0),
-                        'solar_panels': packet.get('solar_panels', 0),
-                        'success_rate': packet.get('success_rate', 0.0),
-                        'travel_time': packet.get('travel_time', 0.0),
-                        'launch_year': packet.get('launch_year', 9999),
-                        'population': packet.get('population', 0),
-                        'mass': packet.get('mass', 0),
+                        'state': sship_state,
+                        'structurals': int(packet.get('structurals', 0)),
+                        'components': int(packet.get('components', 0)),
+                        'modules': int(packet.get('modules', 0)),
+                        'fuel': int(packet.get('fuel', 0)),
+                        'propulsion': int(packet.get('propulsion', 0)),
+                        'habitation': int(packet.get('habitation', 0)),
+                        'life_support': int(packet.get('life_support', 0)),
+                        'solar_panels': int(packet.get('solar_panels', 0)),
+                        'success_rate': float(packet.get('success_rate', 0.0)),
+                        'travel_time': float(packet.get('travel_time', 0.0)),
+                        'launch_year': int(packet.get('launch_year', 9999)),
+                        'population': int(packet.get('population', 0)),
+                        'mass': int(packet.get('mass', 0)),
                     }
                     logger.debug(
                         f"Updated spaceship info for player {player_num}: "
-                        f"state={packet.get('sship_state')}, "
+                        f"state={sship_state}, "
                         f"structurals={packet.get('structurals')}, "
                         f"modules={packet.get('modules')}"
                     )
+                else:
+                    logger.warning(f"Invalid or missing player_num in PACKET_SPACESHIP_INFO: {player_num}")
 
             # RULESET terrain packet - defines terrain types (Plains, Ocean, Hills, etc.)
             # Used for movement cost calculations and action validity checks
@@ -1833,7 +1862,8 @@ class CivCom(Thread):
         if isinstance(collection, dict):
             return collection
         if isinstance(collection, list):
-            return {str(item.get('id', i)): item for i, item in enumerate(collection) if isinstance(item, dict)}
+            # Use prefixed fallback IDs to avoid collision with real numeric IDs
+            return {str(item.get('id', f'fallback_{i}')): item for i, item in enumerate(collection) if isinstance(item, dict)}
         return {}
 
     def handle_state_query(self, player_id, format='full'):
@@ -1999,12 +2029,16 @@ class CivCom(Thread):
     def _get_city_production_actions(self, player_id, max_cities=3):
         """Get per-city production change actions (CACHED per turn).
 
+        Generates production change actions for ALL cities owned by the player,
+        allowing agents to strategically change city production at any time.
+        FreeCiv allows production changes mid-build (with shield penalty).
+
         Args:
             player_id: The player ID
             max_cities: Maximum number of cities to generate actions for
 
         Returns:
-            list: List of city production action dicts
+            list: List of city production action dicts, one per buildable unit/improvement per city
         """
         cache_key = f"{self.game_turn}_{player_id}_city_actions"
         if cache_key in self._action_cache:
