@@ -30,6 +30,11 @@ function init_map_tiletype_image()
 
   maptiletypes = new THREE.DataTexture(maptiles_data, map.xsize, map.ysize);
   maptiletypes.flipY = true;
+  // Prevent color space conversion - texture contains raw integer data, not colors
+  maptiletypes.colorSpace = THREE.NoColorSpace;
+  maptiletypes.magFilter = THREE.NearestFilter;
+  maptiletypes.minFilter = THREE.NearestFilter;
+  maptiletypes.generateMipmaps = false;
 
   for (let x = 0; x < map.xsize; x++) {
     for (let y = 0; y < map.ysize; y++) {

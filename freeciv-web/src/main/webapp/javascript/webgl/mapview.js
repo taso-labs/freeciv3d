@@ -133,7 +133,16 @@ function webgl_start_renderer()
   if (!webgpu) {
     maprenderer = new THREE.WebGLRenderer( { antialias: enable_antialiasing, preserveDrawingBuffer: true } );
 
+    // Keep LinearSRGBColorSpace - SRGBColorSpace causes washed out sprites/models
+    // The P3 display fix is handled by drawingBufferColorSpace and shader alpha init
     maprenderer.outputColorSpace = THREE.LinearSRGBColorSpace;
+
+    // Fix for Chrome P3 display color management issue
+    // Explicitly tell compositor to treat WebGL output as sRGB, not P3
+    var gl = maprenderer.getContext();
+    if (gl.drawingBufferColorSpace !== undefined) {
+      gl.drawingBufferColorSpace = 'srgb';
+    }
 
   } else {
     maprenderer = new THREE.WebGPURenderer( { antialias: enable_antialiasing, preserveDrawingBuffer: true } );

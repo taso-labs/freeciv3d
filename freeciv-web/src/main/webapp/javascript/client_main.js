@@ -39,7 +39,7 @@ function set_client_state(newstate)
 
   // Observer mode debugging: Log state transitions with context
   if (typeof observing !== 'undefined' && observing) {
-    console.log('[Observer Debug] State transition: ' + stateNames[civclient_state] + ' -> ' + stateNames[newstate]);
+    freelog(LOG_DEBUG, '[Observer] State transition: ' + stateNames[civclient_state] + ' -> ' + stateNames[newstate]);
   }
 
   if (civclient_state != newstate) {

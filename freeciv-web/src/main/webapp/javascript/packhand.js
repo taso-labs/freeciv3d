@@ -585,7 +585,7 @@ function handle_ruleset_control(packet)
   // ruleset packets that would incorrectly reset the first observer's state
   // from C_S_RUNNING back to C_S_PREPARING, breaking map rendering.
   if (client_state() === C_S_RUNNING && client_is_observer()) {
-    console.log('[Observer] Skipping state reset in handle_ruleset_control - already running as observer');
+    freelog(LOG_DEBUG, '[Observer] Skipping state reset in handle_ruleset_control - already running as observer');
     return;
   }
 
