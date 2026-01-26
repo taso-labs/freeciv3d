@@ -1221,6 +1221,11 @@ class LLMWSHandler(websocket.WebSocketHandler):
             if "unit_id" in action_data:
                 normalized["unit_id"] = action_data["unit_id"]
 
+            # Extract city name from target dict (agent-clash sends target.name)
+            target = action_data.get("target", {})
+            if isinstance(target, dict) and "name" in target:
+                normalized["name"] = target["name"]
+
         elif action_type == "end_turn":
             # end_turn is simple - just needs player_id (already mapped above)
             # No additional fields required
@@ -1336,6 +1341,11 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 result["unit_id"] = params["actor_id"]
             elif "unit_id" in params:
                 result["unit_id"] = params["unit_id"]
+
+            # Extract city name from target dict (agent-clash sends target.name)
+            target = params.get("target", {})
+            if isinstance(target, dict) and "name" in target:
+                result["name"] = target["name"]
 
             if "player" in params:
                 result["player_id"] = params["player"]

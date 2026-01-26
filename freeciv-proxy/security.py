@@ -33,6 +33,7 @@ class InputSanitizer:
         'tech_name': r'^[a-zA-Z0-9_\s\'\.\-]{1,48}$',  # Technology names (allow apostrophe, period, hyphen)
         'unit_type': r'^[a-zA-Z0-9_\s\'\.\-]{1,48}$',  # Unit types (allow apostrophe, period, hyphen)
         'production_type': r'^[a-zA-Z0-9_\s\'\.\-]{1,48}$',  # Production types (allow apostrophe, period, hyphen)
+        'city_name': r'^[a-zA-Z0-9_\s\'\.\-]{1,48}$',  # City names (allow apostrophe, period, hyphen, spaces)
         'game_phase': r'^[a-zA-Z0-9_]{1,20}$',  # Game phases
     }
 
@@ -221,6 +222,9 @@ class InputSanitizer:
                 sanitized['unit_id'] = cls.sanitize_unit_id(action['unit_id'])
             if 'player_id' in action:
                 sanitized['player_id'] = cls.sanitize_player_id(action['player_id'])
+            # Preserve city name from normalization
+            if 'name' in action:
+                sanitized['name'] = cls.sanitize_string_field(action['name'], 'city_name')
 
         # Generic handler for all other unit_* actions (unit_build_road, unit_fortify, etc.)
         elif action_type.startswith('unit_'):
