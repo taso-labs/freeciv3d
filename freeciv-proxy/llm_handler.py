@@ -2269,7 +2269,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 unit_count = sum(1 for k in legal_actions.keys() if k != 'player')
 
                 # Strategic logging for AGE-299: track legal_actions fetches per turn
-                logger.warning(
+                logger.info(
                     f"Legal actions fetched: agent={self.agent_id}, turn={full_state.get('turn', 'unknown')}, "
                     f"total_actions={total_actions}, units_with_actions={unit_count}"
                 )

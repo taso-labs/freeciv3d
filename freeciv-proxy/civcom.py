@@ -34,6 +34,7 @@ from packet_constants import (
     PACKET_UNIT_REMOVE,
     PACKET_UNIT_SHORT_INFO,
     PACKET_CITY_INFO,
+    PACKET_CITY_REMOVE,
     PACKET_TILE_INFO,
     PACKET_CHAT_MSG,
     PACKET_RULESET_NATION,
@@ -1564,6 +1565,25 @@ class CivCom(Thread):
                     self._wonder_cache.pop(f"{owner}_wonders", None)
                     logger.info(f"✓ Stored city {city_id} ({city_data['name']}, size={city_data['size']}) for owner {owner}")
 
+            # City removal packet - sent when a city is destroyed or disbanded
+            # Must invalidate wonder cache as wonders may be lost
+            elif packet_type == PACKET_CITY_REMOVE:
+                city_id = packet.get('city_id')
+                if city_id is not None and city_id in self.player_cities:
+                    # Get owner before removing city
+                    removed_city = self.player_cities[city_id]
+                    owner = removed_city.get('owner')
+                    city_name = removed_city.get('name', f'City{city_id}')
+
+                    # Remove city from tracking
+                    del self.player_cities[city_id]
+
+                    # Invalidate wonder cache for previous owner (wonders may be lost)
+                    if owner is not None:
+                        self._wonder_cache.pop(f"{owner}_wonders", None)
+
+                    logger.info(f"✓ Removed city {city_id} ({city_name}) for owner {owner}")
+
             # Web city info addition packet - contains buildable units/improvements as bitvectors
             # This packet follows PACKET_CITY_INFO and provides additional web-specific data
             elif packet_type == PACKET_WEB_CITY_INFO_ADDITION:
@@ -1774,23 +1794,24 @@ class CivCom(Thread):
                         logger.warning(f"Invalid sship_state for player {player_num}: {sship_state}, defaulting to 0")
                         sship_state = 0
 
-                    # Store spaceship data for this player
+                    # Store spaceship data for this player with bounds validation
                     # sship_state: 0=NONE, 1=STARTED, 2=LAUNCHED, 3=ARRIVED
+                    # Clamp values to prevent corruption of victory calculations
                     self.spaceship_info[player_num] = {
                         'state': sship_state,
-                        'structurals': int(packet.get('structurals', 0)),
-                        'components': int(packet.get('components', 0)),
-                        'modules': int(packet.get('modules', 0)),
-                        'fuel': int(packet.get('fuel', 0)),
-                        'propulsion': int(packet.get('propulsion', 0)),
-                        'habitation': int(packet.get('habitation', 0)),
-                        'life_support': int(packet.get('life_support', 0)),
-                        'solar_panels': int(packet.get('solar_panels', 0)),
-                        'success_rate': float(packet.get('success_rate', 0.0)),
-                        'travel_time': float(packet.get('travel_time', 0.0)),
-                        'launch_year': int(packet.get('launch_year', 9999)),
-                        'population': int(packet.get('population', 0)),
-                        'mass': int(packet.get('mass', 0)),
+                        'structurals': max(0, min(100, int(packet.get('structurals', 0)))),
+                        'components': max(0, min(100, int(packet.get('components', 0)))),
+                        'modules': max(0, min(100, int(packet.get('modules', 0)))),
+                        'fuel': max(0, min(200, int(packet.get('fuel', 0)))),
+                        'propulsion': max(0, min(100, int(packet.get('propulsion', 0)))),
+                        'habitation': max(0, min(100, int(packet.get('habitation', 0)))),
+                        'life_support': max(0, min(100, int(packet.get('life_support', 0)))),
+                        'solar_panels': max(0, min(100, int(packet.get('solar_panels', 0)))),
+                        'success_rate': max(0.0, min(100.0, float(packet.get('success_rate', 0.0)))),
+                        'travel_time': max(0.0, min(999.0, float(packet.get('travel_time', 0.0)))),
+                        'launch_year': max(0, min(9999, int(packet.get('launch_year', 9999)))),
+                        'population': max(0, min(100000, int(packet.get('population', 0)))),
+                        'mass': max(0, min(10000, int(packet.get('mass', 0)))),
                     }
                     logger.debug(
                         f"Updated spaceship info for player {player_num}: "
