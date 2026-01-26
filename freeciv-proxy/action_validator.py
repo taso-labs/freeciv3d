@@ -477,22 +477,34 @@ class LLMActionValidator:
         tech_name = action['tech_name']
 
         # CHANGED: Case-insensitive tech validation with expanded tech list
-        # FreeCiv standard tech tree (common techs across rulesets)
+        # FreeCiv standard tech tree expanded to 66 techs
+        # Enables full era progression: Ancient → Classical → Medieval → Renaissance → Industrial → Modern
         valid_techs = [
-            # Ancient techs
+            # Ancient era (0-5 tech count)
             'alphabet', 'animal_husbandry', 'agriculture', 'pottery',
             'mining', 'bronze_working', 'the_wheel', 'writing',
             'ceremonial_burial', 'code_of_laws', 'horseback_riding',
             'iron_working', 'mapmaking', 'masonry', 'mysticism',
-            # Classical techs
+            # Classical era (6-15 tech count)
             'mathematics', 'construction', 'currency', 'literacy',
             'philosophy', 'republic', 'monarchy', 'seafaring',
             'trade', 'university', 'warrior_code',
-            # Medieval techs
+            # Medieval era (16-25 tech count)
             'astronomy', 'banking', 'chemistry', 'chivalry',
             'democracy', 'economics', 'engineering', 'feudalism',
             'gunpowder', 'invention', 'medicine', 'metallurgy',
-            'navigation', 'physics', 'theology'
+            'navigation', 'physics', 'theology',
+            # Renaissance era (26-35 tech count)
+            'printing_press', 'colonization', 'magnetism', 'leadership',
+            'tactics',
+            # Industrial era (36-45 tech count)
+            'steam_engine', 'railroad', 'steel', 'electricity',
+            'sanitation', 'refrigeration', 'conscription', 'explosives',
+            'corporation', 'refining',
+            # Modern era (46+ tech count)
+            'combustion', 'automobile', 'flight', 'radio',
+            'electronics', 'mass_production', 'plastics', 'atomic_theory',
+            'rocketry', 'computers'
         ]
 
         # Case-insensitive comparison

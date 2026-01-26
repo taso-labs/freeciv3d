@@ -19,14 +19,16 @@ def create_mock_civcom():
     civcom.tiles = {}
     civcom.unit_classes = {}
     civcom.map_info = {'width': 80, 'height': 50}
-    
+
     # Bind the real methods we want to test
+    civcom._normalize_to_dict = CivCom._normalize_to_dict.__get__(civcom)
+    civcom._make_production_action = CivCom._make_production_action.__get__(civcom)
     civcom._get_city_production_actions = CivCom._get_city_production_actions.__get__(civcom)
     civcom._get_tech_research_actions = CivCom._get_tech_research_actions.__get__(civcom)
     civcom._get_unit_actions = CivCom._get_unit_actions.__get__(civcom)
     civcom._get_legal_actions_optimized = CivCom._get_legal_actions_optimized.__get__(civcom)
     civcom._is_city_producing_coinage = CivCom._is_city_producing_coinage.__get__(civcom)
-    
+
     return civcom
 
 
@@ -67,7 +69,8 @@ class TestCityProductionPreconditions:
             assert action['city_id'] == '1'
             assert action['city_name'] == 'TestCity'
             assert action['reason'] == 'finished'
-            assert 'production_name' in action
+            assert 'target' in action
+            assert 'production_type' in action['target']
             assert 'production_kind' in action
             assert 'production_value' in action
         
@@ -113,7 +116,7 @@ class TestCityProductionPreconditions:
             assert action['reason'] == 'coinage'
 
     def test_no_city_production_actions_mid_production(self):
-        """Test that NO production actions are generated when city is mid-production"""
+        """Test that production actions ARE generated when city is mid-production (agents can change production)"""
         civcom = create_mock_civcom()
         civcom.game_turn = 10
         civcom.player_cities = {
@@ -135,11 +138,14 @@ class TestCityProductionPreconditions:
         civcom.improvements = {
             1: {'id': 1, 'name': 'Barracks'}
         }
-        
+
         actions = civcom._get_city_production_actions(player_id=0, max_cities=3)
-        
-        # Should NOT generate any actions
-        assert len(actions) == 0
+
+        # SHOULD generate actions (mid-production filter removed in commit 422229875a)
+        # FreeCiv allows production changes at any time (with shield penalty)
+        assert len(actions) > 0
+        for action in actions:
+            assert action['type'] == 'city_production'
 
     def test_city_production_actions_multiple_cities(self):
         """Test production actions for multiple cities with different states"""
@@ -158,7 +164,7 @@ class TestCityProductionPreconditions:
                 'id': 2,
                 'name': 'City2',
                 'owner': 0,
-                'shield_stock': 30,  # Mid-production (skip)
+                'shield_stock': 30,  # Mid-production (allowed)
                 'production_kind': VUT_UTYPE,
                 'production_value': 1,
                 'x': 20,
@@ -177,14 +183,14 @@ class TestCityProductionPreconditions:
             1: {'id': 1, 'name': 'Warriors'}
         }
         civcom.improvements = {}
-        
+
         actions = civcom._get_city_production_actions(player_id=0, max_cities=3)
-        
-        # Should only generate actions for City1 and City3 (not City2)
+
+        # Should generate actions for all cities (mid-production filter removed)
         city_ids = set(a['city_id'] for a in actions)
         assert '1' in city_ids
+        assert '2' in city_ids  # Now included (production changes allowed anytime)
         assert '3' in city_ids
-        assert '2' not in city_ids
 
     def test_city_production_respects_max_cities_limit(self):
         """Test that max_cities parameter limits action generation"""
@@ -738,7 +744,7 @@ class TestCityProductionBuildPermissions:
 
         # Should only include Warriors (unit 0)
         assert len(actions) == 1
-        assert actions[0]['production_name'] == 'Warriors'
+        assert actions[0]['target']['production_type'] == 'Warriors'
         assert actions[0]['production_kind'] == VUT_UTYPE
 
     def test_city_production_filters_by_can_build_improvement(self):
@@ -774,7 +780,7 @@ class TestCityProductionBuildPermissions:
 
         # Should only include Granary (improvement 1)
         assert len(actions) == 1
-        assert actions[0]['production_name'] == 'Granary'
+        assert actions[0]['target']['production_type'] == 'Granary'
         assert actions[0]['production_kind'] == VUT_IMPROVEMENT
 
     def test_city_production_allows_all_when_no_bitvector(self):
@@ -859,10 +865,10 @@ class TestCityProductionBuildPermissions:
         city2_actions = [a for a in actions if a['city_name'] == 'City2']
 
         assert len(city1_actions) == 1
-        assert city1_actions[0]['production_name'] == 'Warriors'
+        assert city1_actions[0]['target']['production_type'] == 'Warriors'
 
         assert len(city2_actions) == 1
-        assert city2_actions[0]['production_name'] == 'Settlers'
+        assert city2_actions[0]['target']['production_type'] == 'Settlers'
 
 
 class TestCacheInvalidation:
