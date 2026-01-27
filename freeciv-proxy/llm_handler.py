@@ -112,6 +112,14 @@ GAME_INFO_WAIT_TIMEOUT_SEC = 2.0  # Max wait for PACKET_GAME_INFO
 GAME_INFO_POLL_INTERVAL_SEC = 0.1  # Polling interval
 GAME_INFO_LOG_INTERVAL_SEC = 0.5  # Debug log frequency
 
+# Unit actions that require movement points
+# Used for local moves tracking in pre-submission validation
+UNIT_ACTIONS_REQUIRING_MOVES = frozenset([
+    'unit_move', 'unit_sentry', 'unit_fortify', 'unit_board',
+    'unit_unload', 'unit_build_road', 'unit_build_mine',
+    'unit_build_irrigation', 'unit_pillage', 'unit_explore'
+])
+
 # Nation ID mapping for common civilizations
 # These IDs correspond to the FreeCiv nation definitions
 NATION_MAP = {
@@ -1482,22 +1490,18 @@ class LLMWSHandler(websocket.WebSocketHandler):
             # This MUST run BEFORE action_validator to catch stale actions using local tracking
             # action_validator also checks moves_left but uses cached state which may be stale
             action_type = sanitized_action.get('type')
-            unit_actions_requiring_moves = (
-                'unit_move', 'unit_sentry', 'unit_fortify', 'unit_board',
-                'unit_unload', 'unit_build_road', 'unit_build_mine',
-                'unit_build_irrigation', 'unit_pillage', 'unit_explore'
-            )
 
-            if action_type in unit_actions_requiring_moves and self.civcom:
+            if action_type in UNIT_ACTIONS_REQUIRING_MOVES and self.civcom:
                 unit_id = sanitized_action.get('unit_id') or sanitized_action.get('actor_id')
                 if unit_id:
                     game_state = self._get_current_game_state()
                     current_turn = game_state.get('turn') if game_state else None
 
                     # Reset local tracking on turn change
+                    # Update last_tracked_turn BEFORE clearing to reduce race condition window
                     if current_turn is not None and current_turn != self.last_tracked_turn:
-                        self.unit_moves_consumed.clear()
                         self.last_tracked_turn = current_turn
+                        self.unit_moves_consumed.clear()
                         logger.debug(
                             f"Reset moves tracking for turn {current_turn}: agent={self.agent_id}"
                         )
@@ -1597,14 +1601,14 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 # Track consumed moves locally after successful submission
                 # This prevents rapid successive actions from bypassing stale cache
                 action_type = sanitized_action.get('type')
-                if action_type in ('unit_move', 'unit_sentry', 'unit_fortify', 'unit_board',
-                                   'unit_unload', 'unit_build_road', 'unit_build_mine',
-                                   'unit_build_irrigation', 'unit_pillage', 'unit_explore'):
+                if action_type in UNIT_ACTIONS_REQUIRING_MOVES:
                     unit_id = sanitized_action.get('unit_id') or sanitized_action.get('actor_id')
                     if unit_id:
                         unit_id_int = int(unit_id)
-                        # Increment consumed moves (most actions consume 1 move point)
-                        # This is approximate - some actions may consume more, but 1 is safe
+                        # Increment consumed moves (conservative tracking: always increment by 1)
+                        # NOTE: Some actions consume more than 1 move (e.g., moving through difficult terrain).
+                        # This conservative approach may allow actions that will be rejected by the server,
+                        # but ensures we never incorrectly block valid actions. The server is authoritative.
                         self.unit_moves_consumed[unit_id_int] = self.unit_moves_consumed.get(unit_id_int, 0) + 1
                         logger.debug(
                             f"Tracked move consumed: agent={self.agent_id}, unit_id={unit_id}, "

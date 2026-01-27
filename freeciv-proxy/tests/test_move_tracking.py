@@ -64,11 +64,11 @@ class TestLocalMovesTracking:
         self.handler.unit_moves_consumed[unit_id] = 3
         self.handler.last_tracked_turn = 10
 
-        # Simulate turn change
+        # Simulate turn change (update last_tracked_turn first to reduce race condition)
         current_turn = 11
         if current_turn != self.handler.last_tracked_turn:
-            self.handler.unit_moves_consumed.clear()
             self.handler.last_tracked_turn = current_turn
+            self.handler.unit_moves_consumed.clear()
 
         assert self.handler.unit_moves_consumed == {}
         assert self.handler.last_tracked_turn == 11
