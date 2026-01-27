@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.22](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.21...freeciv3d-v0.3.22) (2026-01-27)
+
+
+### Bug Fixes
+
+* Resolve observer race condition causing black terrain in multi-observer views ([#85](https://github.com/taso-ventures/freeciv3d/issues/85)) ([e8e653c](https://github.com/taso-ventures/freeciv3d/commit/e8e653cbc1beedb756836c7be924430b7e4bac03))
+
 ## [0.3.21](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.20...freeciv3d-v0.3.21) (2026-01-26)
 
 
