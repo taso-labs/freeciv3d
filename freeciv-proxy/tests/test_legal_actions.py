@@ -62,11 +62,11 @@ class TestLegalActionNormalization:
         }
         
         normalized = extractor._normalize_action_format(internal_action)
-        
+
         assert normalized is not None
         assert normalized['type'] == 'city_production'
         assert normalized['city_id'] == 7
-        assert normalized['production_type'] == 'Warrior'
+        assert normalized['target']['production'] == 'Warrior'
 
     def test_normalize_tech_research_action(self):
         """Test normalizing tech research action"""

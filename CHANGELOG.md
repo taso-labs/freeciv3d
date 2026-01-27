@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.21](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.20...freeciv3d-v0.3.21) (2026-01-26)
+
+
+### Bug Fixes
+
+* **proxy:** production field pipeline cleanup, spaceship/wonder tracking, and debug logging removal ([#81](https://github.com/taso-ventures/freeciv3d/issues/81)) ([f246839](https://github.com/taso-ventures/freeciv3d/commit/f246839c3ddf623984e8236d05c989157c8fbe96))
+
 ## [0.3.20](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.19...freeciv3d-v0.3.20) (2026-01-25)
 
 

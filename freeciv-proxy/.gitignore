@@ -4,6 +4,9 @@
 # Configuration files
 settings.ini
 
+# Docker local overrides
+docker-compose.override.yml
+
 # Python bytecode
 __pycache__/
 *.py[cod]

@@ -1205,21 +1205,14 @@ class LLMWSHandler(websocket.WebSocketHandler):
             if "city_id" in action_data:
                 normalized["city_id"] = action_data["city_id"]
 
+            # Extract production_type from target dict (civcom always sends this field)
             target = action_data.get("target", {})
             if isinstance(target, dict):
-                # Support multiple field names for production
-                if "production_type" in target:
-                    production = target["production_type"]
-                elif "value" in target:
-                    production = target["value"]
-                elif "production" in target:
-                    production = target["production"]
-                else:
-                    production = action_data.get("production_type", "")
+                production = target.get("production_type", "")
             elif isinstance(target, str):
                 production = target
             else:
-                production = action_data.get("production_type", "")
+                production = ""
 
             normalized["production_type"] = str(production).lower()
 
@@ -1227,6 +1220,11 @@ class LLMWSHandler(websocket.WebSocketHandler):
             # Extract unit_id
             if "unit_id" in action_data:
                 normalized["unit_id"] = action_data["unit_id"]
+
+            # Extract city name from target dict (agent-clash sends target.name)
+            target = action_data.get("target", {})
+            if isinstance(target, dict) and "name" in target:
+                normalized["name"] = target["name"]
 
         elif action_type == "end_turn":
             # end_turn is simple - just needs player_id (already mapped above)
@@ -1343,6 +1341,11 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 result["unit_id"] = params["actor_id"]
             elif "unit_id" in params:
                 result["unit_id"] = params["unit_id"]
+
+            # Extract city name from target dict (agent-clash sends target.name)
+            target = params.get("target", {})
+            if isinstance(target, dict) and "name" in target:
+                result["name"] = target["name"]
 
             if "player" in params:
                 result["player_id"] = params["player"]
@@ -1482,6 +1485,9 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 game_state = self._get_current_game_state()
                 current_turn = game_state.get('turn', 'unknown') if game_state else 'unknown'
 
+                # Extract actor_id from action if present (for cache eviction debugging)
+                actor_id = sanitized_action.get('unit_id') or sanitized_action.get('actor_id') or 'N/A'
+
                 error_response = {
                     'type': 'action_rejected',
                     'error_code': validation_result.error_code,
@@ -1495,14 +1501,12 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 if correlation_id:
                     error_response['correlation_id'] = correlation_id
                 self.write_message(json.dumps(error_response))
+
+                # Strategic logging for AGE-299 debugging
                 logger.warning(
-                    f"❌ Action validation failed for {self.agent_id}:\n"
-                    f"   Error Code: {validation_result.error_code}\n"
-                    f"   Error: {validation_result.error_message}\n"
-                    f"   Action: {action_data}\n"
-                    f"   Player ID: {self.player_id}\n"
-                    f"   Turn: {current_turn}\n"
-                    f"   Expected: {expected_format.get('json_example', {})}"
+                    f"Action rejected: agent={self.agent_id}, turn={current_turn}, "
+                    f"error_code={validation_result.error_code}, action_type={action_type}, "
+                    f"actor_id={actor_id}, message={validation_result.error_message}"
                 )
                 return
 
@@ -1513,6 +1517,17 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 # CRITICAL: Must call send_packets_to_civserver() to actually send queued packets!
                 # Without this, actions are queued but never transmitted to civserver
                 self.civcom.send_packets_to_civserver()
+
+                # Extract actor_id for logging
+                actor_id = sanitized_action.get('unit_id') or sanitized_action.get('actor_id') or 'N/A'
+                game_state = self._get_current_game_state()
+                current_turn = game_state.get('turn', 'unknown') if game_state else 'unknown'
+
+                # Strategic logging for AGE-299 debugging
+                logger.warning(
+                    f"Action accepted: agent={self.agent_id}, turn={current_turn}, "
+                    f"action_type={sanitized_action.get('type')}, actor_id={actor_id}"
+                )
 
                 # Handle end_turn: mark turn as ended and reset rate limits
                 if sanitized_action.get('type') == 'end_turn' and self.agent_id:
@@ -2252,6 +2267,13 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 # Log action counts - legal_actions is now dict keyed by actor_id
                 total_actions = sum(len(actions) for actions in legal_actions.values())
                 unit_count = sum(1 for k in legal_actions.keys() if k != 'player')
+
+                # Strategic logging for AGE-299: track legal_actions fetches per turn
+                logger.info(
+                    f"Legal actions fetched: agent={self.agent_id}, turn={full_state.get('turn', 'unknown')}, "
+                    f"total_actions={total_actions}, units_with_actions={unit_count}"
+                )
+
                 logger.info(
                     f"✓ Generated {total_actions} legal actions for agent {self.agent_id}\n"
                     f"   Units with actions: {unit_count}\n"
@@ -2274,7 +2296,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
             'cities': {},
             'visible_tiles': [],
             'players': {},
-            'techs': [],
+            'techs': {},  # Dict format: {'player0': [...], 'player1': [...]}
             'map_info': {}
         }
 
@@ -2373,7 +2395,8 @@ class LLMWSHandler(websocket.WebSocketHandler):
             'map': map_info,
             'players': players,
             'units': units,
-            'cities': cities
+            'cities': cities,
+            'techs': full_state.get('techs', {})
         }
 
         return fallback_state
