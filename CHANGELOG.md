@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.24](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.23...freeciv3d-v0.3.24) (2026-01-27)
+
+
+### Features
+
+* Scale WebSocket connections for 1000+ concurrent viewers ([#89](https://github.com/taso-ventures/freeciv3d/issues/89)) ([c50db5e](https://github.com/taso-ventures/freeciv3d/commit/c50db5ee0d30388b6507122819512cd76db0a2a8))
+
 ## [0.3.23](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.22...freeciv3d-v0.3.23) (2026-01-27)
 
 
