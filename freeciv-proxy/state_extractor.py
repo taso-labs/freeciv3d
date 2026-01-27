@@ -662,13 +662,17 @@ class StateExtractor:
             if not production:
                 logger.warning(f"Skipping city_production with no target for city_id={action.get('city_id', 0)}")
                 return None
-            return {
+            result = {
                 'type': 'city_production',
                 'city_id': action.get('city_id', 0),
-                'target': {'production': production},
+                'target': {'production_type': production},
                 'is_valid': True,
                 'priority': priority or 4
             }
+            # Pass through available_productions if present
+            if 'available_productions' in action:
+                result['available_productions'] = action['available_productions']
+            return result
 
         if action_type in ('research_tech', 'tech_research'):
             return {
@@ -938,13 +942,7 @@ class StateExtractor:
                 target_index = target_x + target_y * xsize
                 return (target_x, target_y, target_index)
             return (target_x, target_y, None)
-        
-        # If unit is working on an improvement, add a "continue_work" action
-        # This signals to the AI that it should NOT interrupt this unit
-        if is_working:
-            add_action('continue_work', {'current_activity': activity}, True, 
-                      f"Unit is building {activity}")
-        
+
         # === MOVEMENT ACTIONS ===
         if moves_left > 0:
             # Pre-compute city tile indexes for efficient lookup
@@ -1562,13 +1560,14 @@ class StateExtractor:
         if not productions:
             # Default buildable units/buildings
             productions = ['Warrior', 'Settler', 'Worker', 'Barracks', 'Granary']
-        
+
         for prod in productions:
             actions.append({
                 'action': 'change_production',
                 'params': {'to': prod},
                 'is_valid': True,
-                'city_id': city_id
+                'city_id': city_id,
+                'available_productions': productions  # Include all options for LLM context
             })
         
         # Buy current production

@@ -1510,6 +1510,40 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 )
                 return
 
+            # Pre-submission validation: Check moves_left for unit_move actions
+            # This catches stale legal_actions where server said is_valid=true but unit exhausted moves
+            action_type = sanitized_action.get('type')
+            if action_type == 'unit_move' and self.civcom:
+                unit_id = sanitized_action.get('unit_id') or sanitized_action.get('actor_id')
+                if unit_id:
+                    # Get current unit state from civcom (not cached legal_actions)
+                    game_state = self._get_current_game_state()
+                    if game_state:
+                        units = game_state.get('units', {})
+                        if isinstance(units, list):
+                            units = {u.get('id'): u for u in units if isinstance(u, dict)}
+                        unit = units.get(unit_id)
+                        if unit:
+                            moves_left = unit.get('moves_left', 0)
+                            if moves_left <= 0:
+                                error_response = {
+                                    'type': 'action_rejected',
+                                    'error_code': 'E024',
+                                    'error_message': f'Unit {unit_id} has no moves remaining (pre-submission validation)',
+                                    'action': action_data,
+                                    'player_id': self.player_id,
+                                    'turn': game_state.get('turn', 'unknown'),
+                                    'timestamp': time.time()
+                                }
+                                if correlation_id:
+                                    error_response['correlation_id'] = correlation_id
+                                self.write_message(json.dumps(error_response))
+                                logger.warning(
+                                    f"Pre-submission validation blocked stale action: agent={self.agent_id}, "
+                                    f"unit_id={unit_id}, moves_left={moves_left}, action=unit_move"
+                                )
+                                return
+
             # Forward validated and sanitized action to civcom
             if self.civcom:
                 action_packet = self._convert_action_to_packet(sanitized_action)
