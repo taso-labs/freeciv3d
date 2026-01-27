@@ -1510,39 +1510,68 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 )
                 return
 
-            # Pre-submission validation: Check moves_left for unit_move actions
+            # Pre-submission validation: Check moves_left for all unit actions requiring movement
             # This catches stale legal_actions where server said is_valid=true but unit exhausted moves
             action_type = sanitized_action.get('type')
-            if action_type == 'unit_move' and self.civcom:
+            # All unit actions that require moves_left > 0
+            unit_actions_requiring_moves = (
+                'unit_move', 'unit_sentry', 'unit_fortify', 'unit_board',
+                'unit_unload', 'unit_build_road', 'unit_build_mine',
+                'unit_build_irrigation', 'unit_pillage', 'unit_explore'
+            )
+
+            if action_type in unit_actions_requiring_moves and self.civcom:
                 unit_id = sanitized_action.get('unit_id') or sanitized_action.get('actor_id')
                 if unit_id:
                     # Get current unit state from civcom (not cached legal_actions)
                     game_state = self._get_current_game_state()
-                    if game_state:
+                    if not game_state:
+                        logger.debug(
+                            f"Pre-submission validation skipped (no game_state): agent={self.agent_id}, "
+                            f"action_type={action_type}, unit_id={unit_id}"
+                        )
+                    else:
                         units = game_state.get('units', {})
                         if isinstance(units, list):
                             units = {u.get('id'): u for u in units if isinstance(u, dict)}
-                        unit = units.get(unit_id)
-                        if unit:
-                            moves_left = unit.get('moves_left', 0)
-                            if moves_left <= 0:
-                                error_response = {
-                                    'type': 'action_rejected',
-                                    'error_code': 'E024',
-                                    'error_message': f'Unit {unit_id} has no moves remaining (pre-submission validation)',
-                                    'action': action_data,
-                                    'player_id': self.player_id,
-                                    'turn': game_state.get('turn', 'unknown'),
-                                    'timestamp': time.time()
-                                }
-                                if correlation_id:
-                                    error_response['correlation_id'] = correlation_id
-                                self.write_message(json.dumps(error_response))
-                                logger.warning(
-                                    f"Pre-submission validation blocked stale action: agent={self.agent_id}, "
-                                    f"unit_id={unit_id}, moves_left={moves_left}, action=unit_move"
+
+                        if not units:
+                            logger.debug(
+                                f"Pre-submission validation skipped (no units in state): agent={self.agent_id}, "
+                                f"action_type={action_type}, unit_id={unit_id}"
+                            )
+                        else:
+                            unit = units.get(unit_id)
+                            if not unit:
+                                logger.debug(
+                                    f"Pre-submission validation skipped (unit not found): agent={self.agent_id}, "
+                                    f"action_type={action_type}, unit_id={unit_id}, available_units={len(units)}"
                                 )
-                                return
+                            else:
+                                moves_left = unit.get('moves_left', 0)
+                                logger.debug(
+                                    f"Pre-submission validation check: agent={self.agent_id}, "
+                                    f"action_type={action_type}, unit_id={unit_id}, moves_left={moves_left}"
+                                )
+                                if moves_left <= 0:
+                                    error_response = {
+                                        'type': 'action_rejected',
+                                        'error_code': 'E024',
+                                        'error_message': f'Unit {unit_id} has no moves remaining (pre-submission validation)',
+                                        'action': action_data,
+                                        'player_id': self.player_id,
+                                        'turn': game_state.get('turn', 'unknown'),
+                                        'timestamp': time.time()
+                                    }
+                                    if correlation_id:
+                                        error_response['correlation_id'] = correlation_id
+                                    self.write_message(json.dumps(error_response))
+                                    logger.warning(
+                                        f"PRE-SUBMISSION BLOCKED: Stale action prevented from reaching server: "
+                                        f"agent={self.agent_id}, unit_id={unit_id}, moves_left={moves_left}, "
+                                        f"action_type={action_type}"
+                                    )
+                                    return
 
             # Forward validated and sanitized action to civcom
             if self.civcom:
