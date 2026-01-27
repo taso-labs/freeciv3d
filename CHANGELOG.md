@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.23](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.22...freeciv3d-v0.3.23) (2026-01-27)
+
+
+### Bug Fixes
+
+* **AGE-312:** [freeciv-proxy] resolve gameplay turn failures; add local moves tracking ([#86](https://github.com/taso-ventures/freeciv3d/issues/86)) ([98712fe](https://github.com/taso-ventures/freeciv3d/commit/98712fe86586d6bc38da1d815cacdbdc943cdaf9))
+
 ## [0.3.22](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.21...freeciv3d-v0.3.22) (2026-01-27)
 
 
