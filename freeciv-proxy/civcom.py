@@ -1999,16 +1999,27 @@ class CivCom(Thread):
         # Check if improvement name is "Coinage"
         return improvement.get('name') == 'Coinage'
 
-    def _get_unit_actions(self, player_id, max_units=5):
+    def _get_unit_actions(self, player_id, max_units=None):
         """Get per-unit legal actions (NOT CACHED - regenerated every call).
 
         Unit actions are not cached because every unit move affects what other units can do.
-        Uses StateExtractor.get_unit_actions() for consistency with unit_actions_query endpoint.
+
+        Uses StateExtractor.get_unit_actions() to ensure consistency with
+        unit_actions_query endpoint - same logic, same results.
+
+        Returns complete action format from StateExtractor with all validation fields:
+        - 'action': action name (e.g., 'move', 'build_city', 'fortify')
+        - 'params': dict of action parameters (e.g., {'direction': 'n'} for move)
+        - 'is_valid': boolean indicating if action can be executed
+        - 'reason': optional string explaining why action is invalid
+        - 'action_id': FreeCiv action constant ID
+        - 'unit_id': unit ID this action applies to
+        - 'type': added field for LLM categorization ('unit_move' or 'unit_action')
 
         Args:
             player_id: The player ID
-            max_units: Maximum number of units to generate actions for
-
+            max_units: Maximum number of units to generate actions for (None = no limit)
+   
         Returns:
             list: List of complete unit action dicts with full validation info
         """
@@ -2024,7 +2035,7 @@ class CivCom(Thread):
         unit_count = 0
 
         for unit_id, unit in units.items():
-            if unit_count >= max_units:
+            if max_units is not None and unit_count >= max_units:
                 break
             if unit.get('moves_left', 0) <= 0:
                 continue
@@ -2051,16 +2062,19 @@ class CivCom(Thread):
 
         return actions
 
-    def _get_city_production_actions(self, player_id, max_cities=3):
+    def _get_city_production_actions(self, player_id, max_cities=None):
         """Get per-city production change actions (CACHED per turn).
 
+        Only returns production actions if:
+        - shield_stock == 0 (production just finished, need new selection)
+        - OR production is Coinage (infinite production, can always change)
         Generates production change actions for ALL cities owned by the player,
         allowing agents to strategically change city production at any time.
         FreeCiv allows production changes mid-build (with shield penalty).
 
         Args:
             player_id: The player ID
-            max_cities: Maximum number of cities to generate actions for
+            max_cities: Maximum number of cities to generate actions for (None = no limit)
 
         Returns:
             list: List of city production action dicts, one per buildable unit/improvement per city
@@ -2074,7 +2088,7 @@ class CivCom(Thread):
         city_count = 0
 
         for city_id, city in cities.items():
-            if city_count >= max_cities:
+            if max_cities is not None and city_count >= max_cities:
                 break
             if city.get('owner') != player_id:
                 continue
@@ -2181,12 +2195,17 @@ class CivCom(Thread):
         return actions
 
     def _get_legal_actions_optimized(self, player_id):
-        """Pre-compute top legal actions for LLM with per-category limits.
+        """Pre-compute top legal actions for LLM.
 
         Generates actions using helper methods with smart caching:
         - Unit actions: NOT cached (regenerated every call)
         - City production: Cached per turn
         - Tech research: Cached per turn, only when researching==A_UNSET
+
+        Per-category handling:
+        - Unit actions: all units with moves remaining
+        - City production: all cities needing production selection
+        - Tech research: all researchable techs (when needed)
 
         Args:
             player_id: The player ID
@@ -2197,11 +2216,11 @@ class CivCom(Thread):
         all_actions = []
 
         # Get unit actions (NOT CACHED - always fresh)
-        unit_actions = self._get_unit_actions(player_id, max_units=5)
+        unit_actions = self._get_unit_actions(player_id)  # No limit
         all_actions.extend(unit_actions)
 
-        # Get city production actions (CACHED per turn)
-        city_actions = self._get_city_production_actions(player_id, max_cities=3)
+        # Get city production actions (CACHED per turn, with smart filtering)
+        city_actions = self._get_city_production_actions(player_id)  # No limit
         all_actions.extend(city_actions)
 
         # Get tech research actions (CACHED per turn, only when needed)

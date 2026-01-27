@@ -50,6 +50,17 @@ var dialog_message_close_task;
 // Used to detect when observer mode fails to reach C_S_RUNNING state
 const OBSERVER_INIT_TIMEOUT_MS = 15000;
 
+// Observer retry configuration
+var observer_retry_count = 0;
+var observer_retry_in_progress = false;  // Guard against overlapping retry attempts
+const OBSERVER_MAX_RETRIES = 2;
+const OBSERVER_RETRY_DELAY_MS = 1500;
+
+// Observer connection stagger delays (prevents server-side race conditions)
+const OBSERVER_STAGGER_GLOBAL_MS = 0;     // global observer connects first
+const OBSERVER_STAGGER_PLAYER1_MS = 300;  // player1 observer waits 300ms
+const OBSERVER_STAGGER_PLAYER2_MS = 600;  // player2 observer waits 600ms
+
 // Observer follow mode state
 var observer_follow_player = null;        // Player ID to follow, or null for global
 var observer_auto_center_interval = null; // Interval timer ID for periodic re-centering
@@ -575,6 +586,117 @@ function get_autojoin_username()
 }
 
 /****************************************************************************
+  Calculate stagger delay for observer connections to prevent race conditions.
+  When multiple observers (global, player1, player2) connect simultaneously,
+  staggering prevents server-side packet ordering issues.
+  Returns delay in milliseconds based on observer name or explicit URL param.
+****************************************************************************/
+function get_observer_stagger_delay()
+{
+  // First check for explicit stagger parameter (overrides name-based detection)
+  var stagger_param = $.getUrlVar('stagger');
+  if (stagger_param) {
+    var delay = parseInt(stagger_param);
+    if (!isNaN(delay) && delay >= 0 && delay <= 5000) {
+      return delay;
+    }
+    console.warn('[Observer] Invalid stagger parameter ignored:', stagger_param);
+  }
+
+  var name_param = $.getUrlVar('name');
+  if (!name_param || !observing) return OBSERVER_STAGGER_GLOBAL_MS;
+
+  // Stagger based on observer type in name
+  if (name_param.indexOf('global') !== -1) return OBSERVER_STAGGER_GLOBAL_MS;
+  if (name_param.indexOf('player1') !== -1) return OBSERVER_STAGGER_PLAYER1_MS;
+  if (name_param.indexOf('player2') !== -1) return OBSERVER_STAGGER_PLAYER2_MS;
+  return OBSERVER_STAGGER_GLOBAL_MS;
+}
+
+/****************************************************************************
+  Handle observer timeout with automatic retry logic.
+  Shared helper to avoid duplicate code in request_observe_game() and
+  execute_observe_player_attachment().
+  @param context - Context string for logging (e.g., 'global' or player name)
+****************************************************************************/
+function handle_observer_timeout_with_retry(context)
+{
+  if (client_state() === C_S_RUNNING || !observing || observer_retry_in_progress) {
+    return; // Successfully connected, retry in progress, or no action needed
+  }
+
+  if (observer_retry_count < OBSERVER_MAX_RETRIES) {
+    observer_retry_count++;
+    observer_retry_in_progress = true;
+    console.warn('[Observer] Retry ' + observer_retry_count + '/' + OBSERVER_MAX_RETRIES +
+                 ' - state: ' + client_state() + (context ? ', context: ' + context : ''));
+
+    // Reset and retry
+    reset_observer_state_for_retry();
+
+    setTimeout(function() {
+      if (typeof network_init === 'function') {
+        network_init();
+      }
+      observer_retry_in_progress = false;
+    }, OBSERVER_RETRY_DELAY_MS);
+  } else {
+    console.error('[Observer] TIMEOUT: Failed to reach C_S_RUNNING state after ' +
+                  (OBSERVER_INIT_TIMEOUT_MS / 1000) + ' seconds and ' +
+                  OBSERVER_MAX_RETRIES + ' retries', {
+      current_state: client_state(),
+      map_xsize: (typeof map !== 'undefined' && map != null) ? map['xsize'] : 'undefined',
+      game_turn: (typeof game_info !== 'undefined' && game_info != null) ? game_info['turn'] : 'undefined',
+      tiles_allocated: (typeof tiles !== 'undefined' && tiles != null),
+      tiles_initialized: (typeof tiles_initialized !== 'undefined') ? tiles_initialized : 'undefined',
+      buffered_packets: (typeof pending_tile_packets !== 'undefined') ? pending_tile_packets.length : 0,
+      player_count: (typeof players !== 'undefined') ? Object.keys(players).length : 0,
+      context: context || 'global'
+    });
+    alert('Observer mode failed to initialize. The map is not loading.\n\nThis could be due to network issues or the game not being ready.\n\nPlease try reloading the page.');
+  }
+}
+
+/****************************************************************************
+  Set up observer timeout with retry logic.
+  @param context - Context string for logging
+****************************************************************************/
+function setup_observer_timeout_with_retry(context)
+{
+  setTimeout(function() {
+    handle_observer_timeout_with_retry(context);
+  }, OBSERVER_INIT_TIMEOUT_MS);
+}
+
+/****************************************************************************
+  Reset observer state for retry.
+  Clears network state, tiles, and buffered packets.
+****************************************************************************/
+function reset_observer_state_for_retry()
+{
+  // Reset network state
+  if (typeof network_stop === 'function') {
+    try {
+      network_stop();
+    } catch (e) {
+      console.warn('[Observer] network_stop() failed:', e);
+    }
+  }
+  network_init_called = false;
+
+  // Reset retry-in-progress flag (in case called from elsewhere)
+  observer_retry_in_progress = false;
+
+  // Reset tile state (defined in packhand.js)
+  if (typeof tiles_initialized !== 'undefined') {
+    tiles_initialized = false;
+  }
+  if (typeof pending_tile_packets !== 'undefined') {
+    pending_tile_packets = [];
+  }
+}
+
+/****************************************************************************
   Initialize autojoin mode - skip username dialog and connect directly.
 ****************************************************************************/
 function init_autojoin_mode()
@@ -612,10 +734,21 @@ function init_autojoin_mode()
   // Note: Actual /observe command is sent after login via execute_observe_player_attachment()
   init_observe_player_mode();
 
-  // Initialize sprites/tileset - this triggers async loading chain:
-  // init_sprites() → preload_check() → webgl_preload() → webgl_preload_complete() → network_init()
-  // We must NOT call network_init() here - let the callback chain handle it after assets load
-  init_sprites();
+  // Apply stagger delay for multiple simultaneous observers to prevent race conditions
+  var stagger = get_observer_stagger_delay();
+  if (stagger > 0) {
+    freelog(LOG_DEBUG, '[Autojoin] Staggering connection by ' + stagger + 'ms');
+    setTimeout(function() {
+      // Initialize sprites/tileset - this triggers async loading chain:
+      // init_sprites() → preload_check() → webgl_preload() → webgl_preload_complete() → network_init()
+      init_sprites();
+    }, stagger);
+  } else {
+    // Initialize sprites/tileset - this triggers async loading chain:
+    // init_sprites() → preload_check() → webgl_preload() → webgl_preload_complete() → network_init()
+    // We must NOT call network_init() here - let the callback chain handle it after assets load
+    init_sprites();
+  }
 }
 
 /****************************************************************************
@@ -680,6 +813,7 @@ function init_observe_player_mode()
   Execute observer attachment after successful login.
   Sends /observe command if observe_player was set during initialization.
   SECURITY: Validates player name format to prevent command injection.
+  Includes retry logic for failed connections.
 ****************************************************************************/
 function execute_observe_player_attachment()
 {
@@ -709,21 +843,7 @@ function execute_observe_player_attachment()
 
   if (typeof send_message === 'function') {
     send_message('/observe ' + observe_player);
-
-    // Set up timeout to detect observer initialization failures
-    setTimeout(function() {
-      if (client_state() !== C_S_RUNNING && observing) {
-        console.error('[Observer] TIMEOUT: Failed to reach C_S_RUNNING state after ' + (OBSERVER_INIT_TIMEOUT_MS / 1000) + ' seconds', {
-          current_state: client_state(),
-          map_xsize: (typeof map !== 'undefined' && map != null) ? map['xsize'] : 'undefined',
-          game_turn: (typeof game_info !== 'undefined' && game_info != null) ? game_info['turn'] : 'undefined',
-          tiles_allocated: (typeof tiles !== 'undefined' && tiles != null),
-          player_count: (typeof players !== 'undefined') ? Object.keys(players).length : 0,
-          observe_player: observe_player
-        });
-        alert('Observer mode failed to initialize. The map is not loading.\n\nThis could be due to network issues or the game not being ready.\n\nPlease try reloading the page.');
-      }
-    }, OBSERVER_INIT_TIMEOUT_MS);
+    setup_observer_timeout_with_retry(observe_player);
   }
 }
 
@@ -1033,25 +1153,12 @@ function set_phase_start()
 }
 
 /**************************************************************************
-...
+  Request to observe the game. Includes retry logic for failed connections.
 **************************************************************************/
 function request_observe_game()
 {
   send_message("/observe ");
-
-  // Set up timeout to detect observer initialization failures
-  setTimeout(function() {
-    if (client_state() !== C_S_RUNNING && observing) {
-      console.error('[Observer] TIMEOUT: Failed to reach C_S_RUNNING state after ' + (OBSERVER_INIT_TIMEOUT_MS / 1000) + ' seconds', {
-        current_state: client_state(),
-        map_xsize: (typeof map !== 'undefined' && map != null) ? map['xsize'] : 'undefined',
-        game_turn: (typeof game_info !== 'undefined' && game_info != null) ? game_info['turn'] : 'undefined',
-        tiles_allocated: (typeof tiles !== 'undefined' && tiles != null),
-        player_count: (typeof players !== 'undefined') ? Object.keys(players).length : 0
-      });
-      alert('Observer mode failed to initialize. The map is not loading.\n\nThis could be due to network issues or the game not being ready.\n\nPlease try reloading the page.');
-    }
-  }, OBSERVER_INIT_TIMEOUT_MS);
+  setup_observer_timeout_with_retry('global');
 }
 
 /**************************************************************************
