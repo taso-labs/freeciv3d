@@ -39,7 +39,9 @@ import gc
 import os
 
 PROXY_PORT = 8002
-CONNECTION_LIMIT = 1000
+# Max WebSocket connections per proxy instance. Set to match civserver maxconnectionsperhost
+# and nginx worker_connections for consistent scaling (supports ~2,700 concurrent viewers).
+CONNECTION_LIMIT = 8192
 
 # CORS Configuration - Default to localhost for development
 # In production, set ALLOWED_ORIGINS environment variable to your domains
