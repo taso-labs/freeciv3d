@@ -1403,7 +1403,8 @@ class LLMWSHandler(websocket.WebSocketHandler):
 
         try:
             # Extract action data from either 'data' (agent-clash format) or 'action' (legacy format)
-            action_data = msg_data.get('data') or msg_data.get('action', {})
+            # Use explicit check to avoid falsy value issues (empty dict, 0, False, etc.)
+            action_data = msg_data.get('data') if 'data' in msg_data else msg_data.get('action', {})
             logger.info(f"🎯 Extracted action_data: {action_data}")
             logger.info(f"🎯 action_data type: {type(action_data).__name__}")
             if isinstance(action_data, dict):
@@ -1504,7 +1505,8 @@ class LLMWSHandler(websocket.WebSocketHandler):
                     if game_state:
                         units = game_state.get('units', {})
                         if isinstance(units, list):
-                            units = {u.get('id'): u for u in units if isinstance(u, dict)}
+                            # Ensure consistent string keys for unit lookup
+                            units = {str(u.get('id')): u for u in units if isinstance(u, dict) and u.get('id') is not None}
 
                         if units:
                             unit = units.get(str(unit_id))
