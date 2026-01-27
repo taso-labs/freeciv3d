@@ -22,6 +22,13 @@ const auto_attack_actions = [
   ACTION_NUKE_UNITS, ACTION_NUKE_CITY, ACTION_NUKE
 ];
 
+// Observer mode packet buffering for handling out-of-order packets
+// When PACKET_TILE_INFO arrives before PACKET_MAP_INFO (which calls map_allocate()),
+// we buffer the tile packets and replay them after tiles array is initialized.
+var pending_tile_packets = [];    // Buffer for tiles before map_allocate()
+var tiles_initialized = false;    // Track if map_allocate() has run
+var MAX_PENDING_TILE_PACKETS = 10000;  // Prevent memory exhaustion on pathological cases
+
 /* Indicates that the player initiated a request.
  * Special request number used by the server too. */
 const REQEST_PLAYER_INITIATED = 0;
@@ -173,7 +180,7 @@ function handle_ruleset_resource(packet)
 **************************************************************************/
 function handle_tile_info(packet)
 {
-  if (tiles != null) {
+  if (tiles != null && tiles_initialized) {
 
     packet['extras'] = new BitVector(packet['extras']);
 
@@ -194,14 +201,19 @@ function handle_tile_info(packet)
     update_roads_tile(tiles[packet['tile']], true);
     update_tiletypes_tile(tiles[packet['tile']]);
   } else {
-    // Enhanced diagnostic logging for observer mode debugging
-    console.error('[Observer] PACKET_TILE_INFO received but tiles array is null!', {
-      map_xsize: (typeof map !== 'undefined' && map != null) ? map['xsize'] : 'undefined',
-      map_ysize: (typeof map !== 'undefined' && map != null) ? map['ysize'] : 'undefined',
-      client_state: client_state(),
-      observing: (typeof observing !== 'undefined') ? observing : 'undefined',
-      tile_id: packet['tile']
-    });
+    // Buffer the packet for later replay instead of dropping
+    // This handles the race condition where PACKET_TILE_INFO arrives before PACKET_MAP_INFO
+    if (pending_tile_packets.length >= MAX_PENDING_TILE_PACKETS) {
+      console.error('[Observer] CRITICAL: Tile packet buffer overflow (' +
+        MAX_PENDING_TILE_PACKETS + ' packets). Map initialization may have failed.');
+      return;
+    }
+    pending_tile_packets.push(packet);
+    if (pending_tile_packets.length <= 10 || pending_tile_packets.length % 100 === 0) {
+      freelog(LOG_DEBUG, '[Observer] Buffering PACKET_TILE_INFO (tile ' +
+              packet['tile'] + ') - tiles not yet allocated. Buffer size: ' +
+              pending_tile_packets.length);
+    }
   }
 }
 
@@ -687,6 +699,11 @@ function handle_endgame_report(packet)
 function update_client_state(value)
 {
   set_client_state(value);
+
+  // Reset observer retry counter on successful connection
+  if (value === C_S_RUNNING && observing && typeof observer_retry_count !== 'undefined') {
+    observer_retry_count = 0;
+  }
 }
 
 function handle_authentication_req(packet)

@@ -117,6 +117,33 @@ function map_allocate()
 
   map['startpos_table'] = {};
 
+  // Mark tiles as initialized and replay any buffered packets
+  // This handles the race condition where PACKET_TILE_INFO arrives before PACKET_MAP_INFO
+  tiles_initialized = true;
+  replay_pending_tile_packets();
+}
+
+/**************************************************************************
+  Replay buffered tile packets that arrived before map_allocate().
+  Called after tiles array is initialized to recover from packet ordering
+  race conditions in observer mode.
+**************************************************************************/
+function replay_pending_tile_packets()
+{
+  if (typeof pending_tile_packets === 'undefined' || pending_tile_packets == null) {
+    return;
+  }
+
+  if (pending_tile_packets.length > 0) {
+    freelog(LOG_DEBUG, '[Observer] Replaying ' + pending_tile_packets.length +
+            ' buffered tile packets');
+    var packets = pending_tile_packets;
+    pending_tile_packets = [];  // Clear before replay to prevent recursion
+    for (var i = 0; i < packets.length; i++) {
+      handle_tile_info(packets[i]);
+    }
+    freelog(LOG_DEBUG, '[Observer] Finished replaying buffered tile packets');
+  }
 }
 
 /****************************************************************************
