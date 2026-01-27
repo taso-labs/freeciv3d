@@ -1509,14 +1509,19 @@ class LLMWSHandler(websocket.WebSocketHandler):
                     if game_state:
                         units = game_state.get('units', {})
                         if isinstance(units, list):
-                            # Ensure consistent string keys for unit lookup
-                            units = {str(u.get('id')): u for u in units if isinstance(u, dict) and u.get('id') is not None}
+                            # Store as int keys for consistent lookup
+                            units = {int(u.get('id')): u for u in units if isinstance(u, dict) and u.get('id') is not None}
 
                         if units:
-                            unit = units.get(str(unit_id))
+                            try:
+                                unit_id_int = int(unit_id)
+                            except (TypeError, ValueError):
+                                logger.warning(f"Invalid unit_id format: {unit_id}")
+                                unit_id_int = None
+
+                            unit = units.get(unit_id_int) if unit_id_int is not None else None
                             if unit:
                                 cached_moves_left = unit.get('moves_left', 0)
-                                unit_id_int = int(unit_id)
 
                                 # Calculate effective moves using local tracking
                                 consumed = self.unit_moves_consumed.get(unit_id_int, 0)
@@ -1603,8 +1608,15 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 action_type = sanitized_action.get('type')
                 if action_type in UNIT_ACTIONS_REQUIRING_MOVES:
                     unit_id = sanitized_action.get('unit_id') or sanitized_action.get('actor_id')
-                    if unit_id:
-                        unit_id_int = int(unit_id)
+                    if unit_id is not None:
+                        try:
+                            unit_id_int = int(unit_id)
+                        except (TypeError, ValueError):
+                            logger.warning(f"Invalid unit_id format: {unit_id}")
+                            unit_id_int = None
+                    else:
+                        unit_id_int = None
+                    if unit_id_int is not None:
                         # Increment consumed moves (conservative tracking: always increment by 1)
                         # NOTE: Some actions consume more than 1 move (e.g., moving through difficult terrain).
                         # This conservative approach may allow actions that will be rejected by the server,
