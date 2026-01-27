@@ -139,7 +139,6 @@ distributed_rate_limiter = DistributedRateLimiter(
     rate_limit_config=llm_config.get('validation.rate_limit', {})
 )
 
-
 class LLMWSHandler(websocket.WebSocketHandler):
     """
     WebSocket handler for LLM agents
@@ -200,7 +199,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
         # Initialize state extractor for proper state formatting
         self.state_extractor = StateExtractor()
 
-        # AGE-312: Local moves tracking for pre-submission validation
+        # Local moves tracking for pre-submission validation
         # Tracks moves consumed per unit this turn to catch stale actions before server roundtrip
         # Format: {unit_id: moves_consumed_this_turn}
         # Reset on turn change
@@ -1478,7 +1477,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
             if 'player_id' not in sanitized_action:
                 sanitized_action['player_id'] = self.player_id
 
-            # AGE-312: Pre-submission validation with LOCAL MOVES TRACKING
+            # Pre-submission validation with LOCAL MOVES TRACKING
             # This MUST run BEFORE action_validator to catch stale actions using local tracking
             # action_validator also checks moves_left but uses cached state which may be stale
             action_type = sanitized_action.get('type')
@@ -1499,7 +1498,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                         self.unit_moves_consumed.clear()
                         self.last_tracked_turn = current_turn
                         logger.debug(
-                            f"AGE-312: Reset moves tracking for turn {current_turn}: agent={self.agent_id}"
+                            f"Reset moves tracking for turn {current_turn}: agent={self.agent_id}"
                         )
 
                     if game_state:
@@ -1593,7 +1592,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 # Without this, actions are queued but never transmitted to civserver
                 self.civcom.send_packets_to_civserver()
 
-                # AGE-312: Track consumed moves locally after successful submission
+                # Track consumed moves locally after successful submission
                 # This prevents rapid successive actions from bypassing stale cache
                 action_type = sanitized_action.get('type')
                 if action_type in ('unit_move', 'unit_sentry', 'unit_fortify', 'unit_board',
@@ -1606,7 +1605,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                         # This is approximate - some actions may consume more, but 1 is safe
                         self.unit_moves_consumed[unit_id_int] = self.unit_moves_consumed.get(unit_id_int, 0) + 1
                         logger.debug(
-                            f"AGE-312: Tracked move consumed: agent={self.agent_id}, unit_id={unit_id}, "
+                            f"Tracked move consumed: agent={self.agent_id}, unit_id={unit_id}, "
                             f"total_consumed={self.unit_moves_consumed[unit_id_int]}"
                         )
 
