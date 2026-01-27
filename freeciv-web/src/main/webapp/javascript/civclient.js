@@ -52,6 +52,7 @@ const OBSERVER_INIT_TIMEOUT_MS = 15000;
 
 // Observer retry configuration
 var observer_retry_count = 0;
+var observer_retry_in_progress = false;  // Guard against overlapping retry attempts
 const OBSERVER_MAX_RETRIES = 2;
 const OBSERVER_RETRY_DELAY_MS = 1500;
 
@@ -599,6 +600,7 @@ function get_observer_stagger_delay()
     if (!isNaN(delay) && delay >= 0 && delay <= 5000) {
       return delay;
     }
+    console.warn('[Observer] Invalid stagger parameter ignored:', stagger_param);
   }
 
   var name_param = $.getUrlVar('name');
@@ -619,12 +621,13 @@ function get_observer_stagger_delay()
 ****************************************************************************/
 function handle_observer_timeout_with_retry(context)
 {
-  if (client_state() === C_S_RUNNING || !observing) {
-    return; // Successfully connected, no action needed
+  if (client_state() === C_S_RUNNING || !observing || observer_retry_in_progress) {
+    return; // Successfully connected, retry in progress, or no action needed
   }
 
   if (observer_retry_count < OBSERVER_MAX_RETRIES) {
     observer_retry_count++;
+    observer_retry_in_progress = true;
     console.warn('[Observer] Retry ' + observer_retry_count + '/' + OBSERVER_MAX_RETRIES +
                  ' - state: ' + client_state() + (context ? ', context: ' + context : ''));
 
@@ -635,6 +638,7 @@ function handle_observer_timeout_with_retry(context)
       if (typeof network_init === 'function') {
         network_init();
       }
+      observer_retry_in_progress = false;
     }, OBSERVER_RETRY_DELAY_MS);
   } else {
     console.error('[Observer] TIMEOUT: Failed to reach C_S_RUNNING state after ' +
@@ -672,9 +676,16 @@ function reset_observer_state_for_retry()
 {
   // Reset network state
   if (typeof network_stop === 'function') {
-    network_stop();
+    try {
+      network_stop();
+    } catch (e) {
+      console.warn('[Observer] network_stop() failed:', e);
+    }
   }
   network_init_called = false;
+
+  // Reset retry-in-progress flag (in case called from elsewhere)
+  observer_retry_in_progress = false;
 
   // Reset tile state (defined in packhand.js)
   if (typeof tiles_initialized !== 'undefined') {
