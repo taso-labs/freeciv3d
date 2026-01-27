@@ -112,6 +112,14 @@ GAME_INFO_WAIT_TIMEOUT_SEC = 2.0  # Max wait for PACKET_GAME_INFO
 GAME_INFO_POLL_INTERVAL_SEC = 0.1  # Polling interval
 GAME_INFO_LOG_INTERVAL_SEC = 0.5  # Debug log frequency
 
+# Unit actions that require movement points
+# Used for local moves tracking in pre-submission validation
+UNIT_ACTIONS_REQUIRING_MOVES = frozenset([
+    'unit_move', 'unit_sentry', 'unit_fortify', 'unit_board',
+    'unit_unload', 'unit_build_road', 'unit_build_mine',
+    'unit_build_irrigation', 'unit_pillage', 'unit_explore'
+])
+
 # Nation ID mapping for common civilizations
 # These IDs correspond to the FreeCiv nation definitions
 NATION_MAP = {
@@ -198,6 +206,13 @@ class LLMWSHandler(websocket.WebSocketHandler):
 
         # Initialize state extractor for proper state formatting
         self.state_extractor = StateExtractor()
+
+        # Local moves tracking for pre-submission validation
+        # Tracks moves consumed per unit this turn to catch stale actions before server roundtrip
+        # Format: {unit_id: moves_consumed_this_turn}
+        # Reset on turn change
+        self.unit_moves_consumed: Dict[int, int] = {}
+        self.last_tracked_turn: Optional[int] = None
 
     def open(self):
         """Handle WebSocket connection opening"""
@@ -1395,7 +1410,9 @@ class LLMWSHandler(websocket.WebSocketHandler):
             session_manager.update_session_activity(self.session_id)
 
         try:
-            action_data = msg_data.get('action', {})
+            # Extract action data from either 'data' (agent-clash format) or 'action' (legacy format)
+            # Use explicit check to avoid falsy value issues (empty dict, 0, False, etc.)
+            action_data = msg_data.get('data') if 'data' in msg_data else msg_data.get('action', {})
             logger.info(f"🎯 Extracted action_data: {action_data}")
             logger.info(f"🎯 action_data type: {type(action_data).__name__}")
             if isinstance(action_data, dict):
@@ -1469,9 +1486,79 @@ class LLMWSHandler(websocket.WebSocketHandler):
             if 'player_id' not in sanitized_action:
                 sanitized_action['player_id'] = self.player_id
 
+            # Pre-submission validation with LOCAL MOVES TRACKING
+            # This MUST run BEFORE action_validator to catch stale actions using local tracking
+            # action_validator also checks moves_left but uses cached state which may be stale
+            action_type = sanitized_action.get('type')
+
+            if action_type in UNIT_ACTIONS_REQUIRING_MOVES and self.civcom:
+                unit_id = sanitized_action.get('unit_id') or sanitized_action.get('actor_id')
+                if unit_id:
+                    game_state = self._get_current_game_state()
+                    current_turn = game_state.get('turn') if game_state else None
+
+                    # Reset local tracking on turn change using atomic update pattern
+                    # Cache old_turn first to avoid race condition where multiple threads
+                    # could check the same stale value and all proceed to reset
+                    old_turn = self.last_tracked_turn
+                    if current_turn is not None and current_turn != old_turn:
+                        self.last_tracked_turn = current_turn
+                        self.unit_moves_consumed.clear()
+                        logger.debug(
+                            f"Reset moves tracking: turn {old_turn} → {current_turn}, agent={self.agent_id}"
+                        )
+
+                    if game_state:
+                        units = game_state.get('units', {})
+                        if isinstance(units, list):
+                            # Store as int keys for consistent lookup
+                            units = {int(u.get('id')): u for u in units if isinstance(u, dict) and u.get('id') is not None}
+
+                        if units:
+                            try:
+                                unit_id_int = int(unit_id)
+                            except (TypeError, ValueError):
+                                logger.warning(f"Invalid unit_id format: {unit_id}")
+                                unit_id_int = None
+
+                            unit = units.get(unit_id_int) if unit_id_int is not None else None
+                            if unit:
+                                cached_moves_left = unit.get('moves_left', 0)
+
+                                # Calculate effective moves using local tracking
+                                consumed = self.unit_moves_consumed.get(unit_id_int, 0)
+                                effective_moves = cached_moves_left - consumed
+
+                                logger.debug(
+                                    f"Pre-submission validation check: agent={self.agent_id}, "
+                                    f"action_type={action_type}, unit_id={unit_id}, "
+                                    f"cached_moves={cached_moves_left}, consumed={consumed}, effective={effective_moves}"
+                                )
+
+                                if effective_moves <= 0:
+                                    error_response = {
+                                        'type': 'action_rejected',
+                                        'error_code': 'E024',
+                                        'error_message': f'Unit {unit_id} has no moves remaining (pre-submission validation)',
+                                        'action': action_data,
+                                        'player_id': self.player_id,
+                                        'turn': current_turn,
+                                        'timestamp': time.time()
+                                    }
+                                    if correlation_id:
+                                        error_response['correlation_id'] = correlation_id
+                                    self.write_message(json.dumps(error_response))
+                                    logger.warning(
+                                        f"PRE-SUBMISSION BLOCKED: Stale action prevented: "
+                                        f"agent={self.agent_id}, unit_id={unit_id}, "
+                                        f"cached_moves={cached_moves_left}, consumed={consumed}, effective={effective_moves}, "
+                                        f"action_type={action_type}"
+                                    )
+                                    return
+
             logger.info(f"🔍 Validating action: {sanitized_action}")
 
-            # Validate action
+            # Validate action (additional checks beyond moves_left)
             validation_result = self.action_validator.validate_action(
                 sanitized_action, self.player_id, self._get_current_game_state()
             )
@@ -1517,6 +1604,30 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 # CRITICAL: Must call send_packets_to_civserver() to actually send queued packets!
                 # Without this, actions are queued but never transmitted to civserver
                 self.civcom.send_packets_to_civserver()
+
+                # Track consumed moves locally after successful submission
+                # This prevents rapid successive actions from bypassing stale cache
+                action_type = sanitized_action.get('type')
+                if action_type in UNIT_ACTIONS_REQUIRING_MOVES:
+                    unit_id = sanitized_action.get('unit_id') or sanitized_action.get('actor_id')
+                    if unit_id is not None:
+                        try:
+                            unit_id_int = int(unit_id)
+                        except (TypeError, ValueError):
+                            logger.warning(f"Invalid unit_id format: {unit_id}")
+                            unit_id_int = None
+                    else:
+                        unit_id_int = None
+                    if unit_id_int is not None:
+                        # Increment consumed moves (conservative tracking: always increment by 1)
+                        # NOTE: Some actions consume more than 1 move (e.g., moving through difficult terrain).
+                        # This conservative approach may allow actions that will be rejected by the server,
+                        # but ensures we never incorrectly block valid actions. The server is authoritative.
+                        self.unit_moves_consumed[unit_id_int] = self.unit_moves_consumed.get(unit_id_int, 0) + 1
+                        logger.debug(
+                            f"Tracked move consumed: agent={self.agent_id}, unit_id={unit_id}, "
+                            f"total_consumed={self.unit_moves_consumed[unit_id_int]}"
+                        )
 
                 # Extract actor_id for logging
                 actor_id = sanitized_action.get('unit_id') or sanitized_action.get('actor_id') or 'N/A'

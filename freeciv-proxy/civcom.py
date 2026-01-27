@@ -1959,7 +1959,8 @@ class CivCom(Thread):
                     'x': unit.get('x'),
                     'y': unit.get('y'),
                     'moves_left': unit.get('moves_left', 0),
-                    'can_act': unit.get('moves_left', 0) > 0
+                    'can_act': unit.get('moves_left', 0) > 0,
+                    'activity': unit.get('activity', 'idle')
                 })
 
         return tactical

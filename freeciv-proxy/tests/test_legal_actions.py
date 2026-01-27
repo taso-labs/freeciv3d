@@ -66,7 +66,7 @@ class TestLegalActionNormalization:
         assert normalized is not None
         assert normalized['type'] == 'city_production'
         assert normalized['city_id'] == 7
-        assert normalized['target']['production'] == 'Warrior'
+        assert normalized['target']['production_type'] == 'Warrior'
 
     def test_normalize_tech_research_action(self):
         """Test normalizing tech research action"""
