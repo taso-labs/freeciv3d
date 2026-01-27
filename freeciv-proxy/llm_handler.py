@@ -2652,8 +2652,8 @@ class LLMWSHandler(websocket.WebSocketHandler):
                     # Use per-city buildable options if available
                     can_build = city.get('can_build', [])
                     if can_build:
-                        # Limit to first 5 production options
-                        for production in can_build[:5]:
+                        # Show all production options (naval units like Trireme have high unit IDs)
+                        for production in can_build:
                             prod_name = production.get('name', production) if isinstance(production, dict) else production
                             city_action = {
                                 'action_type': 'city_change_production',

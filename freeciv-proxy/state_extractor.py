@@ -2195,7 +2195,7 @@ class StateExtractor:
         - Ruleset-driven action generation (not hardcoded)
         - Smart caching (per-turn for cities/tech, always fresh for units)
         - Semantic filtering (only show actions when decisions needed)
-        - Per-category limits (5 units, 3 cities)
+        - No per-category limits (all valid actions included)
         """
         # Get civcom instance for ruleset-based action generation
         civcom = self._get_civcom_for_player(player_id)
