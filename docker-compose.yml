@@ -5,6 +5,10 @@ services:
       context: .
     container_name: fciv-net
     command: [ "sleep", "infinity" ]
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
     ports:
       - "8002:8002"  # freeciv-proxy for LLM
       - "8003:8003"  # LLM gateway API
