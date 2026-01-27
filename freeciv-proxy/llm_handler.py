@@ -1541,7 +1541,8 @@ class LLMWSHandler(websocket.WebSocketHandler):
                                 f"action_type={action_type}, unit_id={unit_id}"
                             )
                         else:
-                            unit = units.get(unit_id)
+                            # Units dict keys are strings, convert unit_id to string for lookup
+                            unit = units.get(str(unit_id))
                             if not unit:
                                 logger.debug(
                                     f"Pre-submission validation skipped (unit not found): agent={self.agent_id}, "
