@@ -117,17 +117,17 @@ class TestLocalMovesTracking:
             {'id': 103, 'moves_left': 1},
         ]
 
-        # Convert to dict with consistent string keys
-        units_dict = {str(u.get('id')): u for u in units_list if isinstance(u, dict) and u.get('id') is not None}
+        # Convert to dict with consistent int keys (matching implementation)
+        units_dict = {int(u.get('id')): u for u in units_list if isinstance(u, dict) and u.get('id') is not None}
 
-        # All keys should be strings
-        assert all(isinstance(k, str) for k in units_dict.keys())
-        assert '101' in units_dict
-        assert '102' in units_dict
-        assert '103' in units_dict
+        # All keys should be ints
+        assert all(isinstance(k, int) for k in units_dict.keys())
+        assert 101 in units_dict
+        assert 102 in units_dict
+        assert 103 in units_dict
 
-        # Lookup should work with string
-        unit = units_dict.get(str(101))
+        # Lookup should work with int
+        unit = units_dict.get(101)
         assert unit is not None
         assert unit['moves_left'] == 3
 
@@ -140,12 +140,12 @@ class TestLocalMovesTracking:
             {'id': 103, 'moves_left': 1},
         ]
 
-        units_dict = {str(u.get('id')): u for u in units_list if isinstance(u, dict) and u.get('id') is not None}
+        units_dict = {int(u.get('id')): u for u in units_list if isinstance(u, dict) and u.get('id') is not None}
 
         # Should only have valid entries
         assert len(units_dict) == 2
-        assert '101' in units_dict
-        assert '103' in units_dict
+        assert 101 in units_dict
+        assert 103 in units_dict
 
     def test_action_data_extraction_with_data_key(self):
         """Test action data extraction prioritizes 'data' key"""

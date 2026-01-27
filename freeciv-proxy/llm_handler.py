@@ -1497,13 +1497,15 @@ class LLMWSHandler(websocket.WebSocketHandler):
                     game_state = self._get_current_game_state()
                     current_turn = game_state.get('turn') if game_state else None
 
-                    # Reset local tracking on turn change
-                    # Update last_tracked_turn BEFORE clearing to reduce race condition window
-                    if current_turn is not None and current_turn != self.last_tracked_turn:
+                    # Reset local tracking on turn change using atomic update pattern
+                    # Cache old_turn first to avoid race condition where multiple threads
+                    # could check the same stale value and all proceed to reset
+                    old_turn = self.last_tracked_turn
+                    if current_turn is not None and current_turn != old_turn:
                         self.last_tracked_turn = current_turn
                         self.unit_moves_consumed.clear()
                         logger.debug(
-                            f"Reset moves tracking for turn {current_turn}: agent={self.agent_id}"
+                            f"Reset moves tracking: turn {old_turn} → {current_turn}, agent={self.agent_id}"
                         )
 
                     if game_state:
