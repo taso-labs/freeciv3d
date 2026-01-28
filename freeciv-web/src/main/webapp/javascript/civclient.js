@@ -57,11 +57,9 @@ const OBSERVER_MAX_RETRIES = 2;
 const OBSERVER_RETRY_DELAY_MS = 1500;
 
 // Observer connection stagger delays (prevents server-side race conditions)
-// Global connects LAST to avoid being affected by civserver initialization race conditions
-// Increased delays (0/500/1000ms) provide more time for civserver to process each connection
-const OBSERVER_STAGGER_GLOBAL_MS = 1000;  // global observer connects last (most important)
-const OBSERVER_STAGGER_PLAYER1_MS = 0;    // player1 observer connects first
-const OBSERVER_STAGGER_PLAYER2_MS = 500;  // player2 observer waits 500ms
+const OBSERVER_STAGGER_GLOBAL_MS = 0;     // global observer connects first
+const OBSERVER_STAGGER_PLAYER1_MS = 300;  // player1 observer waits 300ms
+const OBSERVER_STAGGER_PLAYER2_MS = 600;  // player2 observer waits 600ms
 
 // Observer follow mode state
 var observer_follow_player = null;        // Player ID to follow, or null for global
