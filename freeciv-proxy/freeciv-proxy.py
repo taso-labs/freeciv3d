@@ -150,32 +150,47 @@ def validate_username(name):
     if (name is None or len(name) <= 2 or len(name) >= 32):
         return False
 
-    # Clean up existing connections for this username before validation
-    # This allows reconnection (e.g., page refresh, multiple tabs) by closing old connection
-    keys_to_remove = []
-    for civkey in list(civcoms.keys()):
-        if civkey in civcoms and name == civcoms[civkey].username:
-            if civcoms[civkey].stopped:
-                logger.info(f"Removing stopped connection for user: {name}")
-            else:
-                # Close active connection to allow reconnection
-                logger.info(f"Closing active connection for reconnecting user: {name}")
-                civcoms[civkey].stopped = True
-                try:
-                    civcoms[civkey].close_connection()
-                except Exception as e:
-                    logger.warn(f"Error closing connection: {e}")
-            keys_to_remove.append(civkey)
+    # Normalize to lowercase early for consistent comparison
+    name_lower = name.lower()
 
-    # Remove old connections (check if key still exists)
-    for key in keys_to_remove:
-        if key in civcoms:
-            del civcoms[key]
-            logger.info(f"Deleted connection key: {key}")
+    # Observer usernames have unique random suffixes (e.g., global_view_abc12345)
+    # and should never conflict with each other. Skip connection cleanup for observers
+    # to prevent race conditions when multiple observer frames connect simultaneously.
+    # Patterns: global_xxx, playerN_xxx, observer_xxx, anything_view_xxx
+    is_observer = (
+        name_lower.startswith('global_') or
+        name_lower.startswith('player') or
+        name_lower.startswith('observer') or
+        '_view_' in name_lower or
+        '_observer_' in name_lower
+    )
 
-    name = name.lower()
+    if not is_observer:
+        # Clean up existing connections for this username before validation
+        # This allows reconnection (e.g., page refresh, multiple tabs) by closing old connection
+        keys_to_remove = []
+        for civkey in list(civcoms.keys()):
+            if civkey in civcoms and name_lower == civcoms[civkey].username.lower():
+                if civcoms[civkey].stopped:
+                    logger.info(f"Removing stopped connection for user: {name}")
+                else:
+                    # Close active connection to allow reconnection
+                    logger.info(f"Closing active connection for reconnecting user: {name}")
+                    civcoms[civkey].stopped = True
+                    try:
+                        civcoms[civkey].close_connection()
+                    except Exception as e:
+                        logger.warn(f"Error closing connection: {e}")
+                keys_to_remove.append(civkey)
+
+        # Remove old connections (check if key still exists)
+        for key in keys_to_remove:
+            if key in civcoms:
+                del civcoms[key]
+                logger.info(f"Deleted connection key: {key}")
+
     # Allow letters, numbers, and underscores (for observer names like global_view_abc123)
-    return re.fullmatch('[a-z][a-z0-9_]*', name) is not None
+    return re.fullmatch('[a-z][a-z0-9_]*', name_lower) is not None
 
 
 if __name__ == "__main__":
