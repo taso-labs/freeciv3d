@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.28](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.27...freeciv3d-v0.3.28) (2026-01-28)
+
+
+### Bug Fixes
+
+* Resolve observer timeouts and OpenTelemetry TLS misconfiguration ([#95](https://github.com/taso-ventures/freeciv3d/issues/95)) ([a9f1927](https://github.com/taso-ventures/freeciv3d/commit/a9f192775ce5785ba7028d1ffd74f5d8393b27b9))
+
 ## [0.3.27](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.26...freeciv3d-v0.3.27) (2026-01-28)
 
 
