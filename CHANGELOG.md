@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.26](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.25...freeciv3d-v0.3.26) (2026-01-28)
+
+
+### Bug Fixes
+
+* **observer:** Make global observer connect last to avoid civserver race condition ([2225dc8](https://github.com/taso-ventures/freeciv3d/commit/2225dc8ed5a79b3e15fd4d331e52f8a58b78e257))
+* Resolve observer race condition causing black terrain in multi-observer views ([#93](https://github.com/taso-ventures/freeciv3d/issues/93)) ([d29536f](https://github.com/taso-ventures/freeciv3d/commit/d29536ff27c70d580232a790b79eff15ef72f8c5))
+
 ## [0.3.25](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.24...freeciv3d-v0.3.25) (2026-01-28)
 
 
