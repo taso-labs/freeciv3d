@@ -135,7 +135,7 @@ function websocket_init()
 
      observer_retry_count++;
      observer_retry_in_progress = true;
-     freelog(LOG_WARN, '[Observer] Connection closed before running state, retry ' +
+     freelog(LOG_NORMAL, '[Observer] Connection closed before running state, retry ' +
                   observer_retry_count + '/' + OBSERVER_MAX_RETRIES +
                   ' (close code: ' + event.code + ')');
 
