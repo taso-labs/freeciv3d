@@ -117,7 +117,8 @@ def init_tracing(
     if enable_cloud_trace and otlp_endpoint and OTLP_AVAILABLE:
         # Prefer OTLP exporter if endpoint is configured (consistent with agent-clash)
         try:
-            exporter = OTLPSpanExporter(endpoint=otlp_endpoint, insecure=False)
+            # Use insecure=True for plaintext gRPC (in-cluster collector on port 4317)
+            exporter = OTLPSpanExporter(endpoint=otlp_endpoint, insecure=True)
             provider.add_span_processor(BatchSpanProcessor(exporter, **batch_processor_kwargs))
             logger.info(f"OTLP exporter enabled for {service_name} -> {otlp_endpoint}")
         except Exception as e:
