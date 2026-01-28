@@ -142,6 +142,8 @@ function websocket_init()
      // Reset state for retry using the same function as timeout-based retry
      if (typeof reset_observer_state_for_retry === 'function') {
        reset_observer_state_for_retry();
+       // Re-set flag after reset (reset_observer_state_for_retry clears it)
+       observer_retry_in_progress = true;
      } else {
        // Fallback if function not available
        network_init_called = false;
