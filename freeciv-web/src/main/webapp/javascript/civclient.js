@@ -53,13 +53,14 @@ const OBSERVER_INIT_TIMEOUT_MS = 15000;
 // Observer retry configuration
 var observer_retry_count = 0;
 var observer_retry_in_progress = false;  // Guard against overlapping retry attempts
-const OBSERVER_MAX_RETRIES = 2;
-const OBSERVER_RETRY_DELAY_MS = 1500;
+const OBSERVER_MAX_RETRIES = 4;          // Increased for better recovery from transient failures
+const OBSERVER_RETRY_DELAY_MS = 2500;    // Longer delay between retries for server recovery
 
 // Observer connection stagger delays (prevents server-side race conditions)
+// These delays account for RULESET packet transmission time (~500-1000ms per observer)
 const OBSERVER_STAGGER_GLOBAL_MS = 0;     // global observer connects first
-const OBSERVER_STAGGER_PLAYER1_MS = 300;  // player1 observer waits 300ms
-const OBSERVER_STAGGER_PLAYER2_MS = 600;  // player2 observer waits 600ms
+const OBSERVER_STAGGER_PLAYER1_MS = 1500; // player1 waits 1.5s for RULESET packets to finish
+const OBSERVER_STAGGER_PLAYER2_MS = 3000; // player2 waits 3s (2 observers ahead)
 
 // Observer follow mode state
 var observer_follow_player = null;        // Player ID to follow, or null for global
