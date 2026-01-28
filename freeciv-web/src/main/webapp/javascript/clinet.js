@@ -122,6 +122,44 @@ function websocket_init()
 
   ws.onclose = function (event) {
    freelog(LOG_ERROR, "WebSocket closed - code: " + event.code + ", reason: " + event.reason + ", wasClean: " + event.wasClean);
+
+   // For observers that haven't reached running state yet, attempt automatic retry
+   // This handles cases where civserver rejects connections due to race conditions
+   if (typeof observing !== 'undefined' && observing &&
+       typeof client_state === 'function' && client_state() !== C_S_RUNNING &&
+       typeof observer_retry_count !== 'undefined' &&
+       typeof OBSERVER_MAX_RETRIES !== 'undefined' &&
+       observer_retry_count < OBSERVER_MAX_RETRIES &&
+       typeof observer_retry_in_progress !== 'undefined' &&
+       !observer_retry_in_progress) {
+
+     observer_retry_count++;
+     observer_retry_in_progress = true;
+     freelog(LOG_WARN, '[Observer] Connection closed before running state, retry ' +
+                  observer_retry_count + '/' + OBSERVER_MAX_RETRIES +
+                  ' (close code: ' + event.code + ')');
+
+     // Reset state for retry using the same function as timeout-based retry
+     if (typeof reset_observer_state_for_retry === 'function') {
+       reset_observer_state_for_retry();
+       // Re-set flag after reset (reset_observer_state_for_retry clears it)
+       observer_retry_in_progress = true;
+     } else {
+       // Fallback if function not available
+       network_init_called = false;
+       clearInterval(ping_timer);
+     }
+
+     // Retry after a short delay
+     setTimeout(function() {
+       if (typeof network_init === 'function') {
+         network_init();
+       }
+       observer_retry_in_progress = false;
+     }, typeof OBSERVER_RETRY_DELAY_MS !== 'undefined' ? OBSERVER_RETRY_DELAY_MS : 1500);
+     return;  // Don't show error dialog, we're retrying
+   }
+
    swal("Network Error", "Connection to server is closed. Please reload the page to restart. Sorry!", "error");
    message_log.update({
      event: E_LOG_ERROR,
