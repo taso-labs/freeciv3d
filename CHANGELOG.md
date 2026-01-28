@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.27](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.26...freeciv3d-v0.3.27) (2026-01-28)
+
+
+### Bug Fixes
+
+* **observer:** Use LOG_NORMAL instead of undefined LOG_WARN ([efe082a](https://github.com/taso-ventures/freeciv3d/commit/efe082a5862a3afbad8fc2cb3f12f8b127ebcf36))
+
 ## [0.3.26](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.25...freeciv3d-v0.3.26) (2026-01-28)
 
 
