@@ -135,13 +135,18 @@ function websocket_init()
 
      observer_retry_count++;
      observer_retry_in_progress = true;
-     console.warn('[Observer] Connection closed before running state, retry ' +
+     freelog(LOG_WARN, '[Observer] Connection closed before running state, retry ' +
                   observer_retry_count + '/' + OBSERVER_MAX_RETRIES +
                   ' (close code: ' + event.code + ')');
 
-     // Reset state for retry
-     network_init_called = false;
-     clearInterval(ping_timer);
+     // Reset state for retry using the same function as timeout-based retry
+     if (typeof reset_observer_state_for_retry === 'function') {
+       reset_observer_state_for_retry();
+     } else {
+       // Fallback if function not available
+       network_init_called = false;
+       clearInterval(ping_timer);
+     }
 
      // Retry after a short delay
      setTimeout(function() {
