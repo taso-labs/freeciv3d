@@ -8,6 +8,7 @@ REST API endpoints for LLM Gateway
 import asyncio
 import logging
 import time
+import traceback
 from typing import Dict, Any, List, Literal, Optional
 from urllib.parse import quote
 import uuid
@@ -749,20 +750,38 @@ async def get_observer_urls(
         player1_viewer_name = quote(f"player1_view_{unique_suffix}", safe="")
         player2_viewer_name = quote(f"player2_view_{unique_suffix}", safe="")
 
+        # Stagger connection delays to prevent race conditions (production stability fix)
+        #
+        # Race condition: When 3 observer iframes load simultaneously, they each:
+        # 1. Establish a WebSocket connection to freeciv-proxy
+        # 2. Send authentication/join packets to civserver
+        # 3. Register as observers and receive initial game state
+        #
+        # In production (with network latency, load balancers), simultaneous connections
+        # can overwhelm the civserver's connection handling, causing:
+        # - Connection rejections (server busy)
+        # - Observer registration failures
+        # - Incomplete game state synchronization
+        #
+        # By staggering connections (global=0ms, player1=500ms, player2=1000ms),
+        # each observer fully completes its handshake before the next starts.
         observer_urls = {
             "global": (
                 f"{webclient_path}?action=observe&civserverport={game_port}"
                 f"&embed=1&autojoin=1&name={global_viewer_name}&camera=strategic"
+                f"&connection_delay=0"
             ),
             "player1": (
                 f"{webclient_path}?action=observe&civserverport={game_port}"
                 f"&observe_player={player1_name}&follow={player1_name}"
                 f"&embed=1&autojoin=1&name={player1_viewer_name}&camera=cinematic"
+                f"&connection_delay=500"
             ),
             "player2": (
                 f"{webclient_path}?action=observe&civserverport={game_port}"
                 f"&observe_player={player2_name}&follow={player2_name}"
                 f"&embed=1&autojoin=1&name={player2_viewer_name}&camera=cinematic"
+                f"&connection_delay=1000"
             )
         }
 
@@ -810,7 +829,10 @@ async def get_observer_urls(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error getting observer URLs for game {game_id}: {e}")
+        logger.error(
+            f"Error getting observer URLs for game {game_id}: {e}\n"
+            f"Traceback: {traceback.format_exc()}"
+        )
         raise HTTPException(status_code=500, detail="Internal server error")
 
 

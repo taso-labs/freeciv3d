@@ -59,8 +59,24 @@ function network_init()
        freelog(LOG_DEBUG, "civclientlauncher response - port: " + civserverport + ", result: " + connect_result);
 
        if (civserverport != null && connect_result == "success") {
-         websocket_init();
-         load_game_check();
+         // Support staggered connections for multiple observer views
+         // When 3 observer iframes connect simultaneously to the same civserver, race conditions
+         // can occur in the connection handshake and observer registration. By staggering the
+         // WebSocket connections (global=0ms, player1=500ms, player2=1000ms), each observer
+         // fully completes its connection before the next one starts.
+         // Max delay capped at 5000ms to prevent misconfiguration issues.
+         var raw_delay = parseInt($.getUrlVar('connection_delay'), 10) || 0;
+         var connection_delay = Math.max(0, Math.min(5000, raw_delay));
+         if (connection_delay > 0) {
+           freelog(LOG_DEBUG, "Delaying WebSocket connection by " + connection_delay + "ms (staggered observer)");
+           setTimeout(function() {
+             websocket_init();
+             load_game_check();
+           }, connection_delay);
+         } else {
+           websocket_init();
+           load_game_check();
+         }
 
        } else {
          freelog(LOG_ERROR, "civclientlauncher failed - port: " + civserverport + ", result: " + connect_result);

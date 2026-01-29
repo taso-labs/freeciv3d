@@ -41,6 +41,17 @@ spec:
         - port: 3306  # MySQL (Cloud SQL Proxy)
           protocol: TCP
 
+    # Allow OpenTelemetry collector (in opentelemetry namespace)
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: opentelemetry
+      ports:
+        - port: 4317  # OTLP gRPC
+          protocol: TCP
+        - port: 4318  # OTLP HTTP
+          protocol: TCP
+
     # Allow Cloud SQL Proxy to connect to Cloud SQL (private IP)
     # Also allow port 988 for GKE metadata server (traffic is DNAT'd to pod IPs)
     - to:

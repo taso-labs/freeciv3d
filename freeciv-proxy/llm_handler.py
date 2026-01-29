@@ -758,10 +758,32 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 # FIX: Skip nation selection during mid-game reconnection (E142 fix)
                 # If game has already started, sending PACKET_NATION_SELECT_REQ is invalid and causes E142
                 # Instead, we just need to register the player back with the game session
-                skip_nation_selection = (
+                #
+                # Two scenarios where we skip nation selection:
+                #
+                # Scenario 1: Normal reconnection to a running game
+                # The GameSession correctly tracks that the game has started
+                skip_for_running_game = is_reconnecting and game_session.game_started
+
+                # Scenario 2: Reconnection after GameSession was lost (E142 fix)
+                # When GameSession is recreated (proxy restart, session expiry), game_started=False
+                # But previous_player_id from Redis session resumption proves we already selected
+                # a nation in a previous session - you can't have a player_id without completing
+                # nation selection first
+                skip_for_session_recovery = (
                     is_reconnecting and
-                    game_session.game_started
+                    previous_player_id is not None and
+                    not game_session.game_started
                 )
+
+                skip_nation_selection = skip_for_running_game or skip_for_session_recovery
+
+                # Log when we detect mid-game reconnection via session recovery path
+                if skip_for_session_recovery:
+                    logger.info(
+                        f"🔄 Mid-game reconnection detected for {self.agent_id} via previous_player_id={previous_player_id}\n"
+                        f"   (game_session.game_started=False but previous_player_id exists, indicating session recovery)"
+                    )
 
                 if not skip_nation_selection:
                     # Get nation preference from message or use default
