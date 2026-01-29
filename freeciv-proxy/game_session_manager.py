@@ -776,11 +776,121 @@ class GameSessionManager:
         """Get existing session"""
         return self.sessions.get(game_id)
 
-    def remove_session(self, game_id: str) -> None:
-        """Remove a game session"""
+    async def release_civserver_port(self, game_id: str, port: int) -> bool:
+        """Release a civserver port back to the metaserver pool.
+
+        Called when a session terminates (not suspended) to free the allocated
+        port for reuse by other games. This prevents zombie sessions where
+        ports remain marked as unavailable after gateway failures.
+
+        Includes retry logic with exponential backoff to handle transient
+        network issues during shutdown. The stale cleanup in ServerAllocator
+        is a safety net, but active release should be resilient.
+
+        Args:
+            game_id: The game identifier for the allocation
+            port: The civserver port (6000-6009) to release
+
+        Returns:
+            True if release succeeded, False otherwise
+        """
+        # Retry constants (similar to allocation but fewer retries since this is best-effort)
+        max_retries = 3
+        base_delay = 0.5  # 500ms base delay
+
+        for attempt in range(max_retries):
+            try:
+                async with aiohttp.ClientSession(self.metaserver_url) as session:
+                    # POST to /meta/release with port and game_id
+                    params = {"port": str(port), "host": "localhost"}
+                    if game_id:
+                        params["game_id"] = game_id
+
+                    async with session.post(
+                        "/meta/release",
+                        params=params,
+                        timeout=aiohttp.ClientTimeout(total=5),
+                    ) as response:
+                        if response.status == 200:
+                            data = await response.json()
+                            if data.get("success"):
+                                logger.info(
+                                    f"Released civserver port {port} for game {game_id}, "
+                                    f"allocation_released={data.get('allocation_released', False)}"
+                                )
+                                return True
+                            else:
+                                logger.warning(f"Metaserver release returned non-success: {data}")
+                                # Non-success response is not retryable
+                                return False
+                        elif response.status == 404:
+                            # Server not found or already available - this is OK
+                            logger.info(f"Port {port} already released or not found (404)")
+                            return True
+                        else:
+                            # Server error - retry with backoff
+                            if attempt < max_retries - 1:
+                                delay = base_delay * (2 ** attempt)
+                                logger.warning(
+                                    f"Metaserver release failed with status {response.status}, "
+                                    f"attempt {attempt + 1}/{max_retries}, retrying in {delay:.1f}s"
+                                )
+                                await asyncio.sleep(delay)
+                                continue
+                            else:
+                                logger.error(
+                                    f"Metaserver release failed with status {response.status} "
+                                    f"after {max_retries} attempts"
+                                )
+                                return False
+
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    delay = base_delay * (2 ** attempt)
+                    logger.warning(
+                        f"Error releasing port {port} for game {game_id}: {e}, "
+                        f"attempt {attempt + 1}/{max_retries}, retrying in {delay:.1f}s"
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+                else:
+                    logger.error(
+                        f"Error releasing port {port} for game {game_id} "
+                        f"after {max_retries} attempts: {e}"
+                    )
+                    return False
+
+        return False  # Should not reach here, but for safety
+
+    def remove_session(self, game_id: str, release_port: bool = True) -> None:
+        """Remove a game session and optionally release its port.
+
+        Args:
+            game_id: The game identifier to remove
+            release_port: If True, schedule async port release to metaserver
+        """
         if game_id in self.sessions:
+            session = self.sessions[game_id]
+            port = session.civserver_port
+
             del self.sessions[game_id]
             logger.info(f"Removed game session: {game_id}")
+
+            # Schedule async port release if requested
+            if release_port and port:
+                # Use IOLoop to schedule the async release
+                # IMPORTANT: Capture game_id and port by value (gid=game_id, p=port)
+                # to avoid late binding closure bug where lambda would use
+                # values from the last call if remove_session() is called multiple times
+                try:
+                    IOLoop.current().add_callback(
+                        lambda gid=game_id, p=port: asyncio.create_task(
+                            self.release_civserver_port(gid, p)
+                        )
+                    )
+                    logger.info(f"Scheduled port release for game {game_id}, port {port}")
+                except Exception as e:
+                    logger.error(f"Failed to schedule port release for {game_id}: {e}")
 
     def get_all_sessions(self) -> Dict[str, GameSession]:
         """Get all active sessions"""

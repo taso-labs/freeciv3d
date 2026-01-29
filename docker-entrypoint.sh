@@ -64,7 +64,8 @@ if [ -d "/docker/llm-gateway" ]; then
     # Redis connection (no auth - protected by network isolation)
     # Docker: fciv-redis on internal bridge network (not externally exposed)
     # K8s: redis.freeciv.svc.cluster.local with NetworkPolicy restrictions (ClusterIP only)
-    export GATEWAY_REDIS_URL="redis://fciv-redis:6379"
+    # Allow override via environment (e.g., K8s deployment.yaml sets the correct hostname)
+    export GATEWAY_REDIS_URL="${GATEWAY_REDIS_URL:-redis://fciv-redis:6379}"
     # IMPORTANT: Write directly to /proc/1/fd/1 (container stdout) for K8s log capture
     # Using tee with backgrounded processes doesn't work reliably when shell is replaced by exec
     export PYTHONUNBUFFERED=1

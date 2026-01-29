@@ -4252,6 +4252,54 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 if registered_civcom is self.civcom:
                     civcom_registry.unregister_game(self.game_id, self.agent_id)
 
+            # Release the allocated civserver port back to the pool
+            # This prevents zombie sessions where ports stay unavailable after gateway failures
+            civserver_port = None
+            if self.session_info and hasattr(self.session_info, 'civserver_port'):
+                civserver_port = self.session_info.civserver_port
+            elif self.game_id:
+                # Try to get port from game session if session_info doesn't have it
+                game_session = game_session_manager.sessions.get(self.game_id)
+                if game_session:
+                    civserver_port = game_session.civserver_port
+
+            if civserver_port and self.game_id:
+                # Check if this is the last player in the game session
+                # Only release port when ALL players have disconnected (not just one)
+                game_session = game_session_manager.sessions.get(self.game_id)
+                remaining_players = 0
+                if game_session:
+                    # Use _players_lock to prevent race condition where two players
+                    # disconnecting simultaneously could both see remaining_players == 0
+                    with game_session._players_lock:
+                        # Count players excluding ourselves
+                        remaining_players = sum(
+                            1 for aid in game_session.players
+                            if aid != self.agent_id
+                        )
+
+                if remaining_players == 0:
+                    # Last player disconnected - release the port
+                    logger.info(
+                        f"[PORT_RELEASE] Last player {self.agent_id} disconnected from game {self.game_id}, "
+                        f"releasing port {civserver_port}"
+                    )
+                    # Schedule async port release via IOLoop
+                    try:
+                        from tornado.ioloop import IOLoop
+                        IOLoop.current().add_callback(
+                            lambda gid=self.game_id, port=civserver_port: asyncio.create_task(
+                                game_session_manager.release_civserver_port(gid, port)
+                            )
+                        )
+                    except Exception as e:
+                        logger.error(f"Failed to schedule port release: {e}")
+                else:
+                    logger.info(
+                        f"Player {self.agent_id} disconnected from game {self.game_id}, "
+                        f"but {remaining_players} players remain - port {civserver_port} stays allocated"
+                    )
+
         self.civcom = None
 
         # Remove from agent registry
