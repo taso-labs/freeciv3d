@@ -25,6 +25,23 @@ services:
       - CACHE_HMAC_SECRET=${CACHE_HMAC_SECRET:-75d6fd1ee3fb974b9a04f64eae2d48f2d7acdbc294cda59bc75485bcfe0bf861}
       - API_KEY_SECRET=${API_KEY_SECRET:-test12345678901234567890123456789012}
       - LLM_API_TOKENS=${LLM_API_TOKENS:-test-token-fc3d-001,test-token-fc3d-002}
+      #
+      # TIMEOUT CONFIGURATION - Keep these in sync!
+      # ──────────────────────────────────────────────────────────────────────
+      # SESSION_TIMEOUT_SECONDS: How long a suspended session stays reconnectable (Python)
+      #   - After this, session is terminated and game state is lost
+      #   - Default: 3600s (1 hour)
+      #
+      # STALE_ALLOCATION_THRESHOLD_MINUTES: Port cleanup threshold (Java, in Tomcat)
+      #   - Set via: JAVA_OPTS=-Dfreeciv.stale.allocation.threshold.minutes=10
+      #   - Allocations without activity for this long are auto-released
+      #   - Default: 10 minutes
+      #   - MUST be < SESSION_TIMEOUT_SECONDS/60 to avoid releasing ports for active sessions
+      #
+      # Recommended relationship:
+      #   STALE_ALLOCATION_THRESHOLD > typical game pause duration
+      #   STALE_ALLOCATION_THRESHOLD < SESSION_TIMEOUT (allow reconnect before cleanup)
+      # ──────────────────────────────────────────────────────────────────────
       - SESSION_TIMEOUT_SECONDS=${SESSION_TIMEOUT_SECONDS:-3600}
       - MAX_LLM_AGENTS=${MAX_LLM_AGENTS:-10}
       - MAX_SESSIONS_PER_PLAYER=${MAX_SESSIONS_PER_PLAYER:-3}

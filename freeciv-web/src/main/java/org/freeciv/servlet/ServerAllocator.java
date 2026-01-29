@@ -45,6 +45,11 @@ import java.util.logging.Logger;
  * - If game_id is provided and has an active allocation, returns the same port
  * - This enables reconnection to the same game after connection loss
  *
+ * Includes stale allocation cleanup:
+ * - Runs before each allocation to reclaim zombie ports
+ * - Zombie ports occur when gateway crashes without releasing the port
+ * - Allocations older than STALE_ALLOCATION_THRESHOLD_MINUTES are auto-released
+ *
  * URL: /meta/allocate (mapped in web.xml)
  */
 public class ServerAllocator extends HttpServlet {
@@ -59,6 +64,20 @@ public class ServerAllocator extends HttpServlet {
 	// After this time, the allocation is considered stale and a new port is assigned
 	// 24 hours allows for long-running LLM games with extended pauses
 	private static final int MAX_ALLOCATION_AGE_SECONDS = 86400; // 24 hours
+
+	// Threshold for stale allocation cleanup (minutes without activity)
+	// Allocations without last_seen updates for this long are considered zombies
+	// IMPORTANT: Must be LONGER than SESSION_SUSPENSION_TIMEOUT_SECS (Python env var)
+	// to prevent premature port release during valid reconnection windows.
+	//
+	// Configuration examples:
+	//   - Default: SESSION_SUSPENSION_TIMEOUT_SECS=300 (5 min) → threshold=10 min is safe
+	//   - 30-min reconnection: SESSION_SUSPENSION_TIMEOUT_SECS=1800 → threshold=45 min
+	//
+	// Default 10 min matches default 5-min session suspension with 2x safety margin.
+	// Override via: -Dfreeciv.stale.allocation.threshold.minutes=45
+	private static final int STALE_ALLOCATION_THRESHOLD_MINUTES =
+		Integer.getInteger("freeciv.stale.allocation.threshold.minutes", 10);
 
 	/**
 	 * Check if a port is actively listening on the local machine.
@@ -81,6 +100,61 @@ public class ServerAllocator extends HttpServlet {
 			// Connection refused or timeout - port is not listening
 			return false;
 		}
+	}
+
+	/**
+	 * Clean up stale allocations that haven't been seen recently.
+	 *
+	 * This is a defensive layer against zombie sessions where the gateway
+	 * crashes without calling /meta/release. Such allocations would otherwise
+	 * keep ports marked as unavailable indefinitely.
+	 *
+	 * The cleanup:
+	 * 1. Finds allocations that haven't been updated in STALE_ALLOCATION_THRESHOLD_MINUTES
+	 * 2. Marks those allocations as released (sets released_at)
+	 * 3. Resets the corresponding servers to available/Pregame state
+	 *
+	 * This runs at the start of each allocation request, which is appropriate
+	 * because allocation requests are infrequent (game starts only) and the
+	 * cleanup is lightweight (single indexed query).
+	 *
+	 * @param conn Database connection to use (should be within a transaction)
+	 * @return Number of stale allocations cleaned up
+	 */
+	private int cleanupStaleAllocations(Connection conn) {
+		int cleaned = 0;
+		try {
+			// Find and release stale allocations in one atomic operation
+			// Uses INNER JOIN to update both tables together
+			// Criteria:
+			//   - allocation not released
+			//   - last_seen older than threshold
+			//   - server still in 'Pregame' state (game never started OR already finished)
+			// CRITICAL: The state='Pregame' check prevents cleaning up RUNNING games!
+			// Active games change state to 'Running', so they won't be affected.
+			String cleanupQuery =
+				"UPDATE servers s " +
+				"INNER JOIN game_allocations ga ON s.port = ga.port AND s.host = ga.host " +
+				"SET s.available = 1, s.state = 'Pregame', s.stamp = NOW(), ga.released_at = NOW() " +
+				"WHERE s.available = 0 " +
+				"AND s.state = 'Pregame' " +  // Only clean up if game never started
+				"AND ga.released_at IS NULL " +
+				"AND ga.last_seen < DATE_SUB(NOW(), INTERVAL ? MINUTE)";
+
+			try (PreparedStatement stmt = conn.prepareStatement(cleanupQuery)) {
+				stmt.setInt(1, STALE_ALLOCATION_THRESHOLD_MINUTES);
+				cleaned = stmt.executeUpdate();
+
+				if (cleaned > 0) {
+					logger.info("Cleaned up " + cleaned + " stale allocation(s) (no activity for " +
+						STALE_ALLOCATION_THRESHOLD_MINUTES + " minutes)");
+				}
+			}
+		} catch (SQLException e) {
+			// Log but don't fail - cleanup is best-effort
+			logger.warning("Failed to cleanup stale allocations: " + e.getMessage());
+		}
+		return cleaned;
 	}
 
 	@Override
@@ -120,6 +194,13 @@ public class ServerAllocator extends HttpServlet {
 		try {
 			Context env = (Context) (new InitialContext().lookup(Constants.JNDI_CONNECTION));
 			DataSource ds = (DataSource) env.lookup(Constants.JNDI_DDBBCON_MYSQL);
+
+			// Run stale cleanup in a separate auto-commit connection BEFORE the allocation transaction
+			// This ensures cleanup persists even if subsequent allocation fails and rolls back
+			try (Connection cleanupConn = ds.getConnection()) {
+				// Auto-commit is default (true), cleanup commits immediately
+				cleanupStaleAllocations(cleanupConn);
+			}
 
 			try (Connection conn = ds.getConnection()) {
 				// Use transaction for atomicity (prevents race conditions)

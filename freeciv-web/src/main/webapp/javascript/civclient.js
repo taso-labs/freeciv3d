@@ -56,11 +56,13 @@ var observer_retry_in_progress = false;  // Guard against overlapping retry atte
 const OBSERVER_MAX_RETRIES = 4;          // Increased for better recovery from transient failures
 const OBSERVER_RETRY_DELAY_MS = 2500;    // Longer delay between retries for server recovery
 
-// Observer connection stagger delays (prevents server-side race conditions)
-// These delays account for RULESET packet transmission time (~500-1000ms per observer)
-const OBSERVER_STAGGER_GLOBAL_MS = 0;     // global observer connects first
-const OBSERVER_STAGGER_PLAYER1_MS = 1500; // player1 waits 1.5s for RULESET packets to finish
-const OBSERVER_STAGGER_PLAYER2_MS = 3000; // player2 waits 3s (2 observers ahead)
+// Observer connection stagger delays - NOW HANDLED BY API-LEVEL connection_delay PARAM
+// The connection_delay URL parameter (set in api_endpoints.py) stagers WebSocket init
+// Client-side stagger removed to prevent compounding delays that ate into timeout budget
+// See: llm-gateway/api_endpoints.py for the 0/200/400ms stagger timing
+const OBSERVER_STAGGER_GLOBAL_MS = 0;     // Stagger handled by connection_delay=0
+const OBSERVER_STAGGER_PLAYER1_MS = 0;    // Stagger handled by connection_delay=200
+const OBSERVER_STAGGER_PLAYER2_MS = 0;    // Stagger handled by connection_delay=400
 
 // Observer follow mode state
 var observer_follow_player = null;        // Player ID to follow, or null for global

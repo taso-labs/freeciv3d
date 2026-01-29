@@ -15,8 +15,8 @@
 
 import socket
 from struct import *
-from threading import Thread
-from typing import Dict, Any, List
+from threading import Thread, Event
+from typing import Dict, Any, List, Optional
 import logging
 import time
 import json
@@ -390,11 +390,36 @@ class CivCom(Thread):
         # Tile data storage for terrain lookups
         self.tiles = {}  # {tile_index: {terrain, extras, ...}}
 
+        # Connection semaphore tracking - for rate-limiting observer handshakes
+        # port_semaphore: Set by WSHandler.get_civcom() before starting thread.
+        #   Released after PACKET_SERVER_JOIN_REPLY or on connection failure.
+        # handshake_complete: Event signaling that handshake is done (for monitoring/debugging)
+        self.port_semaphore: Optional['threading.Semaphore'] = None
+        self.handshake_complete = Event()
+
         logger.info(
             f"🆕 CivCom instance created:\n"
             f"   username={username}, port={civserverport}, key={key}\n"
             f"   player_units initialized as: {type(self.player_units).__name__}"
         )
+
+    def _release_handshake_semaphore(self):
+        """Release the port semaphore after handshake completes or fails.
+
+        Safe to call multiple times - only releases once.
+        Called automatically after PACKET_SERVER_JOIN_REPLY or on connection failure.
+        """
+        if self.port_semaphore is not None:
+            try:
+                self.port_semaphore.release()
+                logger.debug(f"[{self.username}] Released handshake semaphore for port {self.civserverport}")
+            except ValueError:
+                # Semaphore already released (can happen in edge cases)
+                logger.debug(f"[{self.username}] Semaphore already released for port {self.civserverport}")
+            finally:
+                # Clear reference to prevent double-release
+                self.port_semaphore = None
+                self.handshake_complete.set()
 
     def invalidate_action_cache(self, player_id=None, cache_type=None):
         """Invalidate cached actions when game state changes.
@@ -949,6 +974,8 @@ class CivCom(Thread):
                 logger.info(f"[{self.username}] Successfully connected to {HOST}:{self.civserverport}")
             except socket.error as reason:
                 logger.error(f"[{self.username}] Failed to connect to {HOST}:{self.civserverport}: {reason}")
+                # Release semaphore on connection failure to unblock queued connections
+                self._release_handshake_semaphore()
                 self.send_error_to_client(
                     "Proxy unable to connect to civserver. Error: %s" %
                     (reason))
@@ -1052,6 +1079,8 @@ class CivCom(Thread):
         except Exception as e:
             # logger.exception() already includes full traceback
             logger.exception(f"CivCom thread crashed for {self.username}: {e}")
+            # Release semaphore on crash to unblock queued connections
+            self._release_handshake_semaphore()
             try:
                 self.send_error_to_client(f"Connection thread crashed: {e}")
             except:
@@ -1120,6 +1149,10 @@ class CivCom(Thread):
                 f"   Connection age: {time.time() - self.connect_time:.1f}s\n"
                 f"   Call stack:\n{''.join(traceback.format_stack())}"
             )
+
+        # Release semaphore if connection closes before handshake completed
+        # This is a safety net - normally released in PACKET_SERVER_JOIN_REPLY handler
+        self._release_handshake_semaphore()
 
         # Flush buffers
         self.send_packets_to_client()
@@ -1351,9 +1384,15 @@ class CivCom(Thread):
                     })
                     logger.info(f"Sending PACKET_CLIENT_INFO to complete handshake for {self.username}")
                     self.queue_to_civserver(client_info_packet)
+
+                    # Handshake complete - release the semaphore to allow next connection
+                    # This is the SUCCESS path - civserver accepted our connection
+                    self._release_handshake_semaphore()
                 else:
                     message = packet.get('message', 'Unknown rejection reason')
                     logger.error(f"Server rejected join request for {self.username}: {message}")
+                    # Handshake failed - release semaphore to allow next connection to try
+                    self._release_handshake_semaphore()
 
             # Map info packet (contains xsize, ysize)
             elif packet_type == PACKET_MAP_INFO:
@@ -1916,8 +1955,21 @@ class CivCom(Thread):
 
         legal_actions = self._get_legal_actions_optimized(player_id)
 
+        # Convert all_players list to dict keyed by player ID (as string)
+        # Required for agent-clash FreeCivState compatibility
+        players_dict = {}
+        for p in getattr(self, 'all_players', []):
+            pid = p.get('id') if isinstance(p, dict) else None
+            if pid is not None:
+                players_dict[str(pid)] = p
+
+        # Ensure unit/city dicts have string keys for JSON compatibility
+        units_dict = self._normalize_to_dict(getattr(self, 'player_units', {}))
+        cities_dict = self._normalize_to_dict(getattr(self, 'player_cities', {}))
+
         # Basic game state structure for LLM consumption
         state = {
+            'format': 'llm_optimized',
             'turn': game_turn,
             'phase': game_phase,
             'player_id': player_id,
@@ -1925,7 +1977,19 @@ class CivCom(Thread):
             'strategic': self._build_strategic_view(player_id),
             'tactical': self._build_tactical_view(player_id),
             'economic': self._build_economic_view(player_id),
-            'legal_actions': legal_actions
+            'legal_actions': legal_actions,
+            # Required fields for agent-clash FreeCivState compatibility
+            'players': players_dict,
+            'units': units_dict,
+            'cities': cities_dict,
+            'map': getattr(self, 'map_info', {}),
+            # Use _build_techs_dict() to get per-player tech name lists
+            # (not self.techs which is the raw tech RULESET definitions)
+            'techs': self._build_techs_dict(),
+            # Also include wonders for completeness
+            'wonders': self._build_wonders_dict(getattr(self, 'all_players', [])),
+            'timestamp': time.time(),
+            'player_perspective': player_id
         }
         return state
 

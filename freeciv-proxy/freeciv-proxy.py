@@ -25,6 +25,7 @@ from os import chdir
 import re
 import sys
 import html
+import threading
 from tornado import web, websocket, ioloop, httpserver
 from debugging import *
 import logging
@@ -50,6 +51,68 @@ CONNECTION_LIMIT = 16384
 ALLOWED_ORIGINS = os.getenv('ALLOWED_ORIGINS', 'http://localhost:8080,http://127.0.0.1:8080').split(',')
 
 civcoms = {}
+
+# ============================================================================
+# Per-Port Connection Semaphore
+# ============================================================================
+# Limits concurrent observer handshakes per civserver to prevent overwhelming
+# the server when many users connect simultaneously.
+#
+# Problem: Without rate limiting, 100 users watching a game = 300 simultaneous
+# WebSocket connections (3 observers each). Each handshake requires ~500ms-2s
+# of civserver attention for ruleset transmission, causing:
+# - Connection timeouts under load
+# - Retry loops that compound the problem
+# - AI takeover messages as observers disconnect/reconnect
+#
+# Solution: Queue connections per-port with a semaphore. Only N connections
+# can be in the "handshake" phase simultaneously. Others wait their turn.
+# ============================================================================
+
+# Per-port semaphores: {civserver_port: threading.Semaphore}
+_port_semaphores: dict = {}
+_semaphore_lock = threading.Lock()
+
+# Max concurrent observer handshakes per civserver port.
+# 3 = one full user's worth of observers (global, player1, player2) at a time.
+# Increase to 6 (2 users) or 9 (3 users) for faster throughput at cost of
+# higher civserver load. Keep low for reliability under heavy load.
+MAX_CONCURRENT_HANDSHAKES = 3
+
+
+def get_port_semaphore(port: int) -> threading.Semaphore:
+    """Get or create a semaphore for a civserver port.
+
+    Thread-safe: uses a lock to prevent race conditions when creating
+    semaphores for new ports.
+
+    Args:
+        port: The civserver port number (e.g., 6001)
+
+    Returns:
+        A threading.Semaphore limiting concurrent handshakes to MAX_CONCURRENT_HANDSHAKES
+    """
+    with _semaphore_lock:
+        if port not in _port_semaphores:
+            _port_semaphores[port] = threading.Semaphore(MAX_CONCURRENT_HANDSHAKES)
+            logger.info(f"Created connection semaphore for port {port} (max {MAX_CONCURRENT_HANDSHAKES} concurrent)")
+        return _port_semaphores[port]
+
+
+def cleanup_port_semaphore(port: int) -> None:
+    """Remove a semaphore when a civserver port is released.
+
+    Called when a game ends and the port is returned to the pool.
+    Prevents memory leak from accumulating semaphores for unused ports.
+
+    Args:
+        port: The civserver port number being released
+    """
+    with _semaphore_lock:
+        if port in _port_semaphores:
+            del _port_semaphores[port]
+            logger.info(f"Cleaned up connection semaphore for port {port}")
+
 
 chdir(sys.path[0])
 
@@ -138,7 +201,30 @@ class WSHandler(websocket.WebSocketHandler):
         if key not in list(civcoms.keys()):
             if (int(civserverport) < 5000):
                 return None
-            civcom = CivCom(username, int(civserverport), key, self)
+
+            # Acquire semaphore BEFORE starting CivCom thread to limit
+            # concurrent handshakes per civserver port. This prevents
+            # overwhelming the civserver when many observers connect.
+            #
+            # The semaphore is passed to CivCom and released after
+            # PACKET_SERVER_JOIN_REPLY (handshake complete) or on error.
+            port = int(civserverport)
+            semaphore = get_port_semaphore(port)
+
+            # Non-blocking acquire check - if semaphore is full, log queue status
+            if not semaphore.acquire(blocking=False):
+                logger.info(
+                    f"[{username}] Connection queued for port {port} "
+                    f"(max {MAX_CONCURRENT_HANDSHAKES} concurrent handshakes)"
+                )
+                # Now do blocking acquire
+                semaphore.acquire(blocking=True)
+                logger.info(f"[{username}] Connection dequeued for port {port}, starting handshake")
+            else:
+                logger.debug(f"[{username}] Semaphore acquired immediately for port {port}")
+
+            civcom = CivCom(username, port, key, self)
+            civcom.port_semaphore = semaphore  # Pass semaphore for release after handshake
             civcom.start()
             civcoms[key] = civcom
 

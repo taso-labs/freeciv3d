@@ -703,7 +703,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                     # New connection - wait for PACKET_CONN_INFO from server
                     logger.info(f"⏳ Waiting for PACKET_CONN_INFO for {self.agent_id}...")
                     waited = 0.0
-                    max_wait = 5.0
+                    max_wait = 15.0  # Increased from 5s to match client timeout (defense-in-depth)
                     while (not hasattr(self.civcom, 'player_id') or self.civcom.player_id is None) and waited < max_wait:
                         await asyncio.sleep(0.2)
                         waited += 0.2
@@ -4251,6 +4251,68 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 registered_civcom = civcom_registry.get_civcom(self.game_id, self.agent_id)
                 if registered_civcom is self.civcom:
                     civcom_registry.unregister_game(self.game_id, self.agent_id)
+
+            # Release the allocated civserver port back to the pool
+            # This prevents zombie sessions where ports stay unavailable after gateway failures
+            civserver_port = None
+            if self.session_info and hasattr(self.session_info, 'civserver_port'):
+                civserver_port = self.session_info.civserver_port
+            elif self.game_id:
+                # Try to get port from game session if session_info doesn't have it
+                game_session = game_session_manager.sessions.get(self.game_id)
+                if game_session:
+                    civserver_port = game_session.civserver_port
+
+            if civserver_port and self.game_id:
+                # Check if this is the last player in the game session
+                # Only release port when ALL players have disconnected (not just one)
+                game_session = game_session_manager.sessions.get(self.game_id)
+                should_release = False
+                remaining_players = 0
+
+                if game_session:
+                    # CRITICAL: Hold lock for BOTH the check AND the decision to release
+                    # This prevents TOCTOU race where Player B could reconnect between
+                    # our count check and the release action
+                    with game_session._players_lock:
+                        # Remove ourselves from players dict first
+                        if self.agent_id in game_session.players:
+                            del game_session.players[self.agent_id]
+                            logger.debug(f"Removed {self.agent_id} from game_session.players")
+
+                        # Now count remaining players (should be 0 if we were the last)
+                        remaining_players = len(game_session.players)
+
+                        # Make the decision while still holding the lock
+                        if remaining_players == 0:
+                            should_release = True
+                            # CRITICAL: Set port_releasing flag while still holding lock
+                            # This prevents add_player() from accepting new connections
+                            # during the window between releasing the lock and completing
+                            # the port release
+                            game_session._port_releasing = True
+
+                # Now act on the decision (outside lock is fine since decision was atomic)
+                if should_release:
+                    logger.info(
+                        f"[PORT_RELEASE] Last player {self.agent_id} disconnected from game {self.game_id}, "
+                        f"releasing port {civserver_port}"
+                    )
+                    # Schedule async port release via IOLoop
+                    try:
+                        from tornado.ioloop import IOLoop
+                        IOLoop.current().add_callback(
+                            lambda gid=self.game_id, port=civserver_port: asyncio.create_task(
+                                game_session_manager.release_civserver_port(gid, port)
+                            )
+                        )
+                    except Exception as e:
+                        logger.error(f"Failed to schedule port release: {e}")
+                elif game_session:
+                    logger.info(
+                        f"Player {self.agent_id} disconnected from game {self.game_id}, "
+                        f"but {remaining_players} players remain - port {civserver_port} stays allocated"
+                    )
 
         self.civcom = None
 
