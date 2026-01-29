@@ -1934,7 +1934,7 @@ class CivCom(Thread):
         return {
             'score': getattr(self, 'player_score', 0),
             'cities_count': len(getattr(self, 'player_cities', [])),
-            'units_count': len(getattr(self, 'player_units', [])),
+            'units_count': len(getattr(self, 'player_units', {})),
             'tech_level': getattr(self, 'tech_count', 0),
             'gold': getattr(self, 'player_gold', 0),
             'turn_progress': getattr(self, 'turn_progress', 'beginning')
@@ -1949,8 +1949,10 @@ class CivCom(Thread):
             'exploration_targets': []
         }
 
-        # Add simplified unit info (limit to 10 most important units)
-        units = getattr(self, 'player_units', [])[:10]
+        # Include all player units - LLM needs complete picture for tactical decisions
+        # player_units is a dict keyed by unit_id
+        player_units_dict = getattr(self, 'player_units', {})
+        units = list(player_units_dict.values()) if isinstance(player_units_dict, dict) else []
         for unit in units:
             if isinstance(unit, dict):
                 tactical['active_units'].append({

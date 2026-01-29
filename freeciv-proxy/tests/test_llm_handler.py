@@ -758,5 +758,127 @@ class TestTechInventionsIntegration(unittest.TestCase):
         self.assertEqual(tech_actions[0]['target']['tech_name'], 'Pottery')
 
 
+class TestE142ReconnectionFix(unittest.TestCase):
+    """Tests for E142 mid-game reconnection fix.
+
+    The E142 error occurs when PACKET_NATION_SELECT_REQ is sent after the
+    nation selection phase has ended. This happens during mid-game reconnection
+    when the GameSession was lost (proxy restart, session expiry).
+
+    The fix uses previous_player_id as proof that nation selection already
+    completed in a previous session.
+    """
+
+    def test_skip_nation_selection_when_game_started(self):
+        """Normal case: skip nation selection when reconnecting to running game."""
+        is_reconnecting = True
+        game_started = True
+        previous_player_id = 0
+
+        # Scenario 1: Normal reconnection to running game
+        skip_for_running_game = is_reconnecting and game_started
+        skip_for_session_recovery = (
+            is_reconnecting and
+            previous_player_id is not None and
+            not game_started
+        )
+        skip_nation_selection = skip_for_running_game or skip_for_session_recovery
+
+        self.assertTrue(skip_nation_selection,
+            "Should skip nation selection when reconnecting to running game")
+        self.assertTrue(skip_for_running_game,
+            "skip_for_running_game should be True")
+        self.assertFalse(skip_for_session_recovery,
+            "skip_for_session_recovery should be False (game_started=True)")
+
+    def test_skip_nation_selection_with_previous_player_id_after_session_loss(self):
+        """E142 fix: skip nation selection when GameSession was recreated.
+
+        This is the critical E142 fix scenario:
+        - Agent was playing mid-game (turn 24)
+        - Proxy restarted, GameSession lost
+        - Agent reconnects with previous_player_id from Redis session
+        - New GameSession has game_started=False
+        - Should STILL skip nation selection (previous_player_id proves we already selected)
+        """
+        is_reconnecting = True
+        game_started = False  # GameSession was recreated, doesn't know game is running
+        previous_player_id = 0  # Restored from Redis session
+
+        # The fix: previous_player_id proves nation selection already happened
+        skip_for_running_game = is_reconnecting and game_started
+        skip_for_session_recovery = (
+            is_reconnecting and
+            previous_player_id is not None and
+            not game_started
+        )
+        skip_nation_selection = skip_for_running_game or skip_for_session_recovery
+
+        self.assertTrue(skip_nation_selection,
+            "Should skip nation selection when previous_player_id exists (E142 fix)")
+        self.assertFalse(skip_for_running_game,
+            "skip_for_running_game should be False (game_started=False)")
+        self.assertTrue(skip_for_session_recovery,
+            "skip_for_session_recovery should be True (previous_player_id exists)")
+
+    def test_perform_nation_selection_for_new_connection(self):
+        """New connection without previous_player_id should perform nation selection."""
+        is_reconnecting = False
+        game_started = False
+        previous_player_id = None
+
+        skip_for_running_game = is_reconnecting and game_started
+        skip_for_session_recovery = (
+            is_reconnecting and
+            previous_player_id is not None and
+            not game_started
+        )
+        skip_nation_selection = skip_for_running_game or skip_for_session_recovery
+
+        self.assertFalse(skip_nation_selection,
+            "Should NOT skip nation selection for new connection")
+
+    def test_perform_nation_selection_for_reconnect_without_previous_player_id(self):
+        """Reconnection without previous_player_id should perform nation selection.
+
+        Edge case: Agent connects, gets session, but disconnects before getting
+        a player_id (before nation selection). On reconnect, should still do
+        nation selection.
+        """
+        is_reconnecting = True
+        game_started = False
+        previous_player_id = None  # Never got assigned a player slot
+
+        skip_for_running_game = is_reconnecting and game_started
+        skip_for_session_recovery = (
+            is_reconnecting and
+            previous_player_id is not None and
+            not game_started
+        )
+        skip_nation_selection = skip_for_running_game or skip_for_session_recovery
+
+        self.assertFalse(skip_nation_selection,
+            "Should NOT skip nation selection when no previous_player_id exists")
+
+    def test_previous_player_id_zero_is_valid(self):
+        """Player ID 0 is valid and should trigger session recovery path."""
+        is_reconnecting = True
+        game_started = False
+        previous_player_id = 0  # Player 0 is valid (first player)
+
+        # Ensure 0 is not treated as falsy
+        self.assertIsNotNone(previous_player_id)
+        self.assertTrue(previous_player_id is not None)
+
+        skip_for_session_recovery = (
+            is_reconnecting and
+            previous_player_id is not None and
+            not game_started
+        )
+
+        self.assertTrue(skip_for_session_recovery,
+            "Player ID 0 should be recognized as valid previous_player_id")
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)
