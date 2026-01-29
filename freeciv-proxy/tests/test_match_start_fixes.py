@@ -154,7 +154,8 @@ class TestMetaserverAllocationRetry(unittest.TestCase):
 
             with patch('game_session_manager.aiohttp.ClientSession') as mock_cls:
                 mock_session = MagicMock()
-                mock_cls.return_value = AsyncContextManager(mock_session)
+                # aiohttp.ClientSession() is called directly, not as context manager
+                mock_cls.return_value = mock_session
                 mock_session.post.return_value = AsyncContextManager(response)
 
                 port = await self.manager._allocate_port_from_metaserver("test-game-1")
@@ -187,7 +188,8 @@ class TestMetaserverAllocationRetry(unittest.TestCase):
 
             with patch('game_session_manager.aiohttp.ClientSession') as mock_cls:
                 mock_session = MagicMock()
-                mock_cls.return_value = AsyncContextManager(mock_session)
+                # aiohttp.ClientSession() is called directly, not as context manager
+                mock_cls.return_value = mock_session
                 mock_session.post = mock_post
 
                 with patch('game_session_manager.asyncio.sleep', new_callable=AsyncMock) as mock_sleep:
@@ -214,7 +216,8 @@ class TestMetaserverAllocationRetry(unittest.TestCase):
 
             with patch('game_session_manager.aiohttp.ClientSession') as mock_cls:
                 mock_session = MagicMock()
-                mock_cls.return_value = AsyncContextManager(mock_session)
+                # aiohttp.ClientSession() is called directly, not as context manager
+                mock_cls.return_value = mock_session
                 mock_session.post = mock_post
 
                 with patch('game_session_manager.asyncio.sleep', new_callable=AsyncMock):
@@ -245,7 +248,8 @@ class TestMetaserverAllocationRetry(unittest.TestCase):
 
             with patch('game_session_manager.aiohttp.ClientSession') as mock_cls:
                 mock_session = MagicMock()
-                mock_cls.return_value = AsyncContextManager(mock_session)
+                # aiohttp.ClientSession() is called directly, not as context manager
+                mock_cls.return_value = mock_session
                 mock_session.post = mock_post
 
                 with patch('game_session_manager.asyncio.sleep', new_callable=AsyncMock) as mock_sleep:
@@ -271,7 +275,8 @@ class TestMetaserverAllocationRetry(unittest.TestCase):
 
             with patch('game_session_manager.aiohttp.ClientSession') as mock_cls:
                 mock_session = MagicMock()
-                mock_cls.return_value = AsyncContextManager(mock_session)
+                # aiohttp.ClientSession() is called directly, not as context manager
+                mock_cls.return_value = mock_session
                 mock_session.post = mock_post
 
                 with patch('game_session_manager.asyncio.sleep', new_callable=AsyncMock) as mock_sleep:
@@ -329,7 +334,8 @@ class TestLocalSessionCache(unittest.TestCase):
 
             with patch('game_session_manager.aiohttp.ClientSession') as mock_cls:
                 mock_session = MagicMock()
-                mock_cls.return_value = AsyncContextManager(mock_session)
+                # aiohttp.ClientSession() is called directly, not as context manager
+                mock_cls.return_value = mock_session
                 mock_session.post = mock_post
 
                 # First player allocates port
@@ -360,7 +366,8 @@ class TestLocalSessionCache(unittest.TestCase):
 
             with patch('game_session_manager.aiohttp.ClientSession') as mock_cls:
                 mock_session = MagicMock()
-                mock_cls.return_value = AsyncContextManager(mock_session)
+                # aiohttp.ClientSession() is called directly, not as context manager
+                mock_cls.return_value = mock_session
                 mock_session.post = mock_post
 
                 port1 = await self.manager.allocate_civserver_port("game-A")
