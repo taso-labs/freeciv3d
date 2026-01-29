@@ -7,8 +7,10 @@ Coordinates multi-player game initialization to prevent race conditions
 """
 
 import asyncio
+import importlib.util
 import json
 import logging
+import os
 import threading
 import time
 import aiohttp
@@ -19,6 +21,33 @@ from tornado.ioloop import IOLoop
 
 from state_extractor import civcom_registry
 from packet_constants import PACKET_CHAT_MSG_REQ
+
+# Import cleanup_port_semaphore from freeciv-proxy.py (has hyphen in name)
+# This function cleans up semaphores when ports are released to prevent memory leak
+_freeciv_proxy_module = None
+
+
+def _get_cleanup_port_semaphore():
+    """Lazily import cleanup_port_semaphore from freeciv-proxy.py.
+
+    Uses importlib since the filename has a hyphen which isn't a valid module name.
+    Returns None if import fails (function will be no-op).
+    """
+    global _freeciv_proxy_module
+    if _freeciv_proxy_module is None:
+        try:
+            spec = importlib.util.spec_from_file_location(
+                "freeciv_proxy",
+                os.path.join(os.path.dirname(os.path.abspath(__file__)), "freeciv-proxy.py")
+            )
+            _freeciv_proxy_module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(_freeciv_proxy_module)
+        except Exception as e:
+            logging.getLogger("freeciv-proxy").warning(
+                f"Could not import freeciv-proxy.py for semaphore cleanup: {e}"
+            )
+            return None
+    return getattr(_freeciv_proxy_module, 'cleanup_port_semaphore', None)
 
 logger = logging.getLogger("freeciv-proxy")
 
@@ -87,6 +116,11 @@ class GameSession:
         # Pause/resume state for coordinated disconnection handling
         self.original_timeout: Optional[int] = None  # Store original timeout for resume
         self.is_paused: bool = False  # Track if game is currently paused
+
+        # Port release flag - prevents TOCTOU race in on_close()
+        # Set True atomically with should_release decision while holding _players_lock
+        # Checked in add_player() to reject connections during port release
+        self._port_releasing: bool = False
 
     def allocate_ai_slot(self) -> int:
         """Thread-safe AI slot allocation for /take commands
@@ -320,39 +354,52 @@ class GameSession:
         return True
 
     def add_player(self, agent_id: str, player_id: int, handler: Any) -> bool:
-        """Add a player to the game session, or update handler on reconnection"""
-        if len(self.players) >= self.max_players:
-            logger.warning(f"Game {self.game_id}: Max players ({self.max_players}) reached")
-            return False
+        """Add a player to the game session, or update handler on reconnection.
 
-        if agent_id in self.players:
-            # Player already exists - this is a reconnection scenario
-            # Update the handler reference while preserving player state
-            with self._players_lock:
+        Thread-safe: Uses _players_lock to prevent race conditions with on_close().
+        Rejects connections if port is being released (_port_releasing flag).
+        """
+        with self._players_lock:
+            # CRITICAL: Check if port is being released - reject if so
+            # This prevents TOCTOU race where player connects between
+            # release decision and actual port release
+            if self._port_releasing:
+                logger.warning(
+                    f"Game {self.game_id}: Rejecting player {agent_id} - port release in progress"
+                )
+                return False
+
+            if len(self.players) >= self.max_players:
+                logger.warning(f"Game {self.game_id}: Max players ({self.max_players}) reached")
+                return False
+
+            if agent_id in self.players:
+                # Player already exists - this is a reconnection scenario
+                # Update the handler reference while preserving player state
                 existing_info = self.players[agent_id]
                 existing_info.handler = handler
-            logger.info(
-                f"Game {self.game_id}: Reconnected player {agent_id} "
-                f"(player_id={player_id}, nation_selected={existing_info.nation_selected})"
+                logger.info(
+                    f"Game {self.game_id}: Reconnected player {agent_id} "
+                    f"(player_id={player_id}, nation_selected={existing_info.nation_selected})"
+                )
+                return True
+
+            player_info = PlayerInfo(
+                agent_id=agent_id,
+                player_id=player_id,
+                handler=handler
             )
+            self.players[agent_id] = player_info
+
+            logger.info(f"Game {self.game_id}: Added player {agent_id} (player_id={player_id}), "
+                       f"total players: {len(self.players)}/{self.min_players}")
+
+            # Check if we can move to nation selection
+            if len(self.players) >= self.min_players and self.phase == GamePhase.WAITING_FOR_PLAYERS:
+                self.phase = GamePhase.NATIONS_SELECTING
+                logger.info(f"Game {self.game_id}: Transitioning to NATIONS_SELECTING phase")
+
             return True
-
-        player_info = PlayerInfo(
-            agent_id=agent_id,
-            player_id=player_id,
-            handler=handler
-        )
-        self.players[agent_id] = player_info
-
-        logger.info(f"Game {self.game_id}: Added player {agent_id} (player_id={player_id}), "
-                   f"total players: {len(self.players)}/{self.min_players}")
-
-        # Check if we can move to nation selection
-        if len(self.players) >= self.min_players and self.phase == GamePhase.WAITING_FOR_PLAYERS:
-            self.phase = GamePhase.NATIONS_SELECTING
-            logger.info(f"Game {self.game_id}: Transitioning to NATIONS_SELECTING phase")
-
-        return True
 
     def mark_nation_selected(self, agent_id: str) -> None:
         """Mark that a player has selected their nation"""
@@ -610,6 +657,34 @@ class GameSessionManager:
         self.metaserver_url = metaserver_url
         self._last_port_used = None  # Track last allocated port for round-robin
 
+        # Reusable aiohttp session - avoids TCP handshake overhead per request
+        # Created lazily on first use since __init__ isn't async
+        self._http_session: Optional[aiohttp.ClientSession] = None
+        self._session_lock = asyncio.Lock()  # Lock for lazy session creation
+
+    async def _get_http_session(self) -> aiohttp.ClientSession:
+        """Get or create the reusable HTTP session.
+
+        Thread-safe lazy initialization of aiohttp.ClientSession.
+        Reusing sessions avoids TCP connection overhead for each request.
+        """
+        if self._http_session is None or self._http_session.closed:
+            async with self._session_lock:
+                # Double-check after acquiring lock
+                if self._http_session is None or self._http_session.closed:
+                    self._http_session = aiohttp.ClientSession(
+                        base_url=self.metaserver_url,
+                        timeout=aiohttp.ClientTimeout(total=10)
+                    )
+                    logger.debug(f"Created reusable HTTP session for metaserver: {self.metaserver_url}")
+        return self._http_session
+
+    async def close(self):
+        """Close the HTTP session when the manager is no longer needed."""
+        if self._http_session and not self._http_session.closed:
+            await self._http_session.close()
+            logger.debug("Closed HTTP session for metaserver")
+
     async def _allocate_port_from_metaserver(self, game_id: str) -> Optional[int]:
         """Allocate a port from metaserver with game_id for persistent mapping.
 
@@ -628,15 +703,15 @@ class GameSessionManager:
         """
         for attempt in range(METASERVER_MAX_RETRIES):
             try:
-                # Use base_url as keyword argument (required for aiohttp 3.9+)
-                async with aiohttp.ClientSession(base_url=self.metaserver_url) as session:
-                    # Make POST request with type=multiplayer and game_id for persistent mapping
-                    # The endpoint will return the same port for the same game_id on reconnection
-                    async with session.post(
-                        "/meta/allocate",
-                        params={"type": "multiplayer", "game_id": game_id},
-                        timeout=aiohttp.ClientTimeout(total=5),
-                    ) as response:
+                # Reuse HTTP session to avoid TCP handshake overhead per request
+                session = await self._get_http_session()
+                # Make POST request with type=multiplayer and game_id for persistent mapping
+                # The endpoint will return the same port for the same game_id on reconnection
+                async with session.post(
+                    "/meta/allocate",
+                    params={"type": "multiplayer", "game_id": game_id},
+                    timeout=aiohttp.ClientTimeout(total=5),
+                ) as response:
                         if response.status == 200:
                             data = await response.json()
                             if data.get("success") and "port" in data:
@@ -801,18 +876,18 @@ class GameSessionManager:
 
         for attempt in range(max_retries):
             try:
-                # Use base_url as keyword argument (required for aiohttp 3.9+)
-                async with aiohttp.ClientSession(base_url=self.metaserver_url) as session:
-                    # POST to /meta/release with port and game_id
-                    params = {"port": str(port), "host": "localhost"}
-                    if game_id:
-                        params["game_id"] = game_id
+                # Reuse HTTP session to avoid TCP handshake overhead per request
+                session = await self._get_http_session()
+                # POST to /meta/release with port and game_id
+                params = {"port": str(port), "host": "localhost"}
+                if game_id:
+                    params["game_id"] = game_id
 
-                    async with session.post(
-                        "/meta/release",
-                        params=params,
-                        timeout=aiohttp.ClientTimeout(total=5),
-                    ) as response:
+                async with session.post(
+                    "/meta/release",
+                    params=params,
+                    timeout=aiohttp.ClientTimeout(total=5),
+                ) as response:
                         if response.status == 200:
                             data = await response.json()
                             if data.get("success"):
@@ -820,15 +895,38 @@ class GameSessionManager:
                                     f"Released civserver port {port} for game {game_id}, "
                                     f"allocation_released={data.get('allocation_released', False)}"
                                 )
+                                # Clean up the connection semaphore for this port to prevent memory leak
+                                # Semaphores accumulate for each port used; cleanup frees memory
+                                cleanup_fn = _get_cleanup_port_semaphore()
+                                if cleanup_fn:
+                                    cleanup_fn(port)
                                 return True
                             else:
                                 logger.warning(f"Metaserver release returned non-success: {data}")
                                 # Non-success response is not retryable
                                 return False
                         elif response.status == 404:
-                            # Server not found or already available - treat as success but log warning
-                            # This could indicate a bug (releasing unallocated port) or race condition
-                            logger.warning(f"Port {port} already released or not found (404) - treating as success")
+                            # 404 means port not found in allocation table
+                            # Possible causes:
+                            # 1. Port already released (benign - race condition)
+                            # 2. Wrong port number (bug - investigate)
+                            # 3. Database corruption (critical - investigate)
+                            #
+                            # Log at ERROR with full context to enable investigation
+                            # while still treating as success (no retry needed)
+                            response_text = await response.text()
+                            logger.error(
+                                f"Port release returned 404 - port not found in allocation table:\n"
+                                f"  port={port}, game_id={game_id}, host=localhost\n"
+                                f"  response_body={response_text[:200] if response_text else 'empty'}\n"
+                                f"  This may indicate: already released (OK), wrong port (BUG), "
+                                f"or DB issue (CRITICAL)\n"
+                                f"  Check game_allocations table for game_id={game_id}"
+                            )
+                            # Still clean up semaphore - port won't be reused immediately
+                            cleanup_fn = _get_cleanup_port_semaphore()
+                            if cleanup_fn:
+                                cleanup_fn(port)
                             return True
                         else:
                             # Server error - retry with backoff

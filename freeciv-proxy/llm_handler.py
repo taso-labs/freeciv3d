@@ -4286,6 +4286,11 @@ class LLMWSHandler(websocket.WebSocketHandler):
                         # Make the decision while still holding the lock
                         if remaining_players == 0:
                             should_release = True
+                            # CRITICAL: Set port_releasing flag while still holding lock
+                            # This prevents add_player() from accepting new connections
+                            # during the window between releasing the lock and completing
+                            # the port release
+                            game_session._port_releasing = True
 
                 # Now act on the decision (outside lock is fine since decision was atomic)
                 if should_release:
