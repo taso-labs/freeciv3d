@@ -703,7 +703,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                     # New connection - wait for PACKET_CONN_INFO from server
                     logger.info(f"⏳ Waiting for PACKET_CONN_INFO for {self.agent_id}...")
                     waited = 0.0
-                    max_wait = 5.0
+                    max_wait = 15.0  # Increased from 5s to match client timeout (defense-in-depth)
                     while (not hasattr(self.civcom, 'player_id') or self.civcom.player_id is None) and waited < max_wait:
                         await asyncio.sleep(0.2)
                         waited += 0.2

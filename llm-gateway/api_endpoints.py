@@ -763,8 +763,9 @@ async def get_observer_urls(
         # - Observer registration failures
         # - Incomplete game state synchronization
         #
-        # By staggering connections (global=0ms, player1=500ms, player2=1000ms),
-        # each observer fully completes its handshake before the next starts.
+        # Stagger connections with minimal delays (global=0ms, player1=200ms, player2=400ms).
+        # Reduced from 0/500/1000ms to prevent compounding with client-side delays.
+        # 200ms spacing is sufficient to sequence connections without race conditions.
         observer_urls = {
             "global": (
                 f"{webclient_path}?action=observe&civserverport={game_port}"
@@ -775,13 +776,13 @@ async def get_observer_urls(
                 f"{webclient_path}?action=observe&civserverport={game_port}"
                 f"&observe_player={player1_name}&follow={player1_name}"
                 f"&embed=1&autojoin=1&name={player1_viewer_name}&camera=cinematic"
-                f"&connection_delay=500"
+                f"&connection_delay=200"
             ),
             "player2": (
                 f"{webclient_path}?action=observe&civserverport={game_port}"
                 f"&observe_player={player2_name}&follow={player2_name}"
                 f"&embed=1&autojoin=1&name={player2_viewer_name}&camera=cinematic"
-                f"&connection_delay=1000"
+                f"&connection_delay=400"
             )
         }
 
