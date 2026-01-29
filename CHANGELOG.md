@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.31](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.30...freeciv3d-v0.3.31) (2026-01-29)
+
+
+### Bug Fixes
+
+* prevent zombie sessions and port allocation exhaustion ([#101](https://github.com/taso-ventures/freeciv3d/issues/101)) ([6f7d273](https://github.com/taso-ventures/freeciv3d/commit/6f7d273ed75a1005c988f3144dc11bfe3f6f98f7))
+
 ## [0.3.30](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.29...freeciv3d-v0.3.30) (2026-01-29)
 
 
