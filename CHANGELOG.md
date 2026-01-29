@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.32](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.31...freeciv3d-v0.3.32) (2026-01-29)
+
+
+### Bug Fixes
+
+* resolve combat action coordinate formats and use FAIR generator ([#103](https://github.com/taso-ventures/freeciv3d/issues/103)) ([6da6300](https://github.com/taso-ventures/freeciv3d/commit/6da6300f0adeb36661d755b31a2a422d3e1cd8a8))
+
 ## [0.3.31](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.30...freeciv3d-v0.3.31) (2026-01-29)
 
 
