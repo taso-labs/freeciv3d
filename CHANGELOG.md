@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.30](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.29...freeciv3d-v0.3.30) (2026-01-29)
+
+
+### Bug Fixes
+
+* E142 mid-game reconnection and staggered observer connections ([#99](https://github.com/taso-ventures/freeciv3d/issues/99)) ([1f7b5e1](https://github.com/taso-ventures/freeciv3d/commit/1f7b5e109eea3d3513651fba518b91d72407668b))
+
 ## [0.3.29](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.28...freeciv3d-v0.3.29) (2026-01-29)
 
 
