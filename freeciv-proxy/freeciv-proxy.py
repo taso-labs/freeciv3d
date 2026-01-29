@@ -40,8 +40,9 @@ import os
 
 PROXY_PORT = 8002
 # Max WebSocket connections per proxy instance. Set to match civserver maxconnectionsperhost
-# and nginx worker_connections for consistent scaling (supports ~2,700 concurrent viewers).
-CONNECTION_LIMIT = 8192
+# for consistent scaling. Supports 5000+ concurrent observers per game for broadcast scenarios.
+# Memory impact: ~320MB per civserver with 16384 connections.
+CONNECTION_LIMIT = 16384
 
 # CORS Configuration - Default to localhost for development
 # In production, set ALLOWED_ORIGINS environment variable to your domains

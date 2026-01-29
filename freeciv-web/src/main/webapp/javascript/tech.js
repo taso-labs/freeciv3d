@@ -715,7 +715,7 @@ function show_tech_gained_dialog(tech_gained_id)
   $("#tech_advance_helptext").tooltip({ disabled: false });
   $(".specific_tech").tooltip({ disabled: false });
 
-  if (dialogs_minimized_setting) {
+  if (dialogs_minimized_setting || client_is_observer()) {
     $("#tech_dialog").dialogExtend("minimize");
   }
 

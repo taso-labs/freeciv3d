@@ -34,8 +34,11 @@ extern "C" {
                                   * in savegame2.c needs to be changed */
 #define MAX_NUM_BARBARIANS   12  /* 3, but slots reserved for future use. */
 #define MAX_NUM_PLAYERS      MAX_NUM_PLAYER_SLOTS - MAX_NUM_BARBARIANS
-/* Used in the network protocol. */
-#define MAX_NUM_CONNECTIONS (2 * (MAX_NUM_PLAYER_SLOTS))
+/* Used in the network protocol.
+ * Note: MAX_NUM_PLAYER_SLOTS (512) remains unchanged for network protocol compatibility.
+ * MAX_NUM_CONNECTIONS is decoupled to support high observer counts (5000+) in broadcast scenarios.
+ * Memory impact: ~320MB per civserver with 16384 connections (acceptable for GCP infrastructure). */
+#define MAX_NUM_CONNECTIONS 16384
 /* e.g. unit_types. Used in the network protocol. */
 #define MAX_NUM_ITEMS   200
 #define MAX_NUM_ADVANCES  250 /* Used in the network protocol. */

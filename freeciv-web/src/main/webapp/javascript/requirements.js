@@ -130,12 +130,12 @@ function is_req_active(target_player,
   case VUT_MINCALFRAG:
   case VUT_SERVERSETTING:
     //FIXME: implement
-    console.log("Unimplemented requirement type " + req['kind']);
+    freelog(LOG_VERBOSE, "Unimplemented requirement type " + req['kind']);
     break;
   case VUT_COUNT:
     return false;
   default:
-    console.log("Unknown requirement type " + req['kind']);
+    freelog(LOG_VERBOSE, "Unknown requirement type " + req['kind']);
   }
 
   if (result == TRI_MAYBE) {
@@ -205,7 +205,7 @@ function is_tech_in_range(target_player, range, tech)
   case REQ_RANGE_WORLD:
     /* FIXME: Add support for the above ranges. Freeciv's implementation
      * currently (25th Jan 2017) lives in common/requirements.c */
-    console.log("Unimplemented tech requirement range " + range);
+    freelog(LOG_VERBOSE, "Unimplemented tech requirement range " + range);
     return TRI_MAYBE;
   case REQ_RANGE_LOCAL:
   case REQ_RANGE_TILE:
@@ -218,7 +218,7 @@ function is_tech_in_range(target_player, range, tech)
     break;
   }
 
-  console.log("Invalid tech req range " + range);
+  freelog(LOG_VERBOSE, "Invalid tech req range " + range);
   return TRI_MAYBE;
 }
 

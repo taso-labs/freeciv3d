@@ -59,7 +59,7 @@ function is_small_screen()
 **************************************************************************/
 function init_sprites()
 {
-  console.log("[INIT] init_sprites() started");
+  freelog(LOG_DEBUG, "[INIT] init_sprites() started");
   $.blockUI({ message: "<h1>Loading graphics, please wait..."});
 
   $(".container").remove();
@@ -67,7 +67,7 @@ function init_sprites()
   $("body").css("padding-bottom", "0px");
 
   if (loaded_images != tileset_image_count) {
-    console.log("[INIT] Loading " + tileset_image_count + " tileset images");
+    freelog(LOG_DEBUG, "[INIT] Loading " + tileset_image_count + " tileset images");
     for (var i = 0; i < tileset_image_count; i++) {
       var tileset_image = new Image();
       tileset_image.onload = preload_check;
@@ -77,7 +77,7 @@ function init_sprites()
     }
   } else {
     // already loaded
-    console.log("[INIT] Tileset images already loaded, calling webgl_preload()");
+    freelog(LOG_DEBUG, "[INIT] Tileset images already loaded, calling webgl_preload()");
     webgl_preload();
 
   }
@@ -90,10 +90,10 @@ function init_sprites()
 function preload_check()
 {
   loaded_images += 1;
-  console.log("[INIT] Tileset images loaded: " + loaded_images + "/" + tileset_image_count);
+  freelog(LOG_DEBUG, "[INIT] Tileset images loaded: " + loaded_images + "/" + tileset_image_count);
 
   if (loaded_images == tileset_image_count) {
-    console.log("[INIT] All tileset images loaded, calling init_cache_sprites() and webgl_preload()");
+    freelog(LOG_DEBUG, "[INIT] All tileset images loaded, calling init_cache_sprites() and webgl_preload()");
     init_cache_sprites();
     webgl_preload();
 
@@ -137,7 +137,7 @@ function init_cache_sprites()
   tileset_images = null;
 
  }  catch(e) {
-  console.log("Problem caching sprite: " + tile_tag);
+  freelog(LOG_NORMAL, "Problem caching sprite: " + tile_tag);
  }
 
 }

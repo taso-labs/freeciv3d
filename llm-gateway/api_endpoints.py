@@ -103,7 +103,7 @@ class GameConfig(BaseModel):
     map_generator: Literal["FRACTAL", "ISLAND", "FAIR", "CONTINENTS"] = Field(
         default="FRACTAL", description="Map generation algorithm (FRACTAL=large continents, ISLAND=many islands, FAIR=identical islands per player)"
     )
-    landmass: int = Field(default=45, ge=15, le=85, description="Percentage of map that is land (15-85)")
+    landmass: int = Field(default=85, ge=15, le=85, description="Percentage of map that is land (15-85)")
     startpos: Literal["DEFAULT", "SINGLE", "2or3", "ALL", "VARIABLE"] = Field(
         default="SINGLE", description="Player start position (SINGLE=one per continent recommended for 2-player)"
     )
@@ -120,7 +120,7 @@ class GameConfig(BaseModel):
                 "ruleset": "classic",
                 "map_size": "medium",
                 "map_generator": "FRACTAL",
-                "landmass": 45,
+                "landmass": 85,
                 "startpos": "SINGLE",
                 "tinyisles": False,
                 "steepness": 25,

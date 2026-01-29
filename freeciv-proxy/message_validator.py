@@ -79,6 +79,7 @@ class MessageValidator:
                 "game_id",
                 "auto_ready",
                 "trace_context",  # OpenTelemetry trace propagation
+                "game_config",  # Custom game settings (map size, landmass, etc.)
             ],
             "field_types": {
                 "type": str,
@@ -89,6 +90,7 @@ class MessageValidator:
                 "leader_name": str,
                 "game_id": str,
                 "trace_context": dict,
+                "game_config": dict,
             },
             "field_constraints": {
                 "agent_id": {"max_length": 50, "pattern": r"^[a-zA-Z0-9_-]+$"},
@@ -98,6 +100,7 @@ class MessageValidator:
                 "nation": {"max_length": 50},
                 "leader_name": {"max_length": 100},
                 "trace_context": {"max_keys": 5},  # trace_id, span_id, trace_flags, trace_state
+                "game_config": {"max_keys": 20},  # Limit config keys to prevent oversized payloads
             },
         },
         MessageType.STATE_QUERY: {

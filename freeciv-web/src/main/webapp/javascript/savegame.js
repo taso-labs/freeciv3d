@@ -321,7 +321,7 @@ function load_game_check()
 **************************************************************************/
 function load_game_real(filename)
 {
-      console.log("Server command: /load " + filename );
+      freelog(LOG_DEBUG, "Server command: /load " + filename);
       send_message("/load " + filename);
       $.unblockUI();
       game_loaded = true;
