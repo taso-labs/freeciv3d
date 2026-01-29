@@ -30,6 +30,11 @@ from packet_constants import (
 from action_constants import *
 from activity_constants import *
 from order_constants import *
+from coordinate_utils import (
+    DEFAULT_MAP_WIDTH,
+    extract_target_coordinates,
+    resolve_target_tile_id,
+)
 import re
 from pathlib import Path
 
@@ -361,6 +366,11 @@ def _convert_action_to_packet_impl(
         }
 
     # Combat and many unit actions follow similar pattern
+    # These actions support multiple target formats:
+    # - target_id: direct tile index
+    # - tile_id: alias for target_id
+    # - target_x, target_y: flat coordinates (converted to tile index)
+    # - target: {x, y}: nested coordinates (converted to tile index)
     elif action_type in (
         "unit_attack",
         "unit_suicide_attack",
@@ -385,10 +395,12 @@ def _convert_action_to_packet_impl(
             "unit_expel": ACTION_EXPEL_UNIT,
             "unit_heal": ACTION_HEAL_UNIT,
         }
+        # Resolve target_id from various input formats (coordinates, tile_id, etc.)
+        resolved_target_id = resolve_target_tile_id(action, civcom)
         return {
             "pid": PACKET_UNIT_DO_ACTION,
             "actor_id": action["unit_id"],
-            "target_id": action.get("target_id", action.get("tile_id", -1)),
+            "target_id": resolved_target_id,
             "sub_tgt_id": action.get("sub_tgt_id", action.get("extra_id", -1)),
             "sub_target": action.get("sub_tgt_id", action.get("extra_id", -1)),
             "name": "",
@@ -430,10 +442,12 @@ def _convert_action_to_packet_impl(
             "action_type": ACTION_TRANSPORT_EMBARK,
         }
     elif action_type == "unit_disembark":
+        # Resolve target_id from coordinates if provided
+        resolved_target_id = resolve_target_tile_id(action, civcom)
         return {
             "pid": PACKET_UNIT_DO_ACTION,
             "actor_id": action["unit_id"],
-            "target_id": action.get("tile_id", action.get("target_id", -1)),
+            "target_id": resolved_target_id,
             "sub_tgt_id": action.get("sub_tgt_id", -1),
             "sub_target": action.get("sub_tgt_id", -1),
             "name": "",
@@ -460,10 +474,12 @@ def _convert_action_to_packet_impl(
             "action_type": ACTION_AIRLIFT,
         }
     elif action_type == "unit_paradrop":
+        # Resolve target_id from coordinates if provided
+        resolved_target_id = resolve_target_tile_id(action, civcom)
         return {
             "pid": PACKET_UNIT_DO_ACTION,
             "actor_id": action["unit_id"],
-            "target_id": action.get("tile_id", action.get("target_id", -1)),
+            "target_id": resolved_target_id,
             "sub_tgt_id": action.get("sub_tgt_id", -1),
             "sub_target": action.get("sub_tgt_id", -1),
             "name": "",

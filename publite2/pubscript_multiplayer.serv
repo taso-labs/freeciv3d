@@ -24,8 +24,9 @@ set maxplayers 3
 set aifill 2
 
 ## Map generator settings for balanced LLM vs LLM play
-## FRACTAL creates large continents with scattered islands (Earth-like)
-## Better than ISLAND (too fragmented) or CONTINENTS (less predictable)
+## FRACTAL creates large connected continents with varied terrain
+## Combined with startpos ALL, both agents start on the same largest landmass
+## This enables early conflict and territory competition
 set generator FRACTAL
 set landmass 85
 set tinyisles FALSE
@@ -33,7 +34,7 @@ set separatepoles ENABLED
 
 # Starting units and position configuration
 set startunits cccwwwx
-set startpos SINGLE
+set startpos ALL
 set dispersion 2
 set citymindist 3
 

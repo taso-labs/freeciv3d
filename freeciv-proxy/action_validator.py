@@ -36,14 +36,13 @@ Error codes are organized by category for easy identification:
 import logging
 from typing import Dict, Any, List, Optional
 from enum import Enum
+from coordinate_utils import (
+    DEFAULT_MAP_WIDTH,
+    DEFAULT_MAP_HEIGHT,
+    extract_target_coordinates,
+)
 
 logger = logging.getLogger("freeciv-proxy")
-
-# === Constants ===
-# Map size limits (standard FreeCiv maximum dimensions)
-# See: https://freeciv.fandom.com/wiki/Map
-DEFAULT_MAP_WIDTH = 200
-DEFAULT_MAP_HEIGHT = 200
 
 # Action validation limits
 # NOTE: MAX_ACTION_PARAMS is intentionally only checked in _validate_basic_action as a
@@ -801,34 +800,39 @@ class LLMActionValidator:
         if action_type in [ActionType.UNIT_ATTACK, ActionType.UNIT_SUICIDE_ATTACK,
                           ActionType.UNIT_BOMBARD, ActionType.UNIT_CAPTURE]:
             # These require target coordinates or target unit
-            if 'target_x' in action and 'target_y' in action:
+            # Support both flat (target_x, target_y) and nested (target.x, target.y) formats
+            target_x, target_y = extract_target_coordinates(action)
+
+            if target_x is not None and target_y is not None:
                 # Use InputValidator for proper type checking (excludes bools)
-                x_result = self._input_validator.validate_coordinate(action['target_x'], 'target_x')
+                x_result = self._input_validator.validate_coordinate(target_x, 'target_x')
                 if not x_result.is_valid:
                     return self._validation_error(x_result.error_code or 'E234', x_result.error_message or 'Invalid target_x')
-                y_result = self._input_validator.validate_coordinate(action['target_y'], 'target_y')
+                y_result = self._input_validator.validate_coordinate(target_y, 'target_y')
                 if not y_result.is_valid:
                     return self._validation_error(y_result.error_code or 'E234', y_result.error_message or 'Invalid target_y')
 
-                if not self._validate_coordinates(action['target_x'], action['target_y'], game_state):
+                if not self._validate_coordinates(target_x, target_y, game_state):
                     return self._validation_error('E233', 'Target coordinates out of bounds')
             elif 'target_unit_id' not in action and 'target_city_id' not in action:
                 return self._validation_error('E235', f'{action_type.value} requires target coordinates or target_unit_id/target_city_id')
 
         elif action_type == ActionType.UNIT_NUKE:
             # Nuke requires target location
-            if 'target_x' not in action or 'target_y' not in action:
+            # Support both flat (target_x, target_y) and nested (target.x, target.y) formats
+            target_x, target_y = extract_target_coordinates(action)
+            if target_x is None or target_y is None:
                 return self._validation_error('E236', 'unit_nuke requires target_x and target_y')
 
             # Use InputValidator for proper type checking
-            x_result = self._input_validator.validate_coordinate(action['target_x'], 'target_x')
+            x_result = self._input_validator.validate_coordinate(target_x, 'target_x')
             if not x_result.is_valid:
                 return self._validation_error(x_result.error_code or 'E238', x_result.error_message or 'Invalid target_x')
-            y_result = self._input_validator.validate_coordinate(action['target_y'], 'target_y')
+            y_result = self._input_validator.validate_coordinate(target_y, 'target_y')
             if not y_result.is_valid:
                 return self._validation_error(y_result.error_code or 'E238', y_result.error_message or 'Invalid target_y')
 
-            if not self._validate_coordinates(action['target_x'], action['target_y'], game_state):
+            if not self._validate_coordinates(target_x, target_y, game_state):
                 return self._validation_error('E237', 'Nuke target coordinates out of bounds')
 
         elif action_type == ActionType.UNIT_NUKE_CITY:
@@ -836,7 +840,9 @@ class LLMActionValidator:
                 return self._validation_error('E239', 'unit_nuke_city requires target_city_id')
 
         elif action_type == ActionType.UNIT_NUKE_UNITS:
-            if 'target_x' not in action or 'target_y' not in action:
+            # Support both flat (target_x, target_y) and nested (target.x, target.y) formats
+            target_x, target_y = extract_target_coordinates(action)
+            if target_x is None or target_y is None:
                 return self._validation_error('E240', 'unit_nuke_units requires target_x and target_y')
 
         return ValidationResult(True)
@@ -967,31 +973,35 @@ class LLMActionValidator:
                 return self._validation_error('E284', 'unit_airlift requires target_city_id')
 
         # Paradrop requires target coordinates
+        # Support both flat (target_x, target_y) and nested (target.x, target.y) formats
         elif action_type == ActionType.UNIT_PARADROP:
-            if 'target_x' not in action or 'target_y' not in action:
+            target_x, target_y = extract_target_coordinates(action)
+            if target_x is None or target_y is None:
                 return self._validation_error('E285', 'unit_paradrop requires target_x and target_y')
 
             # Use InputValidator for proper type checking
-            x_result = self._input_validator.validate_coordinate(action['target_x'], 'target_x')
+            x_result = self._input_validator.validate_coordinate(target_x, 'target_x')
             if not x_result.is_valid:
                 return self._validation_error(x_result.error_code or 'E287', x_result.error_message or 'Invalid target_x')
-            y_result = self._input_validator.validate_coordinate(action['target_y'], 'target_y')
+            y_result = self._input_validator.validate_coordinate(target_y, 'target_y')
             if not y_result.is_valid:
                 return self._validation_error(y_result.error_code or 'E287', y_result.error_message or 'Invalid target_y')
 
-            if not self._validate_coordinates(action['target_x'], action['target_y'], game_state):
+            if not self._validate_coordinates(target_x, target_y, game_state):
                 return self._validation_error('E286', 'Paradrop target coordinates out of bounds')
 
         # Teleport requires destination
+        # Support both flat (target_x, target_y) and nested (target.x, target.y) formats
         elif action_type == ActionType.UNIT_TELEPORT:
-            if 'target_x' not in action or 'target_y' not in action:
+            target_x, target_y = extract_target_coordinates(action)
+            if target_x is None or target_y is None:
                 return self._validation_error('E288', 'unit_teleport requires target_x and target_y')
 
             # Use InputValidator for proper type checking
-            x_result = self._input_validator.validate_coordinate(action['target_x'], 'target_x')
+            x_result = self._input_validator.validate_coordinate(target_x, 'target_x')
             if not x_result.is_valid:
                 return self._validation_error(x_result.error_code or 'E288', x_result.error_message or 'Invalid target_x')
-            y_result = self._input_validator.validate_coordinate(action['target_y'], 'target_y')
+            y_result = self._input_validator.validate_coordinate(target_y, 'target_y')
             if not y_result.is_valid:
                 return self._validation_error(y_result.error_code or 'E288', y_result.error_message or 'Invalid target_y')
 

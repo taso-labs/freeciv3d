@@ -264,6 +264,26 @@ class TestCombatActionValidation(unittest.TestCase):
         result = self.validator.validate_action(action, self.player_id, GAME_STATE)
         self.assertTrue(result.is_valid)
 
+    def test_unit_attack_with_nested_coordinates(self):
+        """Attack with nested target.x, target.y should pass validation"""
+        action = {
+            "type": "unit_attack",
+            "unit_id": 42,
+            "target": {"x": 10, "y": 20},
+        }
+        result = self.validator.validate_action(action, self.player_id, GAME_STATE)
+        self.assertTrue(result.is_valid)
+
+    def test_unit_bombard_with_nested_coordinates(self):
+        """Bombard with nested target.x, target.y should pass validation"""
+        action = {
+            "type": "unit_bombard",
+            "unit_id": 42,
+            "target": {"x": 15, "y": 25},
+        }
+        result = self.validator.validate_action(action, self.player_id, GAME_STATE)
+        self.assertTrue(result.is_valid)
+
     def test_unit_nuke_valid(self):
         """Valid nuke action should pass validation"""
         action = {
@@ -285,6 +305,26 @@ class TestCombatActionValidation(unittest.TestCase):
         result = self.validator.validate_action(action, self.player_id, GAME_STATE)
         self.assertFalse(result.is_valid)
         self.assertEqual(result.error_code, "E236")
+
+    def test_unit_nuke_with_nested_coordinates(self):
+        """Nuke with nested target.x, target.y should pass validation"""
+        action = {
+            "type": "unit_nuke",
+            "unit_id": 42,
+            "target": {"x": 30, "y": 30},
+        }
+        result = self.validator.validate_action(action, self.player_id, GAME_STATE)
+        self.assertTrue(result.is_valid)
+
+    def test_unit_nuke_units_with_nested_coordinates(self):
+        """Nuke units with nested target.x, target.y should pass validation"""
+        action = {
+            "type": "unit_nuke_units",
+            "unit_id": 42,
+            "target": {"x": 25, "y": 35},
+        }
+        result = self.validator.validate_action(action, self.player_id, GAME_STATE)
+        self.assertTrue(result.is_valid)
 
 
 class TestDiplomacyActionValidation(unittest.TestCase):
