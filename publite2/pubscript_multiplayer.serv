@@ -24,9 +24,9 @@ set maxplayers 3
 set aifill 2
 
 ## Map generator settings for balanced LLM vs LLM play
-## FRACTAL creates large continents with scattered islands (Earth-like)
-## Better than ISLAND (too fragmented) or CONTINENTS (less predictable)
-set generator FRACTAL
+## FAIR creates identical island copies for each player (guaranteed equal starts)
+## Better than FRACTAL (uneven landmass sizes) or ISLAND (too fragmented)
+set generator FAIR
 set landmass 85
 set tinyisles FALSE
 set separatepoles ENABLED

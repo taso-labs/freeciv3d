@@ -184,6 +184,130 @@ class TestCombatActionConverters:
         assert result['action_type'] == ACTION_NUKE_UNITS
 
 
+class TestCombatActionCoordinateResolution:
+    """Test that combat actions resolve target coordinates to target_id.
+
+    This tests the fix for the 'attackUnit #121Failed' error where LLM agents
+    send coordinates in various formats (flat or nested) that need to be
+    converted to target_id (tile index) for the FreeCiv server.
+    """
+
+    def test_unit_attack_with_flat_coordinates(self):
+        """Test unit_attack resolves flat target_x, target_y to target_id."""
+        action = {
+            'type': 'unit_attack',
+            'unit_id': 101,
+            'target_x': 10,
+            'target_y': 20
+        }
+        # map_width defaults to 80, so tile_id = 10 + 20 * 80 = 1610
+        result = _convert_action_to_packet(action)
+
+        assert result['pid'] == PACKET_UNIT_DO_ACTION
+        assert result['target_id'] == 1610  # 10 + 20 * 80
+        assert result['action_type'] == ACTION_ATTACK
+
+    def test_unit_attack_with_nested_coordinates(self):
+        """Test unit_attack resolves nested target.x, target.y to target_id."""
+        action = {
+            'type': 'unit_attack',
+            'unit_id': 101,
+            'target': {'x': 15, 'y': 25}
+        }
+        # map_width defaults to 80, so tile_id = 15 + 25 * 80 = 2015
+        result = _convert_action_to_packet(action)
+
+        assert result['pid'] == PACKET_UNIT_DO_ACTION
+        assert result['target_id'] == 2015  # 15 + 25 * 80
+        assert result['action_type'] == ACTION_ATTACK
+
+    def test_unit_attack_prefers_direct_target_id(self):
+        """Test that direct target_id takes precedence over coordinates."""
+        action = {
+            'type': 'unit_attack',
+            'unit_id': 101,
+            'target_id': 999,
+            'target_x': 10,
+            'target_y': 20
+        }
+        result = _convert_action_to_packet(action)
+
+        assert result['target_id'] == 999  # Direct target_id wins
+
+    def test_unit_bombard_with_coordinates(self):
+        """Test unit_bombard resolves coordinates to target_id."""
+        action = {
+            'type': 'unit_bombard',
+            'unit_id': 101,
+            'target': {'x': 5, 'y': 10}
+        }
+        result = _convert_action_to_packet(action)
+
+        assert result['target_id'] == 805  # 5 + 10 * 80
+        assert result['action_type'] == ACTION_BOMBARD
+
+    def test_unit_capture_with_coordinates(self):
+        """Test unit_capture resolves coordinates to target_id."""
+        action = {
+            'type': 'unit_capture',
+            'unit_id': 101,
+            'target_x': 30,
+            'target_y': 40
+        }
+        result = _convert_action_to_packet(action)
+
+        assert result['target_id'] == 3230  # 30 + 40 * 80
+        assert result['action_type'] == ACTION_CAPTURE_UNITS
+
+    def test_unit_nuke_with_coordinates(self):
+        """Test unit_nuke resolves coordinates to target_id."""
+        action = {
+            'type': 'unit_nuke',
+            'unit_id': 101,
+            'target': {'x': 50, 'y': 50}
+        }
+        result = _convert_action_to_packet(action)
+
+        assert result['target_id'] == 4050  # 50 + 50 * 80
+        assert result['action_type'] == ACTION_NUKE
+
+    def test_unit_paradrop_with_coordinates(self):
+        """Test unit_paradrop resolves coordinates to target_id."""
+        action = {
+            'type': 'unit_paradrop',
+            'unit_id': 101,
+            'target_x': 20,
+            'target_y': 30
+        }
+        result = _convert_action_to_packet(action)
+
+        assert result['target_id'] == 2420  # 20 + 30 * 80
+        assert result['action_type'] == ACTION_PARADROP
+
+    def test_unit_disembark_with_coordinates(self):
+        """Test unit_disembark resolves coordinates to target_id."""
+        action = {
+            'type': 'unit_disembark',
+            'unit_id': 101,
+            'target': {'x': 12, 'y': 15}
+        }
+        result = _convert_action_to_packet(action)
+
+        assert result['target_id'] == 1212  # 12 + 15 * 80
+        assert result['action_type'] == ACTION_TRANSPORT_DISEMBARK1
+
+    def test_no_coordinates_returns_negative_one(self):
+        """Test that missing coordinates returns -1 as target_id."""
+        action = {
+            'type': 'unit_attack',
+            'unit_id': 101
+            # No target coordinates or target_id
+        }
+        result = _convert_action_to_packet(action)
+
+        assert result['target_id'] == -1
+
+
 class TestTransportActionConverters:
     """Test transport action packet conversion."""
     
