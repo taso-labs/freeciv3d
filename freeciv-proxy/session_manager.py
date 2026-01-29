@@ -98,7 +98,7 @@ class SessionManagerBackend(Protocol):
     def resume_session(self, session_id: str) -> bool:
         ...
 
-    def try_resume_session_for_agent(self, agent_id: str, api_token: str) -> Optional[SessionInfo]:
+    def try_resume_session_for_agent(self, agent_id: str, api_token: str, game_id: Optional[str] = None) -> Optional[SessionInfo]:
         ...
 
     def cleanup_expired_sessions(self) -> int:
@@ -519,12 +519,18 @@ class MySQLSessionManager:
             self.stats['db_errors'] += 1
             return False
 
-    def try_resume_session_for_agent(self, agent_id: str, api_token: str) -> Optional[SessionInfo]:
+    def try_resume_session_for_agent(self, agent_id: str, api_token: str, game_id: Optional[str] = None) -> Optional[SessionInfo]:
         """
         Atomically try to resume a suspended session for an agent.
 
         This is the key method for reconnection - finds a suspended session,
         verifies the token, and resumes it in a single atomic operation.
+
+        Args:
+            agent_id: The agent identifier
+            api_token: The API token to verify
+            game_id: Optional game_id to match. If provided, only resumes sessions
+                     for the same game (prevents cross-game session resume bugs).
         """
         MAX_RESUME_ATTEMPTS = int(os.getenv('MAX_SESSION_RESUME_ATTEMPTS', '5'))
 
@@ -532,11 +538,20 @@ class MySQLSessionManager:
             with self._get_connection() as conn:
                 with conn.cursor(dictionary=True) as cursor:
                     # Find suspended session for this agent
-                    cursor.execute("""
-                        SELECT * FROM agent_sessions
-                        WHERE agent_id = %s AND state = 'suspended' AND expires_at > NOW()
-                        ORDER BY created_at DESC LIMIT 1
-                    """, (agent_id,))
+                    # If game_id is provided, also filter by game_id to prevent
+                    # resuming sessions from a different game (E142 bug fix)
+                    if game_id:
+                        cursor.execute("""
+                            SELECT * FROM agent_sessions
+                            WHERE agent_id = %s AND game_id = %s AND state = 'suspended' AND expires_at > NOW()
+                            ORDER BY created_at DESC LIMIT 1
+                        """, (agent_id, game_id))
+                    else:
+                        cursor.execute("""
+                            SELECT * FROM agent_sessions
+                            WHERE agent_id = %s AND state = 'suspended' AND expires_at > NOW()
+                            ORDER BY created_at DESC LIMIT 1
+                        """, (agent_id,))
                     row = cursor.fetchone()
 
                     if not row:
@@ -974,8 +989,16 @@ class InMemorySessionManager:
                     logger.info(f"Cannot resume expired session {session_id}")
             return False
 
-    def try_resume_session_for_agent(self, agent_id: str, api_token: str) -> Optional[SessionInfo]:
-        """Atomically try to resume a suspended session for an agent"""
+    def try_resume_session_for_agent(self, agent_id: str, api_token: str, game_id: Optional[str] = None) -> Optional[SessionInfo]:
+        """
+        Atomically try to resume a suspended session for an agent.
+
+        Args:
+            agent_id: The agent identifier
+            api_token: The API token to verify
+            game_id: Optional game_id to match. If provided, only resumes sessions
+                     for the same game (prevents cross-game session resume bugs).
+        """
         MAX_RESUME_ATTEMPTS = int(os.getenv('MAX_SESSION_RESUME_ATTEMPTS', '5'))
 
         with self._session_lock:
@@ -986,6 +1009,15 @@ class InMemorySessionManager:
             session = self.sessions.get(session_id)
             if not session:
                 del self.agent_to_session[agent_id]
+                return None
+
+            # game_id validation: if provided, only resume if it matches the session's game_id
+            # This prevents resuming a session from a different game (E142 bug fix)
+            if game_id and session.game_id != game_id:
+                logger.info(
+                    f"Session resume skipped for {agent_id}: game_id mismatch "
+                    f"(session={session.game_id}, requested={game_id})"
+                )
                 return None
 
             if session.state != SessionState.SUSPENDED:
@@ -1143,8 +1175,8 @@ class SessionManager:
     def resume_session(self, session_id: str) -> bool:
         return self._get_backend().resume_session(session_id)
 
-    def try_resume_session_for_agent(self, agent_id: str, api_token: str) -> Optional[SessionInfo]:
-        return self._get_backend().try_resume_session_for_agent(agent_id, api_token)
+    def try_resume_session_for_agent(self, agent_id: str, api_token: str, game_id: Optional[str] = None) -> Optional[SessionInfo]:
+        return self._get_backend().try_resume_session_for_agent(agent_id, api_token, game_id)
 
     def cleanup_expired_sessions(self) -> int:
         return self._get_backend().cleanup_expired_sessions()

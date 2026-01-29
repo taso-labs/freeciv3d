@@ -481,12 +481,20 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 self.write_message(error_response.to_json())
                 return
 
+            # Extract game_id BEFORE session resume/creation
+            # This is critical for:
+            # 1. Validating session resume against the correct game (prevents E142 errors)
+            # 2. Persisting game_id with new sessions for MySQL session persistence
+            # LLM Gateway flattens nested 'data' field to top level before sending to proxy
+            game_id = msg_data.get('game_id', f'game_{uuid.uuid4().hex[:8]}')
+
             # Check for existing suspended session to resume (reconnection support)
             # Uses atomic try_resume_session_for_agent with proper locking and token verification
+            # IMPORTANT: Pass game_id to prevent resuming sessions from a different game
             is_reconnecting = False
             previous_player_id = None
             previous_civserver_port = None
-            resumed_session = session_manager.try_resume_session_for_agent(self.agent_id, api_token)
+            resumed_session = session_manager.try_resume_session_for_agent(self.agent_id, api_token, game_id)
             if resumed_session:
                 self.session_info = resumed_session
                 self.session_id = resumed_session.session_id
@@ -499,13 +507,9 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 logger.info(
                     f"Resumed suspended session {self.session_id} for {self.agent_id}\n"
                     f"   Restored player_id: {previous_player_id}\n"
-                    f"   Restored civserver_port: {previous_civserver_port}"
+                    f"   Restored civserver_port: {previous_civserver_port}\n"
+                    f"   Game ID: {game_id}"
                 )
-
-            # Extract game_id BEFORE session creation so it can be persisted with the session
-            # This enables MySQL session persistence to link sessions with games
-            # LLM Gateway flattens nested 'data' field to top level before sending to proxy
-            game_id = msg_data.get('game_id', f'game_{uuid.uuid4().hex[:8]}')
             self.game_id = game_id
 
             # Create new session if not reconnecting
