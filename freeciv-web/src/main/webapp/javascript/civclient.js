@@ -1057,7 +1057,9 @@ function show_dialog_message(title, message) {
 
   $('#generic_dialog').css("max-height", "450px");
 
-  if (dialogs_minimized_setting) {
+  // Auto-minimize dialogs for observers (non-interactive viewing)
+  // or when user has enabled the dialogs_minimized_setting
+  if (dialogs_minimized_setting || client_is_observer()) {
     $("#generic_dialog").dialogExtend("minimize");
   }
 
@@ -1200,16 +1202,18 @@ function show_fullscreen_window()
 **************************************************************************/
 function show_debug_info()
 {
-  console.log("Freeciv version: " + freeciv_version);
-  console.log("Browser useragent: " + navigator.userAgent);
-  console.log("jQuery version: " + $().jquery);
-  console.log("jQuery UI version: " + $.ui.version);
-  console.log("simpleStorage version: " + simpleStorage.version);
-  console.log("Touch device: " + is_touch_device());
-  console.log("HTTP protocol: " + document.location.protocol);
-  if (ws != null && ws.url != null) console.log("WebSocket URL: " + ws.url);
-
+  // Enable debug logging when this function is called
   debug_active = true;
+
+  freelog(LOG_DEBUG, "Freeciv version: " + freeciv_version);
+  freelog(LOG_DEBUG, "Browser useragent: " + navigator.userAgent);
+  freelog(LOG_DEBUG, "jQuery version: " + $().jquery);
+  freelog(LOG_DEBUG, "jQuery UI version: " + $.ui.version);
+  freelog(LOG_DEBUG, "simpleStorage version: " + simpleStorage.version);
+  freelog(LOG_DEBUG, "Touch device: " + is_touch_device());
+  freelog(LOG_DEBUG, "HTTP protocol: " + document.location.protocol);
+  if (ws != null && ws.url != null) freelog(LOG_DEBUG, "WebSocket URL: " + ws.url);
+
   /* Show average network latency PING (server to client, and back). */
   var sum = 0;
   var max = 0;
@@ -1217,7 +1221,7 @@ function show_debug_info()
     sum += debug_ping_list[i];
     if (debug_ping_list[i] > max) max = debug_ping_list[i];
   }
-  console.log("Network PING average (server): " + (sum / debug_ping_list.length) + " ms. (Max: " + max +"ms.)");
+  freelog(LOG_DEBUG, "Network PING average (server): " + (sum / debug_ping_list.length) + " ms. (Max: " + max +"ms.)");
 
   /* Show average network latency PING (client to server, and back). */
   sum = 0;
@@ -1226,9 +1230,13 @@ function show_debug_info()
     sum += debug_client_speed_list[j];
     if (debug_client_speed_list[j] > max) max = debug_client_speed_list[j];
   }
-  console.log("Network PING average (client): " + (sum / debug_client_speed_list.length) + " ms.  (Max: " + max +"ms.)");
+  freelog(LOG_DEBUG, "Network PING average (client): " + (sum / debug_client_speed_list.length) + " ms.  (Max: " + max +"ms.)");
 
-  console.log(maprenderer.info);
+  try {
+    freelog(LOG_DEBUG, "Renderer info: " + JSON.stringify(maprenderer.info));
+  } catch (e) {
+    freelog(LOG_DEBUG, "Renderer info: [unable to serialize]");
+  }
 
 }
 

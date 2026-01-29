@@ -235,8 +235,7 @@ function handle_chat_msg(packet)
 
   if (message == null) return;
   if (event == null || event < 0 || event >= E_UNDEFINED) {
-    console.log('Undefined message event type');
-    console.log(packet);
+    freelog(LOG_DEBUG, 'Undefined message event type: ' + JSON.stringify(packet));
     packet['event'] = E_UNDEFINED;
   }
 
@@ -760,13 +759,9 @@ function handle_server_info(packet)
 {
 
   if (packet['emerg_version'] > 0) {
-    console.log('Server has version %d.%d.%d.%d%s',
-      packet.major_version, packet.minor_version, packet.patch_version,
-      packet.emerg_version, packet.version_label);
+    freelog(LOG_DEBUG, 'Server has version ' + packet.major_version + '.' + packet.minor_version + '.' + packet.patch_version + '.' + packet.emerg_version + packet.version_label);
   } else {
-    console.log("Server has version %d.%d.%d%s",
-      packet.major_version, packet.minor_version, packet.patch_version,
-      packet.version_label);
+    freelog(LOG_DEBUG, 'Server has version ' + packet.major_version + '.' + packet.minor_version + '.' + packet.patch_version + packet.version_label);
   }
 }
 

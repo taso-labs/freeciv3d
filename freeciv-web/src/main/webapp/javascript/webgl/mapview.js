@@ -89,10 +89,10 @@ function webgl_start_renderer()
     }
   }
 
-  console.log("Three.js " + THREE.REVISION);
+  freelog(LOG_DEBUG, "Three.js " + THREE.REVISION);
   THREE.ColorManagement.enabled = true;
   if (webgpu) {
-    console.log("WebGPU experimental renderer.");
+    freelog(LOG_DEBUG, "WebGPU experimental renderer.");
   }
 
   container = document.getElementById('mapcanvas');
@@ -146,8 +146,8 @@ function webgl_start_renderer()
 
   } else {
     maprenderer = new THREE.WebGPURenderer( { antialias: enable_antialiasing, preserveDrawingBuffer: true } );
-    if (maprenderer.backend.isWebGLBackend) console.log("WebGL backend");
-    if (maprenderer.backend.isWebGPUBackend) console.log("WebGPU backend");
+    if (maprenderer.backend.isWebGLBackend) freelog(LOG_DEBUG, "WebGL backend");
+    if (maprenderer.backend.isWebGPUBackend) freelog(LOG_DEBUG, "WebGPU backend");
   }
 
   maprenderer.setPixelRatio(window.devicePixelRatio);
@@ -184,7 +184,7 @@ function init_webgl_mapview() {
 
   if (!webgpu && maprenderer.capabilities.maxTextures <= 16) {
     delete tiletype_terrains["irrigation"];
-    console.log("max textures: " + maprenderer.capabilities.maxTextures);
+    freelog(LOG_DEBUG, "max textures: " + maprenderer.capabilities.maxTextures);
     fragment_shader = fragment_shader.replace("uniform sampler2D irrigation;", "")
                                      .replaceAll("irrigation", "farmland");
   }

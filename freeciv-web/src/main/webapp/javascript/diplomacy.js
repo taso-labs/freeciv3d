@@ -430,7 +430,7 @@ function createDiplomacyDialog(counterpart) {
   diplomacyDialog.css("overflow", "visible");
   diplomacyDialog.parent().css("z-index", 1000);
 
-  if (dialogs_minimized_setting) {
+  if (dialogs_minimized_setting || client_is_observer()) {
     diplomacyDialog.dialogExtend("minimize");
   }
 }

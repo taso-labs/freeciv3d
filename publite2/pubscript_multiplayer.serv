@@ -9,7 +9,7 @@ set netwait 15
 set nettimeout 120
 set pingtime 30
 set pingtimeout 120
-set maxconnectionsperhost 8192
+set maxconnectionsperhost 16384
 set threaded_save enabled
 set scorelog enabled
 set mapsize xysize
@@ -27,7 +27,7 @@ set aifill 2
 ## FRACTAL creates large continents with scattered islands (Earth-like)
 ## Better than ISLAND (too fragmented) or CONTINENTS (less predictable)
 set generator FRACTAL
-set landmass 45
+set landmass 85
 set tinyisles FALSE
 set separatepoles ENABLED
 

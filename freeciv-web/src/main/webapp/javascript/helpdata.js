@@ -196,7 +196,7 @@ function wiki_on_item_button(item_name)
   item_name = string_unqualify(item_name);
 
   if (freeciv_wiki_docs[item_name] == null) {
-    console.log("No wiki data about " + item_name);
+    freelog(LOG_DEBUG, "No wiki data about " + item_name);
     return "";
   }
 
