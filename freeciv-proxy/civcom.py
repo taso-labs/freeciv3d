@@ -1955,8 +1955,21 @@ class CivCom(Thread):
 
         legal_actions = self._get_legal_actions_optimized(player_id)
 
+        # Convert all_players list to dict keyed by player ID (as string)
+        # Required for agent-clash FreeCivState compatibility
+        players_dict = {}
+        for p in getattr(self, 'all_players', []):
+            pid = p.get('id') if isinstance(p, dict) else None
+            if pid is not None:
+                players_dict[str(pid)] = p
+
+        # Ensure unit/city dicts have string keys for JSON compatibility
+        units_dict = self._normalize_to_dict(getattr(self, 'player_units', {}))
+        cities_dict = self._normalize_to_dict(getattr(self, 'player_cities', {}))
+
         # Basic game state structure for LLM consumption
         state = {
+            'format': 'llm_optimized',
             'turn': game_turn,
             'phase': game_phase,
             'player_id': player_id,
@@ -1964,7 +1977,15 @@ class CivCom(Thread):
             'strategic': self._build_strategic_view(player_id),
             'tactical': self._build_tactical_view(player_id),
             'economic': self._build_economic_view(player_id),
-            'legal_actions': legal_actions
+            'legal_actions': legal_actions,
+            # Required fields for agent-clash FreeCivState compatibility
+            'players': players_dict,
+            'units': units_dict,
+            'cities': cities_dict,
+            'map': getattr(self, 'map_info', {}),
+            'techs': getattr(self, 'techs', {}),
+            'timestamp': time.time(),
+            'player_perspective': player_id
         }
         return state
 
