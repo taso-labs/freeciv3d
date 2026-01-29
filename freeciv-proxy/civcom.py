@@ -1983,7 +1983,11 @@ class CivCom(Thread):
             'units': units_dict,
             'cities': cities_dict,
             'map': getattr(self, 'map_info', {}),
-            'techs': getattr(self, 'techs', {}),
+            # Use _build_techs_dict() to get per-player tech name lists
+            # (not self.techs which is the raw tech RULESET definitions)
+            'techs': self._build_techs_dict(),
+            # Also include wonders for completeness
+            'wonders': self._build_wonders_dict(getattr(self, 'all_players', [])),
             'timestamp': time.time(),
             'player_perspective': player_id
         }
