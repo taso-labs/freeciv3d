@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.29](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.28...freeciv3d-v0.3.29) (2026-01-29)
+
+
+### Bug Fixes
+
+* Increase observer connection limits for 5000+ concurrent viewers ([#97](https://github.com/taso-ventures/freeciv3d/issues/97)) ([052b093](https://github.com/taso-ventures/freeciv3d/commit/052b093e31dc2822f08465109e23153a3c635c28))
+
 ## [0.3.28](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.27...freeciv3d-v0.3.28) (2026-01-28)
 
 
