@@ -628,7 +628,8 @@ class GameSessionManager:
         """
         for attempt in range(METASERVER_MAX_RETRIES):
             try:
-                async with aiohttp.ClientSession(self.metaserver_url) as session:
+                # Use base_url as keyword argument (required for aiohttp 3.9+)
+                async with aiohttp.ClientSession(base_url=self.metaserver_url) as session:
                     # Make POST request with type=multiplayer and game_id for persistent mapping
                     # The endpoint will return the same port for the same game_id on reconnection
                     async with session.post(
@@ -800,7 +801,8 @@ class GameSessionManager:
 
         for attempt in range(max_retries):
             try:
-                async with aiohttp.ClientSession(self.metaserver_url) as session:
+                # Use base_url as keyword argument (required for aiohttp 3.9+)
+                async with aiohttp.ClientSession(base_url=self.metaserver_url) as session:
                     # POST to /meta/release with port and game_id
                     params = {"port": str(port), "host": "localhost"}
                     if game_id:
@@ -824,8 +826,9 @@ class GameSessionManager:
                                 # Non-success response is not retryable
                                 return False
                         elif response.status == 404:
-                            # Server not found or already available - this is OK
-                            logger.info(f"Port {port} already released or not found (404)")
+                            # Server not found or already available - treat as success but log warning
+                            # This could indicate a bug (releasing unallocated port) or race condition
+                            logger.warning(f"Port {port} already released or not found (404) - treating as success")
                             return True
                         else:
                             # Server error - retry with backoff

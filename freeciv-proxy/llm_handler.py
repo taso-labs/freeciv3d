@@ -4267,19 +4267,28 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 # Check if this is the last player in the game session
                 # Only release port when ALL players have disconnected (not just one)
                 game_session = game_session_manager.sessions.get(self.game_id)
+                should_release = False
                 remaining_players = 0
-                if game_session:
-                    # Use _players_lock to prevent race condition where two players
-                    # disconnecting simultaneously could both see remaining_players == 0
-                    with game_session._players_lock:
-                        # Count players excluding ourselves
-                        remaining_players = sum(
-                            1 for aid in game_session.players
-                            if aid != self.agent_id
-                        )
 
-                if remaining_players == 0:
-                    # Last player disconnected - release the port
+                if game_session:
+                    # CRITICAL: Hold lock for BOTH the check AND the decision to release
+                    # This prevents TOCTOU race where Player B could reconnect between
+                    # our count check and the release action
+                    with game_session._players_lock:
+                        # Remove ourselves from players dict first
+                        if self.agent_id in game_session.players:
+                            del game_session.players[self.agent_id]
+                            logger.debug(f"Removed {self.agent_id} from game_session.players")
+
+                        # Now count remaining players (should be 0 if we were the last)
+                        remaining_players = len(game_session.players)
+
+                        # Make the decision while still holding the lock
+                        if remaining_players == 0:
+                            should_release = True
+
+                # Now act on the decision (outside lock is fine since decision was atomic)
+                if should_release:
                     logger.info(
                         f"[PORT_RELEASE] Last player {self.agent_id} disconnected from game {self.game_id}, "
                         f"releasing port {civserver_port}"
@@ -4294,7 +4303,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                         )
                     except Exception as e:
                         logger.error(f"Failed to schedule port release: {e}")
-                else:
+                elif game_session:
                     logger.info(
                         f"Player {self.agent_id} disconnected from game {self.game_id}, "
                         f"but {remaining_players} players remain - port {civserver_port} stays allocated"

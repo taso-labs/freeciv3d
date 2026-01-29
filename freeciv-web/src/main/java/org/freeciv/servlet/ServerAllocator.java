@@ -67,11 +67,17 @@ public class ServerAllocator extends HttpServlet {
 
 	// Threshold for stale allocation cleanup (minutes without activity)
 	// Allocations without last_seen updates for this long are considered zombies
-	// IMPORTANT: This should be LONGER than SESSION_SUSPENSION_TIMEOUT_SECS to allow
-	// reconnection without premature port release. Default 45 min supports 30 min reconnection.
-	// Can be overridden via system property: -Dfreeciv.stale.allocation.threshold.minutes=60
+	// IMPORTANT: Must be LONGER than SESSION_SUSPENSION_TIMEOUT_SECS (Python env var)
+	// to prevent premature port release during valid reconnection windows.
+	//
+	// Configuration examples:
+	//   - Default: SESSION_SUSPENSION_TIMEOUT_SECS=300 (5 min) → threshold=10 min is safe
+	//   - 30-min reconnection: SESSION_SUSPENSION_TIMEOUT_SECS=1800 → threshold=45 min
+	//
+	// Default 10 min matches default 5-min session suspension with 2x safety margin.
+	// Override via: -Dfreeciv.stale.allocation.threshold.minutes=45
 	private static final int STALE_ALLOCATION_THRESHOLD_MINUTES =
-		Integer.getInteger("freeciv.stale.allocation.threshold.minutes", 45);
+		Integer.getInteger("freeciv.stale.allocation.threshold.minutes", 10);
 
 	/**
 	 * Check if a port is actively listening on the local machine.
