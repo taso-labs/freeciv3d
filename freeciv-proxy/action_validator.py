@@ -36,14 +36,13 @@ Error codes are organized by category for easy identification:
 import logging
 from typing import Dict, Any, List, Optional
 from enum import Enum
+from coordinate_utils import (
+    DEFAULT_MAP_WIDTH,
+    DEFAULT_MAP_HEIGHT,
+    extract_target_coordinates,
+)
 
 logger = logging.getLogger("freeciv-proxy")
-
-# === Constants ===
-# Map size limits (standard FreeCiv maximum dimensions)
-# See: https://freeciv.fandom.com/wiki/Map
-DEFAULT_MAP_WIDTH = 200
-DEFAULT_MAP_HEIGHT = 200
 
 # Action validation limits
 # NOTE: MAX_ACTION_PARAMS is intentionally only checked in _validate_basic_action as a
@@ -750,31 +749,6 @@ class LLMActionValidator:
         """Get validation statistics"""
         return self.validation_stats.copy()
 
-    def _extract_target_coordinates(self, action: Dict[str, Any]) -> tuple:
-        """Extract target coordinates from action, supporting multiple formats.
-
-        Supports:
-        - Flat format: {'target_x': 10, 'target_y': 20}
-        - Nested format: {'target': {'x': 10, 'y': 20}}
-
-        Args:
-            action: Action dict to extract coordinates from
-
-        Returns:
-            tuple: (target_x, target_y) or (None, None) if not found
-        """
-        # Try flat format first
-        if 'target_x' in action and 'target_y' in action:
-            return action['target_x'], action['target_y']
-
-        # Try nested format (target.x, target.y)
-        if 'target' in action and isinstance(action['target'], dict):
-            target = action['target']
-            if 'x' in target and 'y' in target:
-                return target['x'], target['y']
-
-        return None, None
-
     def _validate_coordinates(self, x: int, y: int, game_state: Optional[Dict[str, Any]] = None) -> bool:
         """Enhanced coordinate validation against actual game boundaries
 
@@ -827,7 +801,7 @@ class LLMActionValidator:
                           ActionType.UNIT_BOMBARD, ActionType.UNIT_CAPTURE]:
             # These require target coordinates or target unit
             # Support both flat (target_x, target_y) and nested (target.x, target.y) formats
-            target_x, target_y = self._extract_target_coordinates(action)
+            target_x, target_y = extract_target_coordinates(action)
 
             if target_x is not None and target_y is not None:
                 # Use InputValidator for proper type checking (excludes bools)
@@ -846,7 +820,7 @@ class LLMActionValidator:
         elif action_type == ActionType.UNIT_NUKE:
             # Nuke requires target location
             # Support both flat (target_x, target_y) and nested (target.x, target.y) formats
-            target_x, target_y = self._extract_target_coordinates(action)
+            target_x, target_y = extract_target_coordinates(action)
             if target_x is None or target_y is None:
                 return self._validation_error('E236', 'unit_nuke requires target_x and target_y')
 
@@ -867,7 +841,7 @@ class LLMActionValidator:
 
         elif action_type == ActionType.UNIT_NUKE_UNITS:
             # Support both flat (target_x, target_y) and nested (target.x, target.y) formats
-            target_x, target_y = self._extract_target_coordinates(action)
+            target_x, target_y = extract_target_coordinates(action)
             if target_x is None or target_y is None:
                 return self._validation_error('E240', 'unit_nuke_units requires target_x and target_y')
 
@@ -1001,7 +975,7 @@ class LLMActionValidator:
         # Paradrop requires target coordinates
         # Support both flat (target_x, target_y) and nested (target.x, target.y) formats
         elif action_type == ActionType.UNIT_PARADROP:
-            target_x, target_y = self._extract_target_coordinates(action)
+            target_x, target_y = extract_target_coordinates(action)
             if target_x is None or target_y is None:
                 return self._validation_error('E285', 'unit_paradrop requires target_x and target_y')
 
@@ -1019,7 +993,7 @@ class LLMActionValidator:
         # Teleport requires destination
         # Support both flat (target_x, target_y) and nested (target.x, target.y) formats
         elif action_type == ActionType.UNIT_TELEPORT:
-            target_x, target_y = self._extract_target_coordinates(action)
+            target_x, target_y = extract_target_coordinates(action)
             if target_x is None or target_y is None:
                 return self._validation_error('E288', 'unit_teleport requires target_x and target_y')
 

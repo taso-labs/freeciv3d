@@ -190,6 +190,8 @@ class TestCombatActionCoordinateResolution:
     This tests the fix for the 'attackUnit #121Failed' error where LLM agents
     send coordinates in various formats (flat or nested) that need to be
     converted to target_id (tile index) for the FreeCiv server.
+
+    Note: Default map width is 64 (for 1v1 LLM gameplay).
     """
 
     def test_unit_attack_with_flat_coordinates(self):
@@ -200,11 +202,11 @@ class TestCombatActionCoordinateResolution:
             'target_x': 10,
             'target_y': 20
         }
-        # map_width defaults to 80, so tile_id = 10 + 20 * 80 = 1610
+        # map_width defaults to 64, so tile_id = 10 + 20 * 64 = 1290
         result = _convert_action_to_packet(action)
 
         assert result['pid'] == PACKET_UNIT_DO_ACTION
-        assert result['target_id'] == 1610  # 10 + 20 * 80
+        assert result['target_id'] == 1290  # 10 + 20 * 64
         assert result['action_type'] == ACTION_ATTACK
 
     def test_unit_attack_with_nested_coordinates(self):
@@ -214,11 +216,11 @@ class TestCombatActionCoordinateResolution:
             'unit_id': 101,
             'target': {'x': 15, 'y': 25}
         }
-        # map_width defaults to 80, so tile_id = 15 + 25 * 80 = 2015
+        # map_width defaults to 64, so tile_id = 15 + 25 * 64 = 1615
         result = _convert_action_to_packet(action)
 
         assert result['pid'] == PACKET_UNIT_DO_ACTION
-        assert result['target_id'] == 2015  # 15 + 25 * 80
+        assert result['target_id'] == 1615  # 15 + 25 * 64
         assert result['action_type'] == ACTION_ATTACK
 
     def test_unit_attack_prefers_direct_target_id(self):
@@ -243,7 +245,7 @@ class TestCombatActionCoordinateResolution:
         }
         result = _convert_action_to_packet(action)
 
-        assert result['target_id'] == 805  # 5 + 10 * 80
+        assert result['target_id'] == 645  # 5 + 10 * 64
         assert result['action_type'] == ACTION_BOMBARD
 
     def test_unit_capture_with_coordinates(self):
@@ -256,7 +258,7 @@ class TestCombatActionCoordinateResolution:
         }
         result = _convert_action_to_packet(action)
 
-        assert result['target_id'] == 3230  # 30 + 40 * 80
+        assert result['target_id'] == 2590  # 30 + 40 * 64
         assert result['action_type'] == ACTION_CAPTURE_UNITS
 
     def test_unit_nuke_with_coordinates(self):
@@ -268,7 +270,7 @@ class TestCombatActionCoordinateResolution:
         }
         result = _convert_action_to_packet(action)
 
-        assert result['target_id'] == 4050  # 50 + 50 * 80
+        assert result['target_id'] == 3250  # 50 + 50 * 64
         assert result['action_type'] == ACTION_NUKE
 
     def test_unit_paradrop_with_coordinates(self):
@@ -281,7 +283,7 @@ class TestCombatActionCoordinateResolution:
         }
         result = _convert_action_to_packet(action)
 
-        assert result['target_id'] == 2420  # 20 + 30 * 80
+        assert result['target_id'] == 1940  # 20 + 30 * 64
         assert result['action_type'] == ACTION_PARADROP
 
     def test_unit_disembark_with_coordinates(self):
@@ -293,8 +295,20 @@ class TestCombatActionCoordinateResolution:
         }
         result = _convert_action_to_packet(action)
 
-        assert result['target_id'] == 1212  # 12 + 15 * 80
+        assert result['target_id'] == 972  # 12 + 15 * 64
         assert result['action_type'] == ACTION_TRANSPORT_DISEMBARK1
+
+    def test_negative_coordinates_returns_negative_one(self):
+        """Test that negative coordinates return -1 as target_id."""
+        action = {
+            'type': 'unit_attack',
+            'unit_id': 101,
+            'target_x': -5,
+            'target_y': 10
+        }
+        result = _convert_action_to_packet(action)
+
+        assert result['target_id'] == -1  # Negative coords rejected
 
     def test_no_coordinates_returns_negative_one(self):
         """Test that missing coordinates returns -1 as target_id."""

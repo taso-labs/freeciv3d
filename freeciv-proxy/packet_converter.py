@@ -30,78 +30,16 @@ from packet_constants import (
 from action_constants import *
 from activity_constants import *
 from order_constants import *
+from coordinate_utils import (
+    DEFAULT_MAP_WIDTH,
+    extract_target_coordinates,
+    resolve_target_tile_id,
+)
 import re
 from pathlib import Path
 
 # Cache mapping pid -> allowed top-level field names parsed from Freeciv packets.def
 _PACKET_FIELD_MAP = None
-
-# Default map dimensions used when civcom is not available
-DEFAULT_MAP_WIDTH = 80
-
-
-def _extract_target_coordinates(action: Dict[str, Any]) -> tuple:
-    """Extract target coordinates from action, supporting multiple formats.
-
-    Supports:
-    - Flat format: {'target_x': 10, 'target_y': 20}
-    - Nested format: {'target': {'x': 10, 'y': 20}}
-
-    Args:
-        action: Action dict to extract coordinates from
-
-    Returns:
-        tuple: (target_x, target_y) or (None, None) if not found
-    """
-    # Try flat format first
-    if 'target_x' in action and 'target_y' in action:
-        return action['target_x'], action['target_y']
-
-    # Try nested format (target.x, target.y)
-    if 'target' in action and isinstance(action['target'], dict):
-        target = action['target']
-        if 'x' in target and 'y' in target:
-            return target['x'], target['y']
-
-    return None, None
-
-
-def _resolve_combat_target_id(action: Dict[str, Any], civcom: Optional[Any] = None) -> int:
-    """Resolve target_id for combat actions from various input formats.
-
-    Supports multiple ways to specify the target:
-    1. Direct target_id: {'target_id': 123}
-    2. Tile ID: {'tile_id': 123}
-    3. Flat coordinates: {'target_x': 10, 'target_y': 20}
-    4. Nested coordinates: {'target': {'x': 10, 'y': 20}}
-
-    Args:
-        action: Action dict containing target specification
-        civcom: Optional civcom instance for map dimensions
-
-    Returns:
-        int: Resolved target_id (tile index), or -1 if cannot resolve
-    """
-    # Priority 1: Direct target_id
-    if 'target_id' in action and action['target_id'] != -1:
-        return action['target_id']
-
-    # Priority 2: tile_id
-    if 'tile_id' in action and action['tile_id'] != -1:
-        return action['tile_id']
-
-    # Priority 3: Coordinates (flat or nested)
-    target_x, target_y = _extract_target_coordinates(action)
-    if target_x is not None and target_y is not None:
-        # Get map width from civcom or use default
-        map_width = DEFAULT_MAP_WIDTH
-        if civcom and hasattr(civcom, 'map_info') and civcom.map_info:
-            map_width = civcom.map_info.get('width', DEFAULT_MAP_WIDTH)
-
-        # Calculate tile index: tile_index = x + y * map_width
-        return int(target_x) + int(target_y) * map_width
-
-    return -1
 
 
 def _load_packet_field_map() -> dict:
@@ -458,7 +396,7 @@ def _convert_action_to_packet_impl(
             "unit_heal": ACTION_HEAL_UNIT,
         }
         # Resolve target_id from various input formats (coordinates, tile_id, etc.)
-        resolved_target_id = _resolve_combat_target_id(action, civcom)
+        resolved_target_id = resolve_target_tile_id(action, civcom)
         return {
             "pid": PACKET_UNIT_DO_ACTION,
             "actor_id": action["unit_id"],
@@ -505,7 +443,7 @@ def _convert_action_to_packet_impl(
         }
     elif action_type == "unit_disembark":
         # Resolve target_id from coordinates if provided
-        resolved_target_id = _resolve_combat_target_id(action, civcom)
+        resolved_target_id = resolve_target_tile_id(action, civcom)
         return {
             "pid": PACKET_UNIT_DO_ACTION,
             "actor_id": action["unit_id"],
@@ -537,7 +475,7 @@ def _convert_action_to_packet_impl(
         }
     elif action_type == "unit_paradrop":
         # Resolve target_id from coordinates if provided
-        resolved_target_id = _resolve_combat_target_id(action, civcom)
+        resolved_target_id = resolve_target_tile_id(action, civcom)
         return {
             "pid": PACKET_UNIT_DO_ACTION,
             "actor_id": action["unit_id"],
