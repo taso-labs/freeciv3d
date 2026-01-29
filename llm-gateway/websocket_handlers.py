@@ -229,7 +229,7 @@ class AgentWebSocketHandler:
                     max_queue=64,  # Increase queue size to handle multiple large frames
                     open_timeout=WEBSOCKET_OPEN_TIMEOUT,  # 30s for handshake under load
                     ping_interval=WEBSOCKET_PING_INTERVAL,  # Ping every 20s to detect dead connections
-                    ping_timeout=WEBSOCKET_PING_TIMEOUT,  # Wait up to 10s for pong response
+                    ping_timeout=WEBSOCKET_PING_TIMEOUT,  # Wait up to 60s for pong response (matches proxy)
                     close_timeout=WEBSOCKET_CLOSE_TIMEOUT  # Timeout for graceful close
                 )
 
