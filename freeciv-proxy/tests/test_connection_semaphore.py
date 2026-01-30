@@ -424,12 +424,12 @@ class TestMaxConcurrentHandshakesConfig(unittest.TestCase):
 
     def test_default_value_is_reasonable(self):
         """Test that the default MAX_CONCURRENT_HANDSHAKES is a reasonable value"""
-        # Should be at least 1
-        self.assertGreaterEqual(MAX_CONCURRENT_HANDSHAKES, 1)
+        # Should be at least 3 (one user creates 3 observer connections)
+        self.assertGreaterEqual(MAX_CONCURRENT_HANDSHAKES, 3)
         # Should be reasonable (not too high to overwhelm server)
         self.assertLessEqual(MAX_CONCURRENT_HANDSHAKES, 10)
-        # Default is 3 (one user's worth of observers)
-        self.assertEqual(MAX_CONCURRENT_HANDSHAKES, 3)
+        # Default is 6 (allows 2 users to connect in parallel)
+        self.assertEqual(MAX_CONCURRENT_HANDSHAKES, 6)
 
 
 if __name__ == '__main__':

@@ -121,6 +121,21 @@ class GameSession:
         # Set True atomically with should_release decision while holding _players_lock
         # Checked in add_player() to reject connections during port release
         self._port_releasing: bool = False
+        self._port_releasing_since: Optional[float] = None  # Timestamp for timeout safety net
+
+    def reset_port_releasing_flag(self, reason: str) -> None:
+        """Reset the _port_releasing flag after release attempt completes.
+
+        This helper method centralizes the flag reset logic to avoid duplication
+        and ensure consistent logging. Called from GameSessionManager.release_civserver_port()
+        after successful or failed port release attempts.
+
+        Args:
+            reason: Description of why the flag is being reset (for logging)
+        """
+        self._port_releasing = False
+        self._port_releasing_since = None
+        logger.info(f"Game {self.game_id}: {reason}")
 
     def allocate_ai_slot(self) -> int:
         """Thread-safe AI slot allocation for /take commands
@@ -320,6 +335,18 @@ class GameSession:
         if 'turn_timeout' in config:
             commands.append(f"/set timeout {config['turn_timeout']}")
 
+        # Max turns (game ends after this many turns)
+        # Maps to FreeCiv's 'endturn' setting - when this turn is reached, game ends
+        # Valid range: 1-32767 (FreeCiv default is 5000)
+        # Accept both 'endturn' (FreeCiv name) and 'max_turns' (API name)
+        endturn = config.get('endturn') or config.get('max_turns')
+        if endturn is not None:
+            # Validate and clamp to valid range
+            if isinstance(endturn, int) and 1 <= endturn <= 32767:
+                commands.append(f"/set endturn {endturn}")
+            else:
+                logger.warning(f"Game {self.game_id}: Invalid endturn/max_turns value {endturn}, ignoring")
+
         if not commands:
             logger.info(f"Game {self.game_id}: No configuration changes requested")
             self.config_applied = True
@@ -364,10 +391,25 @@ class GameSession:
             # This prevents TOCTOU race where player connects between
             # release decision and actual port release
             if self._port_releasing:
-                logger.warning(
-                    f"Game {self.game_id}: Rejecting player {agent_id} - port release in progress"
-                )
-                return False
+                # Issue #1 Fix: Check for stuck flag (60s timeout safety net)
+                # If the flag has been set for too long, auto-reset it
+                if self._port_releasing_since:
+                    elapsed = time.time() - self._port_releasing_since
+                    if elapsed > 60:
+                        self.reset_port_releasing_flag(
+                            f"_port_releasing TIMEOUT after {elapsed:.1f}s - auto-resetting to allow connections"
+                        )
+                        # Continue to add player since we auto-reset
+                    else:
+                        logger.warning(
+                            f"Game {self.game_id}: Rejecting player {agent_id} - port release in progress ({elapsed:.1f}s ago)"
+                        )
+                        return False
+                else:
+                    logger.warning(
+                        f"Game {self.game_id}: Rejecting player {agent_id} - port release in progress"
+                    )
+                    return False
 
             if len(self.players) >= self.max_players:
                 logger.warning(f"Game {self.game_id}: Max players ({self.max_players}) reached")
@@ -900,6 +942,10 @@ class GameSessionManager:
                                 cleanup_fn = _get_cleanup_port_semaphore()
                                 if cleanup_fn:
                                     cleanup_fn(port)
+                                # Issue #1 Fix: Reset _port_releasing flag on successful release
+                                game_session = self.sessions.get(game_id)
+                                if game_session:
+                                    game_session.reset_port_releasing_flag("Port release complete")
                                 return True
                             else:
                                 logger.warning(f"Metaserver release returned non-success: {data}")
@@ -959,8 +1005,16 @@ class GameSessionManager:
                         f"Error releasing port {port} for game {game_id} "
                         f"after {max_retries} attempts: {e}"
                     )
+                    # Issue #1 Fix: Reset _port_releasing flag on failed release
+                    game_session = self.sessions.get(game_id)
+                    if game_session:
+                        game_session.reset_port_releasing_flag("Port release FAILED after retries")
                     return False
 
+        # Issue #1 Fix: Reset _port_releasing flag if we exit without explicit return
+        game_session = self.sessions.get(game_id)
+        if game_session:
+            game_session.reset_port_releasing_flag("Port release exited unexpectedly")
         return False  # Should not reach here, but for safety
 
     def remove_session(self, game_id: str, release_port: bool = True) -> None:
