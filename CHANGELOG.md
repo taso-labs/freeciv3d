@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.34](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.33...freeciv3d-v0.3.34) (2026-01-30)
+
+
+### Bug Fixes
+
+* resolve observer iframe connection issues (6 fixes) ([#107](https://github.com/taso-ventures/freeciv3d/issues/107)) ([2aa5d66](https://github.com/taso-ventures/freeciv3d/commit/2aa5d66539f7b83311e7a9e862863ca446429d96))
+
 ## [0.3.33](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.32...freeciv3d-v0.3.33) (2026-01-30)
 
 
