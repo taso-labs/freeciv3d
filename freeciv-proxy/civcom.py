@@ -482,6 +482,27 @@ class CivCom(Thread):
             # Reset failure count on successful send if handler supports it
             if hasattr(conn, '_reset_send_failure_count'):
                 conn._reset_send_failure_count()
+
+            # DIAGNOSTIC: Log successful writes for observers to verify data flow
+            # This helps diagnose GKE LB issues where proxy sends but browser doesn't receive
+            # TODO: Remove this diagnostic logging after GKE session affinity fix is validated
+            if "_view_" in self.username:
+                # Extract packet type for logging
+                try:
+                    pkt = json.loads(packet)
+                    pid = pkt.get('pid', 'unknown')
+                    # Log important packets (map, game, city, player, unit info)
+                    important_pids = {
+                        PACKET_MAP_INFO, PACKET_GAME_INFO, PACKET_CITY_INFO,
+                        PACKET_PLAYER_INFO, PACKET_UNIT_INFO
+                    }
+                    if pid in important_pids:
+                        logger.info(
+                            f"📤 WS_WRITE_OK [{self.username}]: pid={pid}, size={packet_size:,}b"
+                        )
+                except Exception:
+                    pass  # Don't fail on logging
+
         except Exception as e:
             # Enhanced error logging with exception type and details
             error_type = type(e).__name__
@@ -1064,15 +1085,21 @@ class CivCom(Thread):
                         except Exception as e:
                             logger.warning(f"⚠ Error parsing packet for state storage: {e}", exc_info=True)
 
-                        # Forward packet to client UNLESS it's a PACKET_CONN_PING
-                        # PACKET_CONN_PING is handled internally (we respond with pong automatically)
-                        # Forwarding it to agents causes unnecessary ping/pong that triggers E101 errors
+                        # Forward packet to client, with special handling for PACKET_CONN_PING
+                        # - Browser observers (_view_): Forward PING so ping_last gets updated
+                        # - LLM agents: Don't forward PING (causes E101 errors)
+                        # Proxy always responds to civserver with PONG (handled in packet processing)
                         should_forward = True
                         try:
                             pkt = json.loads(self.net_buf[:-1].decode('utf-8'))
                             if pkt.get('pid') == PACKET_CONN_PING:
-                                should_forward = False
-                                logger.debug(f"[PING] Not forwarding PACKET_CONN_PING to client for {self.username} (handled internally)")
+                                # Only forward PING to browser observers (they need ping_last updated)
+                                # Don't forward to LLM agents (causes E101 WebSocket errors)
+                                if "_view_" in self.username:
+                                    logger.debug(f"[PING] Forwarding PACKET_CONN_PING to browser observer {self.username}")
+                                else:
+                                    should_forward = False
+                                    logger.debug(f"[PING] Not forwarding PACKET_CONN_PING to LLM agent {self.username} (handled internally)")
                         except Exception:
                             pass  # If we can't parse, forward anyway
 
