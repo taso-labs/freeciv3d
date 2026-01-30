@@ -62,6 +62,10 @@ class AgentWebSocketHandler:
         self.game_id: Optional[str] = None
         self.proxy_connection: Optional[WebSocket] = None  # Connection to freeciv-proxy LLM handler
         self._last_known_turn = 0  # Track turn number for desync detection
+        # Issue #6 Fix: Track proxy listener task to prevent multiple recv() coroutines
+        # Without this, reconnection creates duplicate tasks that both call recv(),
+        # causing "cannot call recv while another coroutine is already running recv"
+        self._proxy_listener_task: Optional[asyncio.Task] = None
 
     async def handle_connection(self):
         """Handle the WebSocket connection lifecycle"""
@@ -137,6 +141,14 @@ class AgentWebSocketHandler:
             logger.error(f"Error in agent connection {self.agent_id}: {e}")
 
         finally:
+            # Issue #6 Fix: Cancel listener task before closing connection
+            if self._proxy_listener_task and not self._proxy_listener_task.done():
+                self._proxy_listener_task.cancel()
+                try:
+                    await self._proxy_listener_task
+                except asyncio.CancelledError:
+                    pass
+
             # Cleanup proxy connection
             if self.proxy_connection:
                 await self.proxy_connection.close()
@@ -301,8 +313,19 @@ class AgentWebSocketHandler:
             # Use retry logic for resilient connection establishment
             self.proxy_connection = await self._connect_to_proxy_with_retry(proxy_url)
 
+            # Issue #6 Fix: Cancel any existing listener task before creating new one
+            # This prevents "cannot call recv while another coroutine is running recv" error
+            # that occurs when reconnection creates duplicate listener tasks
+            if self._proxy_listener_task and not self._proxy_listener_task.done():
+                logger.info(f"Cancelling existing proxy listener for agent {self.agent_id}")
+                self._proxy_listener_task.cancel()
+                try:
+                    await self._proxy_listener_task
+                except asyncio.CancelledError:
+                    pass  # Expected when cancelling
+
             # Start listening for proxy messages in background
-            asyncio.create_task(self._listen_to_proxy())
+            self._proxy_listener_task = asyncio.create_task(self._listen_to_proxy())
 
             # Transform message format: flatten 'data' fields to top level for proxy
             proxy_message = self._transform_to_proxy_format(message)
