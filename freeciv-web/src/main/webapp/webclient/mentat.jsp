@@ -1,6 +1,25 @@
+<%--
+  Mentat (Web-LLM) AI Chat Component
+
+  DISABLED in embed/observer mode to prevent:
+  1. Parcel HMR code trying to connect to wss://freeciv.clashai.live/ in production
+  2. Unnecessary WebSocket connections that may interfere with game WebSocket
+  3. Console noise from failed HMR connections
+--%>
+<%
+  String embedParam = request.getParameter("embed");
+  String actionParam = request.getParameter("action");
+  boolean isEmbedMode = "1".equals(embedParam) || "true".equals(embedParam);
+  boolean isObserveMode = "observe".equals(actionParam);
+  boolean skipWebLLM = isEmbedMode || isObserveMode;
+%>
+
 <div id="mentat_div" style="padding: 5px; padding-left: 20px;">
 <h2>Mentat for Freeciv</h2>
 
+<% if (skipWebLLM) { %>
+  <p><i>Mentat AI Chat is disabled in observer/embed mode.</i></p>
+<% } else { %>
 
 <link href="/web-llm/src/llm_chat.css?<%= Math.random() %>" rel="stylesheet" type="text/css"/>
 
@@ -29,8 +48,6 @@
     Download size: 2.2 GB.
    </i></b>
 
-</div>
-
 <!--- Place script after ui to make sure ui loads first -->
 <script>
   // Add error handler for web-llm to prevent it from crashing the game
@@ -43,3 +60,6 @@
   });
 </script>
 <script src="/web-llm/dist/llm_chat.5e8e8dcb.js?<%= Math.random() %>" defer="" onerror="console.warn('Web-LLM failed to load (non-critical)')"></script>
+
+<% } %>
+</div>

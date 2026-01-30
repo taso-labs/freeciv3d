@@ -6,6 +6,13 @@ metadata:
   labels:
     app: fciv-net
 spec:
+  # Session affinity for WebSocket connections
+  # CRITICAL: Without this, GKE HTTP(S) LB may route WebSocket frames to different pods,
+  # causing "half-open" connections where server→client data stops flowing.
+  # Uses cookie-based affinity to ensure all requests from same client go to same pod.
+  sessionAffinity:
+    affinityType: "GENERATED_COOKIE"
+    affinityCookieTtlSec: 7200  # 2 hours - matches service sessionAffinity timeout
   # Explicit health check - overrides stale auto-generated GCE health check
   # Required because GKE doesn't auto-update health checks when readiness probe changes
   # Note: Don't specify port - let GKE use the serving port (NodePort 32744)
