@@ -1246,10 +1246,11 @@ class LLMWSHandler(websocket.WebSocketHandler):
             if "city_id" in action_data:
                 normalized["city_id"] = action_data["city_id"]
 
-            # Extract production_type from target dict (civcom always sends this field)
+            # Extract production_type from target dict
+            # Support both 'production_type' (canonical) and 'value' (agent-clash format) field names
             target = action_data.get("target", {})
             if isinstance(target, dict):
-                production = target.get("production_type", "")
+                production = target.get("production_type") or target.get("value", "")
             elif isinstance(target, str):
                 production = target
             else:
