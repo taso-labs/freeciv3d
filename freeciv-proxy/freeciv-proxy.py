@@ -74,13 +74,10 @@ _port_semaphores: dict = {}
 _semaphore_lock = threading.Lock()
 
 # Max concurrent observer handshakes per civserver port.
-# Each viewer creates 3 observer connections (global, player1, player2).
-# Value should be >= 3 to allow one user's connections to handshake in parallel.
-# - 3 = serializes even a single user's connections (slow)
-# - 6 = 2 users can connect in parallel (recommended)
-# - 9 = 3 users can connect in parallel
-# Keep reasonable to avoid overwhelming civserver during handshake-heavy rulesets.
-MAX_CONCURRENT_HANDSHAKES = 6
+# 3 = one full user's worth of observers (global, player1, player2) at a time.
+# Increase to 6 (2 users) or 9 (3 users) for faster throughput at cost of
+# higher civserver load. Keep low for reliability under heavy load.
+MAX_CONCURRENT_HANDSHAKES = 3
 
 
 def get_port_semaphore(port: int) -> threading.Semaphore:
@@ -226,25 +223,10 @@ class WSHandler(websocket.WebSocketHandler):
             else:
                 logger.debug(f"[{username}] Semaphore acquired immediately for port {port}")
 
-            # Issue #4 Fix: Wrap CivCom creation in try/except to ensure semaphore
-            # is released if thread creation fails. Without this, a failure here
-            # leaks the semaphore slot, eventually blocking ALL observer connections.
-            try:
-                civcom = CivCom(username, port, key, self)
-                civcom.port_semaphore = semaphore  # Pass semaphore for release after handshake
-                civcom.start()
-                civcoms[key] = civcom
-            except Exception as e:
-                # Release semaphore immediately on failure to prevent slot leak
-                logger.error(
-                    f"[{username}] Failed to create CivCom for port {port}: {e}, "
-                    f"releasing semaphore to prevent connection blocking"
-                )
-                try:
-                    semaphore.release()
-                except ValueError:
-                    pass  # Already released somehow
-                return None
+            civcom = CivCom(username, port, key, self)
+            civcom.port_semaphore = semaphore  # Pass semaphore for release after handshake
+            civcom.start()
+            civcoms[key] = civcom
 
             return civcom
         else:
