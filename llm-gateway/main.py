@@ -196,6 +196,9 @@ class LLMGateway:
         # Keep game_sessions for health monitoring and API compatibility
         # Referenced by health endpoint and session status queries
         self.game_sessions: Dict[str, Dict[str, Any]] = {}
+        # Lock for thread-safe access to game_sessions dict from multiple handlers
+        # Issue #1 (PR Review): Prevents race conditions when concurrent agents update sessions
+        self._sessions_lock = asyncio.Lock()
         self._running = False
 
         # Streaming manager (optional - graceful degradation if unavailable)

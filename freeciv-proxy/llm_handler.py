@@ -1246,16 +1246,21 @@ class LLMWSHandler(websocket.WebSocketHandler):
             if "city_id" in action_data:
                 normalized["city_id"] = action_data["city_id"]
 
-            # Extract production_type from target dict (civcom always sends this field)
+            # Extract production_type from target dict
+            # Support both 'production_type' (canonical) and 'value' (agent-clash format) field names
             target = action_data.get("target", {})
             if isinstance(target, dict):
-                production = target.get("production_type", "")
+                production = target.get("production_type") or target.get("value", "")
             elif isinstance(target, str):
                 production = target
             else:
                 production = ""
 
-            normalized["production_type"] = str(production).lower()
+            # Issue #3 Fix: Only set production_type if we have a non-empty value
+            # If production is empty, don't set the field - let action_validator E030 handle it
+            # with a clearer "Missing required field" error instead of cryptic S001 format error
+            if production:
+                normalized["production_type"] = str(production).lower()
 
         elif action_type == "unit_build_city":
             # Extract unit_id
@@ -1724,6 +1729,49 @@ class LLMWSHandler(websocket.WebSocketHandler):
         if correlation_id:
             response['correlation_id'] = correlation_id
         self.write_message(json.dumps(response))
+
+    def send_game_ended(self, winners: List[int], endgame_players: Dict[int, Dict[str, Any]]) -> None:
+        """Notify agent that game has ended with winner information.
+
+        Called by CivCom when PACKET_ENDGAME_PLAYER packets are received.
+        Sends a 'game_ended' message to the agent with winner info and final scores.
+
+        Args:
+            winners: List of player_ids who won (usually 1, but could be multiple for allied victory)
+            endgame_players: Dict of {player_id: {score, winner, category_scores}}
+        """
+        if not self.is_llm_agent:
+            return
+
+        # Determine if THIS agent won
+        is_winner = self.player_id in winners if self.player_id is not None else False
+
+        # Build player results with string keys for JSON compatibility
+        player_results = {}
+        for pid, data in endgame_players.items():
+            player_results[str(pid)] = data
+
+        game_ended_msg = {
+            'type': 'game_ended',
+            'timestamp': time.time(),
+            'data': {
+                'winners': winners,
+                'is_winner': is_winner,
+                'player_results': player_results,
+                'reason': 'game_over'  # Could be enhanced to include specific reason (turn_limit, conquest, etc.)
+            }
+        }
+
+        try:
+            self.write_message(json.dumps(game_ended_msg))
+            logger.info(
+                f"🏁 Sent game_ended to {self.agent_id}:\n"
+                f"   Winners: {winners}\n"
+                f"   Is Winner: {is_winner}\n"
+                f"   Total Players: {len(endgame_players)}"
+            )
+        except Exception as e:
+            logger.error(f"Failed to send game_ended to {self.agent_id}: {e}")
 
     def _handle_chat(self, msg_data: Dict[str, Any]):
         """Handle chat message from LLM agent
@@ -4295,6 +4343,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                             # during the window between releasing the lock and completing
                             # the port release
                             game_session._port_releasing = True
+                            game_session._port_releasing_since = time.time()  # Issue #1 Fix: Record timestamp for timeout safety net
 
                 # Now act on the decision (outside lock is fine since decision was atomic)
                 if should_release:
