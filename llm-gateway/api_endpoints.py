@@ -113,7 +113,7 @@ class GameConfig(BaseModel):
     wetness: int = Field(default=30, ge=0, le=100, description="Amount of rivers/swamps (0-100)")
     max_players: int = Field(default=4, ge=2, le=8, description="Maximum players")
     ai_level: str = Field(default="easy", description="AI difficulty level")
-    turn_timeout: Optional[int] = Field(default=300, ge=30, le=3600, description="Turn timeout in seconds")
+    turn_timeout: Optional[int] = Field(default=120, ge=30, le=3600, description="Turn timeout in seconds")
     max_turns: int = Field(default=200, ge=10, le=5000, description="Maximum turns before game ends (winner determined by score)")
 
     class Config:
@@ -129,7 +129,7 @@ class GameConfig(BaseModel):
                 "wetness": 30,
                 "max_players": 4,
                 "ai_level": "easy",
-                "turn_timeout": 300,
+                "turn_timeout": 120,
                 "max_turns": 200
             }
         }
