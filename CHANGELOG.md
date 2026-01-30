@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.33](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.32...freeciv3d-v0.3.33) (2026-01-30)
+
+
+### Bug Fixes
+
+* resolve production cascading failures (6 issues) ([#106](https://github.com/taso-ventures/freeciv3d/issues/106)) ([7f7f382](https://github.com/taso-ventures/freeciv3d/commit/7f7f38216b9696e6f8f9fc0c3c3045c2b87cdf55))
+* resolve production cascading failures and add endgame handling ([1833b57](https://github.com/taso-ventures/freeciv3d/commit/1833b577cbc701461e78319cf1dbd66f933136af))
+
 ## [0.3.32](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.31...freeciv3d-v0.3.32) (2026-01-29)
 
 
