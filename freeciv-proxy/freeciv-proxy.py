@@ -242,8 +242,12 @@ class WSHandler(websocket.WebSocketHandler):
                 )
                 try:
                     semaphore.release()
-                except ValueError:
-                    pass  # Already released somehow
+                except ValueError as ve:
+                    # Issue #2 (PR Review): Log instead of silent pass - this indicates a logic error
+                    logger.error(
+                        f"[{username}] Semaphore already released for port {port}: {ve} "
+                        f"(indicates double-release bug in error handling)"
+                    )
                 return None
 
             return civcom

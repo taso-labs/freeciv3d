@@ -59,6 +59,9 @@ MAX_GAME_TIMEOUT = 3600  # 1 hour max - prevents command injection via oversized
 METASERVER_MAX_RETRIES = 3  # Number of retry attempts for port allocation
 METASERVER_BASE_DELAY = 1.0  # Base delay in seconds for exponential backoff
 
+# Issue #4 (PR Review): Port release flag timeout - safety net for stuck flags
+PORT_RELEASE_TIMEOUT_SECONDS = 60  # Auto-reset _port_releasing if stuck longer than this
+
 
 class GamePhase(Enum):
     """Game session phases"""
@@ -391,11 +394,11 @@ class GameSession:
             # This prevents TOCTOU race where player connects between
             # release decision and actual port release
             if self._port_releasing:
-                # Issue #1 Fix: Check for stuck flag (60s timeout safety net)
+                # Issue #1 Fix: Check for stuck flag (timeout safety net)
                 # If the flag has been set for too long, auto-reset it
                 if self._port_releasing_since:
                     elapsed = time.time() - self._port_releasing_since
-                    if elapsed > 60:
+                    if elapsed > PORT_RELEASE_TIMEOUT_SECONDS:
                         self.reset_port_releasing_flag(
                             f"_port_releasing TIMEOUT after {elapsed:.1f}s - auto-resetting to allow connections"
                         )

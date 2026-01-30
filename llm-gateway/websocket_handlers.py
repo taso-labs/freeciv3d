@@ -358,10 +358,12 @@ class AgentWebSocketHandler:
             while self.proxy_connection:
                 try:
                     # Receive message from proxy
-                    # Note: websockets library is safe for concurrent send/recv from different tasks
-                    # See: https://websockets.readthedocs.io/en/stable/reference/asyncio/client.html
+                    # Note: websockets >= 10.0 is safe for concurrent send/recv from different tasks
+                    # (one task can call recv() while another calls send() on the same connection)
+                    # See: https://websockets.readthedocs.io/en/stable/faq/common.html#are-websocket-objects-thread-safe
                     proxy_message = await self.proxy_connection.recv()
-                    logger.info(f"📥 Gateway received from proxy for agent {self.agent_id}: {proxy_message[:200]}")
+                    # Issue #13 (PR Review): Use DEBUG for hot path logging to avoid string formatting overhead
+                    logger.debug(f"📥 Gateway received from proxy for agent {self.agent_id}: {proxy_message[:200]}")
 
                     # Transform proxy messages to agent format
                     try:
@@ -618,17 +620,22 @@ class AgentWebSocketHandler:
         This method synchronizes the gateway's session tracking with the actual
         turn number from the FreeCiv server. Previously, gateway.game_sessions[game_id]["current_turn"]
         was never updated after initialization, causing the Stats API to return stale turn data.
+
+        Thread-safety: Uses gateway._sessions_lock to prevent race conditions when
+        multiple agent handlers update game_sessions concurrently.
         """
         if self.game_id and gateway:
-            if self.game_id in gateway.game_sessions:
-                gateway.game_sessions[self.game_id]["current_turn"] = new_turn
-                logger.info(f"🔄 Turn sync: game {self.game_id} advanced to turn {new_turn}")
+            # Issue #1 (PR Review): Lock protects against concurrent dict modification
+            async with gateway._sessions_lock:
+                if self.game_id in gateway.game_sessions:
+                    gateway.game_sessions[self.game_id]["current_turn"] = new_turn
+                    logger.info(f"🔄 Turn sync: game {self.game_id} advanced to turn {new_turn}")
 
-                # Also call notify_spectators_turn_change if spectators are connected
-                try:
-                    await gateway.notify_spectators_turn_change(self.game_id, new_turn)
-                except Exception as e:
-                    logger.warning(f"Failed to notify spectators of turn change: {e}")
+            # Notify spectators outside the lock to avoid holding it during I/O
+            try:
+                await gateway.notify_spectators_turn_change(self.game_id, new_turn)
+            except Exception as e:
+                logger.warning(f"Failed to notify spectators of turn change: {e}")
 
     async def _forward_to_proxy(self, message: Dict[str, Any], span=None):
         """Forward message from agent to proxy"""
@@ -671,7 +678,7 @@ class AgentWebSocketHandler:
                     if trace_ctx:
                         proxy_message["trace_context"] = trace_ctx
 
-                # Note: websockets library is safe for concurrent send/recv from different tasks
+                # Note: websockets >= 10.0 is safe for concurrent send/recv from different tasks
                 await self.proxy_connection.send(json.dumps(proxy_message))
                 logger.debug(f"Forwarded agent message to proxy: {msg_type}")
             else:

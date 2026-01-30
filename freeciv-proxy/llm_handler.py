@@ -1729,7 +1729,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
             response['correlation_id'] = correlation_id
         self.write_message(json.dumps(response))
 
-    def send_game_ended(self, winners: list, endgame_players: dict):
+    def send_game_ended(self, winners: List[int], endgame_players: Dict[int, Dict[str, Any]]) -> None:
         """Notify agent that game has ended with winner information.
 
         Called by CivCom when PACKET_ENDGAME_PLAYER packets are received.

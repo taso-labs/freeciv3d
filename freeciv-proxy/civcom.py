@@ -1925,42 +1925,51 @@ class CivCom(Thread):
             # Sent once per player after PACKET_ENDGAME_REPORT
             elif packet_type == PACKET_ENDGAME_PLAYER:
                 player_num = packet.get('player_num')
+
+                # Issue #12 (PR Review): Input validation on endgame packets
+                # Verify player_num is a valid non-negative integer to prevent security issues
+                if not isinstance(player_num, int) or player_num < 0:
+                    logger.warning(
+                        f"Invalid player_num in PACKET_ENDGAME_PLAYER: {player_num} "
+                        f"(expected non-negative int, got {type(player_num).__name__})"
+                    )
+                    return  # Skip invalid packet
+
                 winner = packet.get('winner', False)
                 score = packet.get('score', 0)
                 category_scores = packet.get('category_score', [])
 
-                if player_num is not None:
-                    # Store endgame player data
-                    self.endgame_players[player_num] = {
-                        'player_id': player_num,
-                        'score': score,
-                        'winner': winner,
-                        'category_scores': category_scores
-                    }
+                # Store endgame player data
+                self.endgame_players[player_num] = {
+                    'player_id': player_num,
+                    'score': score,
+                    'winner': winner,
+                    'category_scores': category_scores
+                }
 
-                    # Track winners
-                    if winner and player_num not in self.winners:
-                        self.winners.append(player_num)
-                        logger.info(
-                            f"🏆 WINNER: Player {player_num} (score={score}) for {self.username}"
-                        )
-                    else:
-                        logger.info(
-                            f"📊 ENDGAME: Player {player_num} finished with score={score}, winner={winner}"
-                        )
+                # Track winners
+                if winner and player_num not in self.winners:
+                    self.winners.append(player_num)
+                    logger.info(
+                        f"🏆 WINNER: Player {player_num} (score={score}) for {self.username}"
+                    )
+                else:
+                    logger.info(
+                        f"📊 ENDGAME: Player {player_num} finished with score={score}, winner={winner}"
+                    )
 
-                    # Notify the LLM handler that game has ended (if connected)
-                    # This sends game_ended message to the agent
-                    if hasattr(self, 'civwebserver') and self.civwebserver:
-                        handler = self.civwebserver
-                        if hasattr(handler, 'send_game_ended'):
-                            try:
-                                handler.send_game_ended(
-                                    winners=self.winners,
-                                    endgame_players=self.endgame_players
-                                )
-                            except Exception as e:
-                                logger.error(f"Failed to send game_ended notification: {e}")
+                # Notify the LLM handler that game has ended (if connected)
+                # This sends game_ended message to the agent
+                if hasattr(self, 'civwebserver') and self.civwebserver:
+                    handler = self.civwebserver
+                    if hasattr(handler, 'send_game_ended'):
+                        try:
+                            handler.send_game_ended(
+                                winners=self.winners,
+                                endgame_players=self.endgame_players
+                            )
+                        except Exception as e:
+                            logger.error(f"Failed to send game_ended notification: {e}")
 
             # CRITICAL: Connection ping packet - MUST respond with pong to keep connection alive
             # FreeCiv civserver sends PACKET_CONN_PING every ~2 minutes to verify connection health
