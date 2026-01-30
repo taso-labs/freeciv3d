@@ -53,6 +53,8 @@ from packet_constants import (
     PACKET_CLIENT_INFO,
     PACKET_BEGIN_TURN,  # Turn start signal from server
     PACKET_SPACESHIP_INFO,  # Spaceship status for victory tracking
+    PACKET_ENDGAME_REPORT,  # Game over notification
+    PACKET_ENDGAME_PLAYER,  # Per-player endgame stats (score, winner)
     PACKET_NATION_SELECT_REQ,  # Client nation selection packet
     PACKET_PLAYER_READY,  # Player ready signal
     PACKET_PLAYER_RESEARCH,  # Player research selection
@@ -361,6 +363,12 @@ class CivCom(Thread):
         self.research_info = {}  # {player_id: PACKET_RESEARCH_INFO} - tracks tech progress
         self.spaceship_info = {}  # {player_id: spaceship_data} - tracks spaceship progress per player
         self.initial_units_received = False  # Set True when first PACKET_UNIT_INFO for our player arrives
+
+        # Endgame state tracking - populated from PACKET_ENDGAME_REPORT and PACKET_ENDGAME_PLAYER
+        # Used to determine winners and notify agents when game ends
+        self.game_is_over = False  # Set True when PACKET_ENDGAME_REPORT received
+        self.endgame_players = {}  # {player_id: {score, winner, category_scores}} from PACKET_ENDGAME_PLAYER
+        self.winners = []  # List of winning player_ids (those with winner=True)
 
         # RULESET packet storage - mirrors FreeCiv web client architecture
         # These define immutable game rules (unit types, buildings, techs, terrain, etc.)
@@ -1143,10 +1151,18 @@ class CivCom(Thread):
     def close_connection(self):
         import traceback
 
+        # Issue #4 Diagnostic: Log when connections close before handshake completes
+        if not self.handshake_complete.is_set():
+            logger.warning(
+                f"[{self.username}] Connection closing before handshake complete "
+                f"(port={self.civserverport}, age={time.time() - self.connect_time:.1f}s)"
+            )
+
         if (logger.isEnabledFor(logging.INFO)):
             logger.info(
                 f"Server connection closed. Removing civcom thread for {self.username}\n"
                 f"   Connection age: {time.time() - self.connect_time:.1f}s\n"
+                f"   Handshake complete: {self.handshake_complete.is_set()}\n"
                 f"   Call stack:\n{''.join(traceback.format_stack())}"
             )
 
@@ -1892,6 +1908,59 @@ class CivCom(Thread):
                 if class_id is not None:
                     self.unit_classes[class_id] = packet
                     logger.debug(f"Registered unit class: {class_name} (id={class_id})")
+
+            # ENDGAME REPORT packet - signals that the game has ended
+            # This is sent when game ends due to turn limit, conquest, space race, etc.
+            # Sets game_is_over flag and prepares for PACKET_ENDGAME_PLAYER packets
+            elif packet_type == PACKET_ENDGAME_REPORT:
+                self.game_is_over = True
+                logger.info(
+                    f"🏁 GAME OVER for {self.username}:\n"
+                    f"   Received PACKET_ENDGAME_REPORT, game has ended.\n"
+                    f"   Waiting for PACKET_ENDGAME_PLAYER packets with winner info."
+                )
+
+            # ENDGAME PLAYER packet - contains per-player endgame stats
+            # Includes winner boolean, score, and category_scores for each player
+            # Sent once per player after PACKET_ENDGAME_REPORT
+            elif packet_type == PACKET_ENDGAME_PLAYER:
+                player_num = packet.get('player_num')
+                winner = packet.get('winner', False)
+                score = packet.get('score', 0)
+                category_scores = packet.get('category_score', [])
+
+                if player_num is not None:
+                    # Store endgame player data
+                    self.endgame_players[player_num] = {
+                        'player_id': player_num,
+                        'score': score,
+                        'winner': winner,
+                        'category_scores': category_scores
+                    }
+
+                    # Track winners
+                    if winner and player_num not in self.winners:
+                        self.winners.append(player_num)
+                        logger.info(
+                            f"🏆 WINNER: Player {player_num} (score={score}) for {self.username}"
+                        )
+                    else:
+                        logger.info(
+                            f"📊 ENDGAME: Player {player_num} finished with score={score}, winner={winner}"
+                        )
+
+                    # Notify the LLM handler that game has ended (if connected)
+                    # This sends game_ended message to the agent
+                    if hasattr(self, 'civwebserver') and self.civwebserver:
+                        handler = self.civwebserver
+                        if hasattr(handler, 'send_game_ended'):
+                            try:
+                                handler.send_game_ended(
+                                    winners=self.winners,
+                                    endgame_players=self.endgame_players
+                                )
+                            except Exception as e:
+                                logger.error(f"Failed to send game_ended notification: {e}")
 
             # CRITICAL: Connection ping packet - MUST respond with pong to keep connection alive
             # FreeCiv civserver sends PACKET_CONN_PING every ~2 minutes to verify connection health

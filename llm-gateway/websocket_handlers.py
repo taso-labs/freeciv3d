@@ -44,6 +44,11 @@ gateway = None
 
 logger = logging.getLogger("llm-gateway")
 
+# FreeCiv packet IDs for turn change detection (Issue #2: Turn Desync Fix)
+# Source of truth: freeciv/freeciv/common/networking/packets.def
+PACKET_BEGIN_TURN = 15   # Signals start of a new turn
+PACKET_GAME_INFO = 16    # Contains game state including turn number
+
 
 class AgentWebSocketHandler:
     """Handler for agent WebSocket connections - pure pass-through to proxy"""
@@ -56,6 +61,7 @@ class AgentWebSocketHandler:
         self.player_id: Optional[int] = None
         self.game_id: Optional[str] = None
         self.proxy_connection: Optional[WebSocket] = None  # Connection to freeciv-proxy LLM handler
+        self._last_known_turn = 0  # Track turn number for desync detection
 
     async def handle_connection(self):
         """Handle the WebSocket connection lifecycle"""
@@ -352,6 +358,8 @@ class AgentWebSocketHandler:
             while self.proxy_connection:
                 try:
                     # Receive message from proxy
+                    # Note: websockets library is safe for concurrent send/recv from different tasks
+                    # See: https://websockets.readthedocs.io/en/stable/reference/asyncio/client.html
                     proxy_message = await self.proxy_connection.recv()
                     logger.info(f"📥 Gateway received from proxy for agent {self.agent_id}: {proxy_message[:200]}")
 
@@ -367,6 +375,23 @@ class AgentWebSocketHandler:
                             # 1. CivCom handles the pong response to civserver
                             # 2. WebSocket-level ping/pong handles connection health
                             # 3. Forwarding caused E101 errors when agents responded with {"pid": 89}
+
+                            # Issue #2 (Turn Desync): Detect turn changes in packet arrays
+                            for packet in msg_data:
+                                if isinstance(packet, dict):
+                                    pid = packet.get('pid')
+                                    # PACKET_BEGIN_TURN signals new turn
+                                    if pid == PACKET_BEGIN_TURN:
+                                        new_turn = packet.get('turn')
+                                        if new_turn and new_turn > self._last_known_turn:
+                                            self._last_known_turn = new_turn
+                                            await self._notify_turn_change(new_turn)
+                                    # PACKET_GAME_INFO contains turn in game state
+                                    elif pid == PACKET_GAME_INFO:
+                                        new_turn = packet.get('turn')
+                                        if new_turn and new_turn > self._last_known_turn:
+                                            self._last_known_turn = new_turn
+                                            await self._notify_turn_change(new_turn)
 
                             # Raw FreeCiv packet array - forward as-is
                             logger.debug(f"📦 Forwarding packet array ({len(msg_data)} packets) to agent {self.agent_id}")
@@ -502,6 +527,38 @@ class AgentWebSocketHandler:
                         elif msg_type == "game_ready":
                             logger.info(f"🎮 GAME_READY: Received game_ready signal for agent {self.agent_id} - forwarding to agent")
                             # Forward as-is
+                        # Handle game_ended - game over notification with winner info
+                        elif msg_type == "game_ended":
+                            logger.info(
+                                f"🏁 GAME_ENDED: Received game_ended signal for agent {self.agent_id}\n"
+                                f"   Winners: {msg_data.get('data', {}).get('winners', [])}\n"
+                                f"   Is Winner: {msg_data.get('data', {}).get('is_winner', False)}"
+                            )
+
+                            # Update gateway session to mark game as ended
+                            if self.game_id and gateway:
+                                if self.game_id in gateway.game_sessions:
+                                    gateway.game_sessions[self.game_id]["status"] = "ended"
+                                    gateway.game_sessions[self.game_id]["winners"] = msg_data.get('data', {}).get('winners', [])
+                                    gateway.game_sessions[self.game_id]["end_reason"] = msg_data.get('data', {}).get('reason', 'game_over')
+
+                                # Notify spectators that game has ended
+                                try:
+                                    await gateway.notify_spectators_game_end(
+                                        self.game_id,
+                                        msg_data.get('data', {})
+                                    )
+                                except Exception as e:
+                                    logger.warning(f"Failed to notify spectators of game end: {e}")
+
+                            # Forward game_ended message to agent with consistent format
+                            agent_message = {
+                                "type": "game_ended",
+                                "agent_id": self.agent_id,
+                                "timestamp": time.time(),
+                                "data": msg_data.get("data", {})
+                            }
+                            proxy_message = json.dumps(agent_message)
                         # Transform state_response to state_update
                         elif msg_type == "state_response":
                             # Proxy sends: {type: "state_response", data: {...state...}, format: "llm_optimized", ...}
@@ -555,6 +612,24 @@ class AgentWebSocketHandler:
                 await self.proxy_connection.close()
                 self.proxy_connection = None
 
+    async def _notify_turn_change(self, new_turn: int):
+        """Update gateway session with new turn number (Issue #2: Turn Desync Fix).
+
+        This method synchronizes the gateway's session tracking with the actual
+        turn number from the FreeCiv server. Previously, gateway.game_sessions[game_id]["current_turn"]
+        was never updated after initialization, causing the Stats API to return stale turn data.
+        """
+        if self.game_id and gateway:
+            if self.game_id in gateway.game_sessions:
+                gateway.game_sessions[self.game_id]["current_turn"] = new_turn
+                logger.info(f"🔄 Turn sync: game {self.game_id} advanced to turn {new_turn}")
+
+                # Also call notify_spectators_turn_change if spectators are connected
+                try:
+                    await gateway.notify_spectators_turn_change(self.game_id, new_turn)
+                except Exception as e:
+                    logger.warning(f"Failed to notify spectators of turn change: {e}")
+
     async def _forward_to_proxy(self, message: Dict[str, Any], span=None):
         """Forward message from agent to proxy"""
         try:
@@ -596,6 +671,7 @@ class AgentWebSocketHandler:
                     if trace_ctx:
                         proxy_message["trace_context"] = trace_ctx
 
+                # Note: websockets library is safe for concurrent send/recv from different tasks
                 await self.proxy_connection.send(json.dumps(proxy_message))
                 logger.debug(f"Forwarded agent message to proxy: {msg_type}")
             else:

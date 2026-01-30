@@ -114,6 +114,7 @@ class GameConfig(BaseModel):
     max_players: int = Field(default=4, ge=2, le=8, description="Maximum players")
     ai_level: str = Field(default="easy", description="AI difficulty level")
     turn_timeout: Optional[int] = Field(default=300, ge=30, le=3600, description="Turn timeout in seconds")
+    max_turns: int = Field(default=200, ge=10, le=5000, description="Maximum turns before game ends (winner determined by score)")
 
     class Config:
         schema_extra = {
@@ -128,7 +129,8 @@ class GameConfig(BaseModel):
                 "wetness": 30,
                 "max_players": 4,
                 "ai_level": "easy",
-                "turn_timeout": 300
+                "turn_timeout": 300,
+                "max_turns": 200
             }
         }
 
@@ -450,6 +452,7 @@ async def _capture_final_state(
 
     Extracts player statistics from the cached last_state in the session.
     Falls back to basic player info if no state is cached.
+    Also extracts winner information from session if game ended naturally.
     """
     # Calculate duration
     created_at = session.get("created_at", time.time())
@@ -457,6 +460,11 @@ async def _capture_final_state(
 
     # Get final turn from session
     final_turn = session.get("current_turn", 1)
+
+    # Get winner information from session (set by game_ended handler in websocket_handlers.py)
+    # This is populated when the game ends naturally (turn limit, conquest, space race, etc.)
+    session_winners = session.get("winners", [])
+    session_end_reason = session.get("end_reason", request_body.reason)
 
     # Get connected players from connection manager
     connected_players = await connection_manager.get_players_for_game(game_id)
@@ -491,32 +499,52 @@ async def _capture_final_state(
             # Simple score calculation (matches StateExtractor._calculate_player_score)
             score = len(player_cities) * 10 + len(player_units) * 2
 
+            # Check if this player is a winner
+            is_winner = player_id in session_winners
+
             players_data.append({
                 "player_id": player_id,
                 "agent_id": agent_id,
                 "score": score,
                 "gold": gold,
                 "cities": len(player_cities),
-                "units": len(player_units)
+                "units": len(player_units),
+                "winner": is_winner
             })
     else:
         # Fallback: include connected players without stats
         for player in connected_players:
+            player_id = player["player_id"]
+            is_winner = player_id in session_winners
             players_data.append({
-                "player_id": player["player_id"],
+                "player_id": player_id,
                 "agent_id": player["agent_id"],
                 "score": 0,
                 "gold": 0,
                 "cities": 0,
-                "units": 0
+                "units": 0,
+                "winner": is_winner
             })
+
+    # If no explicit winners from game_ended, determine winner by score
+    # (This handles admin_stop case where game didn't end naturally)
+    winners = session_winners
+    if not winners and players_data:
+        # Determine winner by highest score
+        max_score = max(p["score"] for p in players_data)
+        if max_score > 0:
+            winners = [p["player_id"] for p in players_data if p["score"] == max_score]
+            # Update winner flags
+            for p in players_data:
+                p["winner"] = p["player_id"] in winners
 
     return {
         "success": True,
         "final_turn": final_turn,
         "duration_seconds": round(duration_seconds, 2),
+        "winners": winners,
         "players": players_data,
-        "end_reason": request_body.reason,
+        "end_reason": session_end_reason,
         "end_message": request_body.message
     }
 
