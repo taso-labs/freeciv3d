@@ -1272,6 +1272,33 @@ class LLMWSHandler(websocket.WebSocketHandler):
             if isinstance(target, dict) and "name" in target:
                 normalized["name"] = target["name"]
 
+        elif action_type in ("unit_attack", "unit_suicide_attack", "unit_bombard",
+                             "unit_capture", "unit_wipe", "unit_conquer_city",
+                             "unit_nuke", "unit_nuke_city", "unit_nuke_units"):
+            # Extract target coordinates and IDs for combat actions
+            # Agent-clash sends target as: {"x": 33, "y": 35} or {"target_unit_id": 99}
+            target = action_data.get("target", {})
+            if isinstance(target, dict):
+                # Extract coordinates
+                if "x" in target and "y" in target:
+                    normalized["target_x"] = target["x"]
+                    normalized["target_y"] = target["y"]
+                # Extract specific target IDs
+                if "target_unit_id" in target:
+                    normalized["target_unit_id"] = target["target_unit_id"]
+                if "target_city_id" in target:
+                    normalized["target_city_id"] = target["target_city_id"]
+
+            # Also support direct fields in action_data
+            if "target_x" in action_data:
+                normalized["target_x"] = action_data["target_x"]
+            if "target_y" in action_data:
+                normalized["target_y"] = action_data["target_y"]
+            if "target_unit_id" in action_data:
+                normalized["target_unit_id"] = action_data["target_unit_id"]
+            if "target_city_id" in action_data:
+                normalized["target_city_id"] = action_data["target_city_id"]
+
         elif action_type == "end_turn":
             # end_turn is simple - just needs player_id (already mapped above)
             # No additional fields required
