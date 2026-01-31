@@ -53,19 +53,17 @@ function init_map_tiletype_image()
 ****************************************************************************/
 function update_tiletypes_tile(ptile)
 {
+  if (ptile == null) return;  // Safety check
+
+  let terrain = tile_terrain(ptile);
+  if (terrain == null) return;  // Skip tiles without terrain data yet
+
   let x = ptile.x;
   let y = ptile.y;
   let index = (y * map.xsize + x) * 4;
-  if (ptile != null && tile_terrain(ptile) != null && !tile_has_extra(ptile, EXTRA_RIVER)) {
-    maptiles_data[index] = tile_terrain(ptile)['id'] * 10;
-    maptiles_data[index + 1] = 0;
-  } else if (ptile != null && tile_terrain(ptile) != null && tile_has_extra(ptile, EXTRA_RIVER)) {
-    maptiles_data[index] = tile_terrain(ptile)['id'] * 10;
-    maptiles_data[index + 1] = 10;
-  } else {
-    maptiles_data[index] = tile_terrain(ptile)['id'] * 10;
-    maptiles_data[index + 1] = 10;
-  }
+
+  maptiles_data[index] = terrain['id'] * 10;
+  maptiles_data[index + 1] = tile_has_extra(ptile, EXTRA_RIVER) ? 10 : 0;
   if (tile_has_extra(ptile, EXTRA_FARMLAND)) {
     maptiles_data[index + 2] = 2;
   } else if (tile_has_extra(ptile, EXTRA_IRRIGATION)) {

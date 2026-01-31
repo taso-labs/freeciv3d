@@ -548,6 +548,29 @@ function handle_map_info(packet)
   init_roads_image();
   init_map_tiletype_image();
 
+  // Set tiles_initialized AFTER image initialization to ensure all tile packets
+  // arriving before this point are buffered and not lost to maptiles_data reset
+  tiles_initialized = true;
+
+  // Debug: Log state before replay
+  var buffered_count = (typeof pending_tile_packets !== 'undefined') ? pending_tile_packets.length : 0;
+  freelog(LOG_DEBUG, '[Observer] handle_map_info: buffered_packets=' + buffered_count +
+          ', maptiles_data_size=' + (typeof maptiles_data !== 'undefined' ? maptiles_data.length : 'undefined'));
+
+  // Replay buffered tile packets AFTER image initialization
+  // This fixes the order-of-operations bug where init_map_tiletype_image() would
+  // reset maptiles_data to zeros after replay_pending_tile_packets() populated it
+  replay_pending_tile_packets();
+
+  // Debug: Log state after replay
+  if (typeof maptiles_data !== 'undefined' && maptiles_data.length > 0) {
+    var non_zero_count = 0;
+    for (var i = 0; i < Math.min(maptiles_data.length, 1000); i++) {
+      if (maptiles_data[i] !== 0) non_zero_count++;
+    }
+    freelog(LOG_DEBUG, '[Observer] handle_map_info: after replay, non_zero_tiles (sample)=' + non_zero_count);
+  }
+
   // For observers joining a game in progress, manually trigger C_S_RUNNING
   // (fallback check in case handle_map_info is called after handle_game_info)
   if (observing && game_info != null && game_info['turn'] >= 1

@@ -117,10 +117,8 @@ function map_allocate()
 
   map['startpos_table'] = {};
 
-  // Mark tiles as initialized and replay any buffered packets
-  // This handles the race condition where PACKET_TILE_INFO arrives before PACKET_MAP_INFO
-  tiles_initialized = true;
-  replay_pending_tile_packets();
+  // NOTE: tiles_initialized is set by handle_map_info() AFTER image initialization
+  // to prevent tile packets from being processed before maptiles_data is ready
 }
 
 /**************************************************************************
