@@ -548,6 +548,10 @@ function handle_map_info(packet)
   init_roads_image();
   init_map_tiletype_image();
 
+  // Set tiles_initialized AFTER image initialization to ensure all tile packets
+  // arriving before this point are buffered and not lost to maptiles_data reset
+  tiles_initialized = true;
+
   // Replay buffered tile packets AFTER image initialization
   // This fixes the order-of-operations bug where init_map_tiletype_image() would
   // reset maptiles_data to zeros after replay_pending_tile_packets() populated it
