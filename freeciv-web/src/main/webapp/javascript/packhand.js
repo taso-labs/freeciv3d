@@ -548,6 +548,11 @@ function handle_map_info(packet)
   init_roads_image();
   init_map_tiletype_image();
 
+  // Replay buffered tile packets AFTER image initialization
+  // This fixes the order-of-operations bug where init_map_tiletype_image() would
+  // reset maptiles_data to zeros after replay_pending_tile_packets() populated it
+  replay_pending_tile_packets();
+
   // For observers joining a game in progress, manually trigger C_S_RUNNING
   // (fallback check in case handle_map_info is called after handle_game_info)
   if (observing && game_info != null && game_info['turn'] >= 1
