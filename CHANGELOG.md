@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.35](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.34...freeciv3d-v0.3.35) (2026-01-31)
+
+
+### Bug Fixes
+
+* resolve observer black tiles regression from e8e653c ([#109](https://github.com/taso-ventures/freeciv3d/issues/109)) ([499527f](https://github.com/taso-ventures/freeciv3d/commit/499527ff131e26f33280cd4c3c76633b4788a8a9))
+
 ## [0.3.34](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.33...freeciv3d-v0.3.34) (2026-01-30)
 
 
