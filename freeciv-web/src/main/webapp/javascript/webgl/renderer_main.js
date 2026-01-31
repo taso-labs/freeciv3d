@@ -88,6 +88,13 @@ function renderer_init() {
     setTimeout(function() {
       freelog(LOG_DEBUG, '[Renderer] Executing mapcanvas fadeIn');
       $('#mapcanvas').fadeIn(2500);
+      // Notify parent iframe that renderer is ready and map is becoming visible
+      if (typeof notify_parent_iframe === 'function') {
+        notify_parent_iframe('renderer_ready', {
+          renderer_type: 'webgl',
+          map_visible: true
+        });
+      }
     }, 300);
     freelog(LOG_DEBUG, '[Renderer] renderer_init() completed successfully');
   }

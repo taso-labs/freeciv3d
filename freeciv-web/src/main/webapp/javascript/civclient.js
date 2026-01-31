@@ -72,7 +72,7 @@ var observer_player_search_interval = null; // Interval timer ID for player sear
 var OBSERVER_AUTO_CENTER_MS = 5000;       // Default re-center interval (5 seconds)
 var MIN_AUTOCENTER_MS = 1000;             // Minimum autocenter interval (1 second)
 var MAX_AUTOCENTER_MS = 60000;            // Maximum autocenter interval (60 seconds)
-var MAX_INITIAL_CENTER_ATTEMPTS = 10;     // Max polling attempts for initial center
+var MAX_INITIAL_CENTER_ATTEMPTS = 20;     // Max polling attempts for initial center (20 * 500ms = 10 seconds)
 var INITIAL_CENTER_POLL_INTERVAL_MS = 500; // Polling interval for initial center (500ms)
 var embed_mode = false;                   // Embed mode for iframe viewing
 var keyboard_input_enabled = true;        // Keyboard input enabled flag
@@ -85,6 +85,100 @@ var observe_player = null;                // Player name to attach to, or null f
 
 // Autojoin state
 var autojoin_active = false;              // Whether autojoin mode is active
+
+// Parent iframe notification state
+var parent_notification_enabled = false;  // Whether to send postMessage to parent
+// WARNING: Using '*' allows any parent window to receive messages.
+// This is intentional for broad compatibility with different embedding contexts.
+// The data sent (game_id, player names, coordinates) is not sensitive.
+// For production with sensitive data, consider restricting to known origins.
+var parent_notification_origin = '*';
+
+/****************************************************************************
+  PARENT IFRAME NOTIFICATION SYSTEM
+
+  When FreeCiv runs inside an iframe (e.g., agent-clash-client), the parent
+  window needs to know when the game is ready to display. This system sends
+  postMessage events at key milestones so the parent can:
+  - Hide loading overlays at the right time
+  - Detect and handle errors
+  - Track iframe readiness state
+
+  Events sent:
+  - preload_complete: Textures and 3D models loaded
+  - websocket_connected: Connected to game server
+  - game_running: Game state is C_S_RUNNING
+  - renderer_ready: Three.js renderer started, map visible
+  - observer_centered: Camera positioned on followed player
+  - error: Any error that prevents proper display
+****************************************************************************/
+
+/****************************************************************************
+  Initialize parent notification system.
+  Detects if running in an iframe and enables notifications.
+****************************************************************************/
+function init_parent_notification()
+{
+  // Check if we're running inside an iframe
+  try {
+    parent_notification_enabled = (window.parent && window.parent !== window);
+  } catch (e) {
+    // Cross-origin iframe - can't access parent, but can still postMessage
+    parent_notification_enabled = true;
+  }
+
+  if (parent_notification_enabled) {
+    freelog(LOG_DEBUG, '[IframeNotify] Parent notification enabled');
+  }
+}
+
+/****************************************************************************
+  Send a notification to the parent iframe window.
+
+  @param event_type: String identifying the event (e.g., 'renderer_ready')
+  @param data: Optional object with additional event data
+****************************************************************************/
+function notify_parent_iframe(event_type, data)
+{
+  if (!parent_notification_enabled) return;
+
+  try {
+    var message = {
+      source: 'freeciv3d',                          // Identifies this as a FreeCiv message
+      type: event_type,                             // Event type for routing
+      timestamp: Date.now(),                        // When the event occurred
+      game_id: $.getUrlVar('game_id') || null,      // Game identifier
+      follow: $.getUrlVar('follow') || null,        // Player being followed (for observer)
+      observe_player: $.getUrlVar('observe_player') || null,  // Player attached to
+      client_state: client_state(),                 // Current client state
+      data: data || {}                              // Additional event-specific data
+    };
+
+    window.parent.postMessage(message, parent_notification_origin);
+    freelog(LOG_DEBUG, '[IframeNotify] Sent: ' + event_type);
+  } catch (e) {
+    freelog(LOG_DEBUG, '[IframeNotify] Failed to send ' + event_type + ': ' + e);
+  }
+}
+
+/****************************************************************************
+  Notify parent that an error occurred.
+
+  @param error_code: Short error identifier
+  @param error_message: Human-readable error description
+  @param details: Optional object with additional error context
+****************************************************************************/
+function notify_parent_error(error_code, error_message, details)
+{
+  notify_parent_iframe('error', {
+    error_code: error_code,
+    error_message: error_message,
+    details: details || {}
+  });
+}
+
+// Track if we've sent the initial observer_centered notification
+var observer_centered_notified = false;
 
 /****************************************************************************
   Initialize observer follow mode from URL parameter.
@@ -234,8 +328,38 @@ function has_units_for_player(player_id)
 }
 
 /****************************************************************************
+  Find the first explored tile that the observer can see.
+  Returns: ptile object or null if no explored tiles exist.
+  Used as fallback when followed player has no cities/units loaded yet.
+****************************************************************************/
+function find_first_explored_tile()
+{
+  var first_unseen_tile = null;  // TILE_KNOWN_UNSEEN fallback
+
+  for (var tile_id in tiles) {
+    var ptile = tiles[tile_id];
+    if (ptile == null) continue;
+
+    var known_status = tile_get_known(ptile);
+
+    // Prefer currently visible tiles
+    if (known_status === TILE_KNOWN_SEEN) {
+      return ptile;
+    }
+
+    // Track unseen but explored tiles as fallback
+    if (known_status === TILE_KNOWN_UNSEEN && first_unseen_tile === null) {
+      first_unseen_tile = ptile;
+    }
+  }
+
+  return first_unseen_tile;
+}
+
+/****************************************************************************
   Center view on followed player's main population center.
   Priority: 1) Capital city, 2) Largest city by size, 3) Units (turn 1 fallback)
+           4) Any explored tile (prevents black screen)
 ****************************************************************************/
 function observer_center_on_followed_player()
 {
@@ -273,6 +397,15 @@ function observer_center_on_followed_player()
       center_tile_mapcanvas(ptile);
       freelog(LOG_DEBUG, '[Observer] Centered on ' + (target_city['name'] || 'Unknown') +
               ' size: ' + (target_city['size'] || 0));
+      // Notify parent on first successful center
+      if (!observer_centered_notified) {
+        observer_centered_notified = true;
+        notify_parent_iframe('observer_centered', {
+          center_type: 'city',
+          city_name: target_city['name'],
+          location: { x: ptile['x'], y: ptile['y'] }
+        });
+      }
     }
     // Reset unit spread tracker when centering on city (fresh calc next time we fall back to units)
     observer_last_unit_spread = null;
@@ -281,11 +414,36 @@ function observer_center_on_followed_player()
 
   // Priority 3: Fall back to units when no cities exist (e.g., turn 1)
   if (center_on_player_units_with_zoom(observer_follow_player)) {
+    // Notify parent on first successful center
+    if (!observer_centered_notified) {
+      observer_centered_notified = true;
+      notify_parent_iframe('observer_centered', {
+        center_type: 'units',
+        player_id: observer_follow_player
+      });
+    }
     return;
   }
 
-  // No cities or units found
-  freelog(LOG_DEBUG, '[Observer] No cities or units found for player ' + observer_follow_player);
+  // Priority 4: Fall back to any explored tile (prevents black screen)
+  var explored_tile = find_first_explored_tile();
+  if (explored_tile) {
+    center_tile_mapcanvas(explored_tile);
+    freelog(LOG_DEBUG, '[Observer] Centered on explored tile at (' +
+            explored_tile['x'] + ',' + explored_tile['y'] + ') - no cities/units for player ' + observer_follow_player);
+    // Notify parent on first successful center (even if fallback)
+    if (!observer_centered_notified) {
+      observer_centered_notified = true;
+      notify_parent_iframe('observer_centered', {
+        center_type: 'explored_tile',
+        location: { x: explored_tile['x'], y: explored_tile['y'] }
+      });
+    }
+    return;
+  }
+
+  // No cities, units, or explored tiles found
+  freelog(LOG_DEBUG, '[Observer] No cities, units, or explored tiles found for player ' + observer_follow_player);
 }
 
 // Track last spread to avoid jarring zoom changes
@@ -697,6 +855,9 @@ function reset_observer_state_for_retry()
   if (typeof pending_tile_packets !== 'undefined') {
     pending_tile_packets = [];
   }
+
+  // Reset parent notification state so retry can send notifications again
+  observer_centered_notified = false;
 }
 
 /****************************************************************************
@@ -871,7 +1032,11 @@ $(document).ready(function() {
 **************************************************************************/
 function civclient_init()
 {
+  // Initialize parent iframe notification system first (for error reporting)
+  init_parent_notification();
+
   if (!Detector.webgl) {
+    notify_parent_error('WEBGL_NOT_SUPPORTED', 'WebGL not supported by browser');
     swal("3D WebGL not supported by your browser or you don't have a 3D graphics card.  ");
     return;
   }

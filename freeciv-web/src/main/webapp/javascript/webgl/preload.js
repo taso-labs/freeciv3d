@@ -637,7 +637,16 @@ switch (filename) {
     webgl_models[filename] = model;
 
     load_count++;
-    if (load_count == total_model_count) webgl_preload_complete();
+    if (load_count == total_model_count) {
+      // Notify parent iframe that preload is complete
+      if (typeof notify_parent_iframe === 'function') {
+        notify_parent_iframe('preload_complete', {
+          models_loaded: total_model_count,
+          textures_loaded: Object.keys(webgl_textures).length
+        });
+      }
+      webgl_preload_complete();
+    }
 
     /* Update view of tiles where model now has been downloaded. */
     for (var ptile_index in tiles_of_unloaded_models_map) {

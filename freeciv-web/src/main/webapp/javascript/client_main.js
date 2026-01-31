@@ -65,6 +65,13 @@ function set_client_state(newstate)
       renderer_init();
       freelog(LOG_DEBUG, '[ClientState] renderer_init() returned');
 
+      // Notify parent iframe that game is now running
+      if (typeof notify_parent_iframe === 'function') {
+        notify_parent_iframe('game_running', {
+          observing: typeof observing !== 'undefined' && observing
+        });
+      }
+
       // Initialize camera preset from URL parameter (e.g., ?camera=strategic)
       if (typeof init_camera_from_url_params === 'function') {
         init_camera_from_url_params();
