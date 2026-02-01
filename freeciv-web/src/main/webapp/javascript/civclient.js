@@ -254,6 +254,28 @@ function init_observer_follow_mode()
         clearInterval(observer_player_search_interval);
         observer_player_search_interval = null;
         console.warn('[Observer] Player not found after', MAX_INITIAL_CENTER_ATTEMPTS, 'polling attempts:', follow_param);
+
+        // Fallback: Center on any explored tile to prevent black screen
+        var explored_tile = find_first_explored_tile();
+        if (explored_tile) {
+          center_tile_mapcanvas(explored_tile);
+          freelog(LOG_DEBUG, '[Observer] Fallback: Centered on explored tile at (' +
+                  explored_tile['x'] + ',' + explored_tile['y'] + ') - player not found');
+          if (!observer_centered_notified) {
+            observer_centered_notified = true;
+            notify_parent_iframe('observer_centered', {
+              center_type: 'fallback_explored',
+              reason: 'player_not_found',
+              location: { x: explored_tile['x'], y: explored_tile['y'] }
+            });
+          }
+        } else {
+          // No explored tiles - notify parent anyway to hide loading overlay
+          notify_parent_iframe('observer_centered', {
+            center_type: 'none',
+            reason: 'no_tiles_explored'
+          });
+        }
       }
     }, INITIAL_CENTER_POLL_INTERVAL_MS);
   }
@@ -266,6 +288,10 @@ function init_observer_follow_mode()
 function start_observer_follow_intervals()
 {
   if (observer_follow_player === null) return;
+
+  // Try to center immediately to send notification to parent ASAP
+  // This prevents parent timeout while waiting for interval to fire
+  observer_center_on_followed_player();
 
   // Start auto-centering interval
   observer_auto_center_interval = setInterval(
@@ -288,7 +314,31 @@ function start_observer_follow_intervals()
     } else if (initial_center_attempts >= MAX_INITIAL_CENTER_ATTEMPTS) {
       clearInterval(observer_initial_center_interval);
       observer_initial_center_interval = null;
-      console.warn('[Observer] Cities/units for player', observer_follow_player, 'not loaded after', MAX_INITIAL_CENTER_ATTEMPTS, 'attempts, giving up initial center');
+      console.warn('[Observer] Cities/units for player', observer_follow_player, 'not loaded after', MAX_INITIAL_CENTER_ATTEMPTS, 'attempts, trying fallback');
+
+      // Fallback: Center on any explored tile to prevent black screen
+      var explored_tile = find_first_explored_tile();
+      if (explored_tile) {
+        center_tile_mapcanvas(explored_tile);
+        freelog(LOG_DEBUG, '[Observer] Fallback: Centered on explored tile at (' +
+                explored_tile['x'] + ',' + explored_tile['y'] + ') - player data not loaded');
+        if (!observer_centered_notified) {
+          observer_centered_notified = true;
+          notify_parent_iframe('observer_centered', {
+            center_type: 'fallback_explored',
+            reason: 'player_data_timeout',
+            player_id: observer_follow_player,
+            location: { x: explored_tile['x'], y: explored_tile['y'] }
+          });
+        }
+      } else {
+        // No explored tiles - notify parent anyway to hide loading overlay
+        notify_parent_iframe('observer_centered', {
+          center_type: 'none',
+          reason: 'no_tiles_explored',
+          player_id: observer_follow_player
+        });
+      }
     }
   }, INITIAL_CENTER_POLL_INTERVAL_MS);
 }
@@ -442,8 +492,16 @@ function observer_center_on_followed_player()
     return;
   }
 
-  // No cities, units, or explored tiles found
+  // No cities, units, or explored tiles found - still notify parent to prevent timeout
   freelog(LOG_DEBUG, '[Observer] No cities, units, or explored tiles found for player ' + observer_follow_player);
+  if (!observer_centered_notified) {
+    observer_centered_notified = true;
+    notify_parent_iframe('observer_centered', {
+      center_type: 'none',
+      reason: 'no_visible_tiles',
+      player_id: observer_follow_player
+    });
+  }
 }
 
 // Track last spread to avoid jarring zoom changes
@@ -814,6 +872,14 @@ function handle_observer_timeout_with_retry(context)
       player_count: (typeof players !== 'undefined') ? Object.keys(players).length : 0,
       context: context || 'global'
     });
+
+    // Notify parent of failure so it can hide loading overlay and show error
+    notify_parent_iframe('observer_centered', {
+      center_type: 'error',
+      reason: 'connection_timeout',
+      context: context || 'global'
+    });
+
     alert('Observer mode failed to initialize. The map is not loading.\n\nThis could be due to network issues or the game not being ready.\n\nPlease try reloading the page.');
   }
 }
