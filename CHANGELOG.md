@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.41](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.40...freeciv3d-v0.3.41) (2026-02-01)
+
+
+### Features
+
+* add auto-zoom global view for observers ([#121](https://github.com/taso-ventures/freeciv3d/issues/121)) ([ab5cb3a](https://github.com/taso-ventures/freeciv3d/commit/ab5cb3adca6b417bfb3283b2b236e3df2f900452))
+
 ## [0.3.40](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.39...freeciv3d-v0.3.40) (2026-02-01)
 
 
