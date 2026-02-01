@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.36](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.35...freeciv3d-v0.3.36) (2026-02-01)
+
+
+### Bug Fixes
+
+* observer black screen, turn limit enforcement, and iframe notifications ([#111](https://github.com/taso-ventures/freeciv3d/issues/111)) ([f44e77e](https://github.com/taso-ventures/freeciv3d/commit/f44e77e173d1158c9b8c8508f3b60180147c2f0d))
+
 ## [0.3.35](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.34...freeciv3d-v0.3.35) (2026-01-31)
 
 
