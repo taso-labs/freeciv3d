@@ -177,8 +177,69 @@ function notify_parent_error(error_code, error_message, details)
   });
 }
 
-// Track if we've sent the initial observer_centered notification
+// Track if we've sent the initial observer_centered notification (for successful centering)
 var observer_centered_notified = false;
+// Track if we've sent ANY notification to parent (including "nothing found")
+// This prevents duplicate notifications while still allowing retry centering
+var observer_parent_notified = false;
+
+/****************************************************************************
+  Helper function for fallback centering and parent notification.
+  Attempts to center on any explored tile, or notifies parent of failure.
+  Used by multiple timeout/failure code paths to prevent code duplication.
+
+  IMPORTANT: This function ALWAYS tries to center (even if notification already sent).
+  This fixes a race condition where early "nothing found" notification would prevent
+  later fallback centering when tiles become available.
+
+  @param reason - String describing why fallback was needed (for logging/debugging)
+  @param extra_data - Optional object with additional data to include in notification
+****************************************************************************/
+function notify_observer_centered_fallback(reason, extra_data)
+{
+  var explored_tile = find_first_explored_tile();
+  if (explored_tile) {
+    // Always center on the tile (camera positioning)
+    center_tile_mapcanvas(explored_tile);
+    freelog(LOG_DEBUG, '[Observer] Fallback: Centered on explored tile at (' +
+            explored_tile['x'] + ',' + explored_tile['y'] + ') - ' + reason);
+
+    // Only notify parent once (to hide loading overlay)
+    if (!observer_centered_notified) {
+      observer_centered_notified = true;
+      observer_parent_notified = true;
+      var notification_data = {
+        center_type: 'fallback_explored',
+        reason: reason,
+        location: { x: explored_tile['x'], y: explored_tile['y'] }
+      };
+      if (extra_data) {
+        for (var key in extra_data) {
+          notification_data[key] = extra_data[key];
+        }
+      }
+      notify_parent_iframe('observer_centered', notification_data);
+    }
+  } else {
+    // No explored tiles available - notify parent once but allow retry centering
+    // Use separate flag so we don't spam parent but can still center when tiles load
+    if (!observer_parent_notified) {
+      observer_parent_notified = true;
+      console.warn('[Observer] No explored tiles available for fallback centering - ' + reason);
+      var notification_data = {
+        center_type: 'none',
+        reason: reason
+      };
+      if (extra_data) {
+        for (var key in extra_data) {
+          notification_data[key] = extra_data[key];
+        }
+      }
+      notify_parent_iframe('observer_centered', notification_data);
+      // NOTE: observer_centered_notified stays false so we keep trying to center
+    }
+  }
+}
 
 /****************************************************************************
   Initialize observer follow mode from URL parameter.
@@ -254,6 +315,7 @@ function init_observer_follow_mode()
         clearInterval(observer_player_search_interval);
         observer_player_search_interval = null;
         console.warn('[Observer] Player not found after', MAX_INITIAL_CENTER_ATTEMPTS, 'polling attempts:', follow_param);
+        notify_observer_centered_fallback('player_not_found');
       }
     }, INITIAL_CENTER_POLL_INTERVAL_MS);
   }
@@ -266,6 +328,13 @@ function init_observer_follow_mode()
 function start_observer_follow_intervals()
 {
   if (observer_follow_player === null) return;
+
+  // Try to center immediately to send notification to parent ASAP.
+  // This call will likely fail to find cities/units (data not loaded yet), but that's OK:
+  // - If no data: sends 'center_type: none' notification so parent knows iframe is alive
+  // - If data exists: centers immediately without waiting for interval
+  // Either way, the parent receives observer_centered before its fallback timeout fires.
+  observer_center_on_followed_player();
 
   // Start auto-centering interval
   observer_auto_center_interval = setInterval(
@@ -288,7 +357,8 @@ function start_observer_follow_intervals()
     } else if (initial_center_attempts >= MAX_INITIAL_CENTER_ATTEMPTS) {
       clearInterval(observer_initial_center_interval);
       observer_initial_center_interval = null;
-      console.warn('[Observer] Cities/units for player', observer_follow_player, 'not loaded after', MAX_INITIAL_CENTER_ATTEMPTS, 'attempts, giving up initial center');
+      console.warn('[Observer] Cities/units for player', observer_follow_player, 'not loaded after', MAX_INITIAL_CENTER_ATTEMPTS, 'attempts, trying fallback');
+      notify_observer_centered_fallback('player_data_timeout', { player_id: observer_follow_player });
     }
   }, INITIAL_CENTER_POLL_INTERVAL_MS);
 }
@@ -400,6 +470,7 @@ function observer_center_on_followed_player()
       // Notify parent on first successful center
       if (!observer_centered_notified) {
         observer_centered_notified = true;
+        observer_parent_notified = true;
         notify_parent_iframe('observer_centered', {
           center_type: 'city',
           city_name: target_city['name'],
@@ -417,6 +488,7 @@ function observer_center_on_followed_player()
     // Notify parent on first successful center
     if (!observer_centered_notified) {
       observer_centered_notified = true;
+      observer_parent_notified = true;
       notify_parent_iframe('observer_centered', {
         center_type: 'units',
         player_id: observer_follow_player
@@ -434,6 +506,7 @@ function observer_center_on_followed_player()
     // Notify parent on first successful center (even if fallback)
     if (!observer_centered_notified) {
       observer_centered_notified = true;
+      observer_parent_notified = true;
       notify_parent_iframe('observer_centered', {
         center_type: 'explored_tile',
         location: { x: explored_tile['x'], y: explored_tile['y'] }
@@ -442,8 +515,18 @@ function observer_center_on_followed_player()
     return;
   }
 
-  // No cities, units, or explored tiles found
-  freelog(LOG_DEBUG, '[Observer] No cities, units, or explored tiles found for player ' + observer_follow_player);
+  // No cities, units, or explored tiles found - notify parent once but keep trying to center
+  // Use separate flag so we don't spam parent but can still center when tiles load
+  if (!observer_parent_notified) {
+    observer_parent_notified = true;
+    console.warn('[Observer] No cities, units, or explored tiles found for player ' + observer_follow_player + ' - will retry');
+    notify_parent_iframe('observer_centered', {
+      center_type: 'none',
+      reason: 'no_visible_tiles',
+      player_id: observer_follow_player
+    });
+    // NOTE: observer_centered_notified stays false so we keep trying to center
+  }
 }
 
 // Track last spread to avoid jarring zoom changes
@@ -814,6 +897,14 @@ function handle_observer_timeout_with_retry(context)
       player_count: (typeof players !== 'undefined') ? Object.keys(players).length : 0,
       context: context || 'global'
     });
+
+    // Notify parent of failure so it can hide loading overlay and show error
+    notify_parent_iframe('observer_centered', {
+      center_type: 'error',
+      reason: 'connection_timeout',
+      context: context || 'global'
+    });
+
     alert('Observer mode failed to initialize. The map is not loading.\n\nThis could be due to network issues or the game not being ready.\n\nPlease try reloading the page.');
   }
 }
@@ -858,6 +949,7 @@ function reset_observer_state_for_retry()
 
   // Reset parent notification state so retry can send notifications again
   observer_centered_notified = false;
+  observer_parent_notified = false;
 }
 
 /****************************************************************************
