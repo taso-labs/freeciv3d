@@ -13,8 +13,8 @@ set maxconnectionsperhost 16384
 set threaded_save enabled
 set scorelog enabled
 set mapsize xysize
-set xsize 64
-set ysize 64
+set xsize 48
+set ysize 48
 
 set victories spacerace
 

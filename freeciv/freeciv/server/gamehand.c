@@ -170,10 +170,15 @@ static struct tile *place_starting_unit(struct tile *starttile,
   }
 
   if (utype != NULL) {
+    /* City-founding units ('c' role) need terrain that allows cities */
+    bool needs_city_terrain = (crole == 'c');
+
     iterate_outward(&(wld.map), starttile,
                     wld.map.xsize + wld.map.ysize, itertile) {
       if (!is_non_allied_unit_tile(itertile, pplayer)
-          && is_native_tile(utype, itertile)) {
+          && is_native_tile(utype, itertile)
+          && (!needs_city_terrain
+              || !terrain_has_flag(tile_terrain(itertile), TER_NO_CITIES))) {
         ptile = itertile;
         break;
       }
@@ -209,7 +214,7 @@ static struct tile *place_starting_unit(struct tile *starttile,
   map_show_circle(pplayer, ptile, game.server.init_vis_radius_sq);
 
   if (utype != NULL) {
-    (void) create_unit(pplayer, ptile, utype, FALSE, 0, 0);
+    (void) create_unit(pplayer, ptile, utype, 0, 0, -1);
     return ptile;
   }
 
