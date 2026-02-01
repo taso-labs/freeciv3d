@@ -17,9 +17,12 @@ images:
     newTag: latest
 
 # Replica configuration for production
+# NOTE: fciv-net is scaled to 1 replica to fix observer routing.
+# With multiple replicas, observers can route to the wrong pod (a pod that doesn't
+# have the game they're trying to observe). See Linear issue for multi-replica scaling options.
 replicas:
   - name: fciv-net
-    count: 2
+    count: 1
   - name: redis
     count: 1
 
@@ -59,34 +62,38 @@ patches:
         value: "freeciv-production-db-password"
 
   # Patch HPA limits for production
+  # Fixed at 1 replica to ensure correct observer routing (see replica comment above)
   - target:
       kind: HorizontalPodAutoscaler
       name: fciv-net-hpa
     patch: |-
       - op: replace
         path: /spec/minReplicas
-        value: 2
+        value: 1
       - op: replace
         path: /spec/maxReplicas
-        value: 5
+        value: 1
 
-  # Production resource limits (reduced to fit e2-small nodes)
+  # Production resource limits - sized for 15,000 concurrent observers
+  # With 1 replica handling all traffic, we need more resources:
+  # - 3 CPU cores = 3 nginx workers × 8,192 connections = 24,576 max connections
+  # - 8 GB memory = ~320MB per civserver + connection buffers + headroom
   - target:
       kind: Deployment
       name: fciv-net
     patch: |-
       - op: replace
         path: /spec/template/spec/containers/0/resources/requests/cpu
-        value: "200m"
-      - op: replace
-        path: /spec/template/spec/containers/0/resources/requests/memory
-        value: "512Mi"
-      - op: replace
-        path: /spec/template/spec/containers/0/resources/limits/cpu
         value: "1000m"
       - op: replace
-        path: /spec/template/spec/containers/0/resources/limits/memory
+        path: /spec/template/spec/containers/0/resources/requests/memory
         value: "2Gi"
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/cpu
+        value: "3000m"
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/memory
+        value: "8Gi"
 
   # Patch Ingress for production static IP
   - target:
