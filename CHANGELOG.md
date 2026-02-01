@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.38](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.37...freeciv3d-v0.3.38) (2026-02-01)
+
+
+### Bug Fixes
+
+* add production name fuzzy matching and remove connection delays ([#115](https://github.com/taso-ventures/freeciv3d/issues/115)) ([d6bce3a](https://github.com/taso-ventures/freeciv3d/commit/d6bce3ab40fc6f93fde55b9d23b6daa5e66617bb))
+
 ## [0.3.37](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.36...freeciv3d-v0.3.37) (2026-02-01)
 
 
