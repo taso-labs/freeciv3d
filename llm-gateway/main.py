@@ -1154,10 +1154,25 @@ setup_routes()
 if __name__ == "__main__":
     import uvicorn
 
+    # CRITICAL: Configure WebSocket ping timeout for LLM agent connections
+    # Default uvicorn ws_ping_timeout is 20s - way too short for LLM inference calls
+    # that can take 60-120+ seconds. If agent is busy with LLM and can't respond to
+    # WebSocket pings, uvicorn closes the connection (code 1000).
+    #
+    # IMPORTANT: Each ping is tracked individually! If ping #1 times out while
+    # waiting for pong, connection closes - even if ping #2 was answered.
+    # Therefore: timeout must be > interval + max_busy_time
+    #
+    # With interval=30s, timeout=180s:
+    # - Pings sent at T=0, T=30, T=60, T=90...
+    # - If agent is busy for 120s (T=5 to T=125), ping at T=0 must survive until T=125
+    # - 180s timeout gives 55s safety margin
     uvicorn.run(
         "main:app",
         host=settings.host,
         port=settings.port,
         log_level=settings.log_level.lower(),
-        reload=True
+        reload=True,
+        ws_ping_interval=30.0,  # Send ping every 30s for reasonable dead connection detection
+        ws_ping_timeout=180.0,  # 3 min timeout handles LLM calls up to ~150s
     )

@@ -119,6 +119,8 @@ class GameSession:
         # Pause/resume state for coordinated disconnection handling
         self.original_timeout: Optional[int] = None  # Store original timeout for resume
         self.is_paused: bool = False  # Track if game is currently paused
+        self.last_resumed_at: Optional[float] = None  # Timestamp of last resume (for debugging)
+        self.resume_count: int = 0  # Number of times game has been resumed (recovery tracking)
 
         # Port release flag - prevents TOCTOU race in on_close()
         # Set True atomically with should_release decision while holding _players_lock
@@ -256,19 +258,29 @@ class GameSession:
             logger.warning(f"Game {self.game_id}: Invalid timeout {timeout}, using default {DEFAULT_GAME_TIMEOUT}")
             timeout = DEFAULT_GAME_TIMEOUT
 
+        # Get current game turn from civcom for logging (helps debug turn sync issues)
+        current_turn = getattr(civcom, 'turn', 'unknown')
+
         try:
             resume_packet = json.dumps({"pid": PACKET_CHAT_MSG_REQ, "message": f"/set timeout {timeout}"})
             civcom.queue_to_civserver(resume_packet)
             civcom.send_packets_to_civserver()
 
             self.is_paused = False
+            self.last_resumed_at = time.time()
+            self.resume_count += 1
             logger.info(
-                f"Game {self.game_id} RESUMED: timeout restored to {timeout}s, "
-                f"   Players: {list(self.players.keys())}"
+                f"🎮 GAME_RESUME_COMMAND_SENT: game_id={self.game_id} | "
+                f"timeout_restored={timeout}s | current_turn={current_turn} | "
+                f"players={list(self.players.keys())} | civcom_agent={civcom.username} | "
+                f"resume_count={self.resume_count}"
             )
             return True
         except Exception as e:
-            logger.error(f"Game {self.game_id}: Failed to resume game: {e}")
+            logger.error(
+                f"❌ GAME_RESUME_FAILED: game_id={self.game_id} | error={e} | "
+                f"current_turn={current_turn} | civcom_agent={civcom.username}"
+            )
             return False
 
     async def configure_game_settings(self, config: Dict[str, Any], civcom: Any) -> bool:

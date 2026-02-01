@@ -69,7 +69,11 @@ if [ -d "/docker/llm-gateway" ]; then
     # IMPORTANT: Write directly to /proc/1/fd/1 (container stdout) for K8s log capture
     # Using tee with backgrounded processes doesn't work reliably when shell is replaced by exec
     export PYTHONUNBUFFERED=1
-    uvicorn main:app --host 0.0.0.0 --port 8003 --log-level info > /proc/1/fd/1 2>&1 &
+    # CRITICAL: Set ws-ping-timeout for LLM agents (default 20s is way too short for LLM inference)
+    # Without this, connections drop during long LLM calls when agent can't respond to WebSocket pings
+    # timeout must be > interval + max_busy_time (each ping tracked individually!)
+    # With interval=30s, timeout=180s: handles LLM calls up to ~150s with safety margin
+    uvicorn main:app --host 0.0.0.0 --port 8003 --log-level info --ws-ping-interval 30 --ws-ping-timeout 180 > /proc/1/fd/1 2>&1 &
     GATEWAY_PID=$!
     sleep 2
     if kill -0 $GATEWAY_PID 2>/dev/null; then

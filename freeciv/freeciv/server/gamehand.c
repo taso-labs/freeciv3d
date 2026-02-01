@@ -186,7 +186,13 @@ static struct tile *place_starting_unit(struct tile *starttile,
   }
 
   if (ptile == NULL) {
-    /* No place where unit may exist. */
+    /* No place where unit may exist. This can happen in rare edge cases
+     * when the start position is surrounded by impassable terrain
+     * (mountains, ice) or, for city-founding units, terrain that doesn't
+     * allow city building. */
+    log_verbose("Could not place starting unit '%s' for %s - no valid terrain found",
+                utype != NULL ? utype_rule_name(utype) : "unknown",
+                pplayer != NULL ? player_name(pplayer) : "unknown player");
     return NULL;
   }
 
@@ -214,6 +220,9 @@ static struct tile *place_starting_unit(struct tile *starttile,
   map_show_circle(pplayer, ptile, game.server.init_vis_radius_sq);
 
   if (utype != NULL) {
+    /* Create unit with: veteran_level=0, homecity_id=0, moves_left=-1.
+     * moves_left=-1 means "full movement points" (fresh unit), as opposed
+     * to 0 which would mean "already moved this turn". */
     (void) create_unit(pplayer, ptile, utype, 0, 0, -1);
     return ptile;
   }

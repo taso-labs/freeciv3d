@@ -39,11 +39,12 @@ HEALTH_CHECK_INTERVAL = 30.0  # Health check interval
 # Gateway ↔ Proxy WebSocket keepalive configuration
 # IMPORTANT: Ping timeout must accommodate slow operations (turn processing, large state serialization)
 # Previous value of 10s caused premature disconnections when proxy was busy
-# Now matches freeciv-proxy's websocket_ping_timeout=60 (freeciv-proxy.py:319)
+# Increased to 120s (2 minutes) for LLM agent connections that may have slow response times
+# Must match freeciv-proxy's websocket_ping_timeout (freeciv-proxy.py)
 WEBSOCKET_PING_INTERVAL = 20  # Send ping every 20 seconds to detect dead connections
-WEBSOCKET_PING_TIMEOUT = 60  # Wait up to 60 seconds for pong response (was 10s - too aggressive)
+WEBSOCKET_PING_TIMEOUT = 120  # Wait up to 120 seconds (2 min) for pong response
 WEBSOCKET_CLOSE_TIMEOUT = 10  # Timeout for graceful close handshake
-WEBSOCKET_OPEN_TIMEOUT = 30  # Timeout for WebSocket handshake under load (addresses E999 errors)
+WEBSOCKET_OPEN_TIMEOUT = 120  # Timeout for WebSocket handshake under load (2 min for slow networks)
 
 # Observer URL polling constants (for race condition handling)
 OBSERVER_URL_MAX_RETRY_ATTEMPTS = 10
