@@ -9,7 +9,16 @@ spec:
   # Session affinity for WebSocket connections
   # CRITICAL: Without this, GKE HTTP(S) LB may route WebSocket frames to different pods,
   # causing "half-open" connections where server→client data stops flowing.
-  # Uses cookie-based affinity to ensure all requests from same client go to same pod.
+  #
+  # Using GENERATED_COOKIE for session affinity:
+  # - Creates a GCLB cookie that routes subsequent requests to the same pod
+  # - Works correctly when scaled to 1 replica (current production configuration)
+  #
+  # Note on multi-replica deployments:
+  # With multiple replicas, cookie affinity ensures requests go to a CONSISTENT pod,
+  # but not necessarily the CORRECT pod for each game (the pod where the game was allocated).
+  # This is why production is currently scaled to 1 replica. For horizontal scaling,
+  # see the pod-aware game allocation design in Linear.
   sessionAffinity:
     affinityType: "GENERATED_COOKIE"
     affinityCookieTtlSec: 7200  # 2 hours - matches service sessionAffinity timeout

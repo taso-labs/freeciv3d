@@ -106,8 +106,9 @@ spec:
                   key: connection-string
 
             # Database connection pool sizing
-            # With MySQL max_connections=150 and HPA max 5 replicas:
-            # 5 replicas × 25 connections = 125 max (leaves 25 for admin/monitoring)
+            # Base values suitable for multi-replica deployments.
+            # With MySQL max_connections=150: allows up to 6 replicas × 25 = 150
+            # Production (1 replica): could increase, but 25 is sufficient for game workloads
             - name: DB_POOL_SIZE
               value: "20"
             - name: DB_POOL_MAX
@@ -181,11 +182,9 @@ spec:
                   key: global
                   optional: true  # Streaming is optional - game works without it
 
-          # Production Node Pools:
-          # - Primary (e2-standard-4): 4 vCPU, 16GB RAM (~14GB usable)
-          # - High-memory (e2-standard-8): 8 vCPU, 32GB RAM (~30GB usable)
-          # Current limits (2Gi) fit comfortably on primary pool.
-          # If limits exceed 4Gi, add nodeSelector for high-memory pool.
+          # Base resource defaults (production overlay may increase these)
+          # Node affinity for high-memory pools is configured in production overlay
+          # when limits exceed primary pool capacity (e2-standard-4: 4 vCPU, 16GB)
           resources:
             requests:
               cpu: 300m       # Increased from 200m for LLM game processing
