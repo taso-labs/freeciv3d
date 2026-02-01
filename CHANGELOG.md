@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.37](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.36...freeciv3d-v0.3.37) (2026-02-01)
+
+
+### Bug Fixes
+
+* prevent observer black screen with immediate notification and fallback centering ([#113](https://github.com/taso-ventures/freeciv3d/issues/113)) ([f3003f8](https://github.com/taso-ventures/freeciv3d/commit/f3003f881c71010324aad6dd3154a3995f5d8a91))
+
 ## [0.3.36](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.35...freeciv3d-v0.3.36) (2026-02-01)
 
 
