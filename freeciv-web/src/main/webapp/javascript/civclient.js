@@ -636,6 +636,14 @@ function center_on_player_units_with_zoom(player_id)
 var observer_last_global_spread = null;
 var GLOBAL_SPREAD_CHANGE_THRESHOLD = 10;  // Only recalc zoom if spread changes by >10 tiles
 
+// Global observer zoom configuration (camera height values)
+var GLOBAL_OBSERVER_MIN_ZOOM_DY = 300;   // Close view for clustered units (spread 0-5 tiles)
+var GLOBAL_OBSERVER_MID_ZOOM_DY = 600;   // Medium view for moderate spread (~40 tiles)
+var GLOBAL_OBSERVER_MAX_ZOOM_DY = 1200;  // Far view for maximum spread (80+ tiles)
+var GLOBAL_OBSERVER_SPREAD_MIN = 5;      // Spread threshold for minimum zoom
+var GLOBAL_OBSERVER_SPREAD_MID = 40;     // Spread threshold for medium zoom
+var GLOBAL_OBSERVER_SPREAD_MAX = 80;     // Spread threshold for maximum zoom
+
 /****************************************************************************
   Calculate the centroid and spread of all units from ALL non-barbarian
   alive players. Used for global observer view to fit all players in view.
@@ -661,6 +669,9 @@ function get_all_players_units_centroid_and_spread()
     // Skip dead players
     var player = players[owner_id];
     if (!player || !player['is_alive']) continue;
+
+    // Defensive check: ensure unit has valid tile index before lookup
+    if (punit['tile'] == null) continue;
 
     var ptile = index_to_tile(punit['tile']);
     if (ptile) {
@@ -701,25 +712,18 @@ function get_all_players_units_centroid_and_spread()
 ****************************************************************************/
 function calculate_zoom_for_global_spread(spread)
 {
-  var MIN_ZOOM_DY = 300;
-  var MID_ZOOM_DY = 600;
-  var MAX_ZOOM_DY = 1200;
-  var SPREAD_MIN = 5;
-  var SPREAD_MID = 40;
-  var SPREAD_MAX = 80;
-
-  if (spread <= SPREAD_MIN) return MIN_ZOOM_DY;
-  if (spread >= SPREAD_MAX) return MAX_ZOOM_DY;
+  if (spread <= GLOBAL_OBSERVER_SPREAD_MIN) return GLOBAL_OBSERVER_MIN_ZOOM_DY;
+  if (spread >= GLOBAL_OBSERVER_SPREAD_MAX) return GLOBAL_OBSERVER_MAX_ZOOM_DY;
 
   // Two-phase interpolation for smooth curve
-  if (spread <= SPREAD_MID) {
+  if (spread <= GLOBAL_OBSERVER_SPREAD_MID) {
     // Phase 1: MIN to MID (5-40 tiles -> dy 300-600)
-    var zoom_factor = (spread - SPREAD_MIN) / (SPREAD_MID - SPREAD_MIN);
-    return Math.floor(MIN_ZOOM_DY + zoom_factor * (MID_ZOOM_DY - MIN_ZOOM_DY));
+    var zoom_factor = (spread - GLOBAL_OBSERVER_SPREAD_MIN) / (GLOBAL_OBSERVER_SPREAD_MID - GLOBAL_OBSERVER_SPREAD_MIN);
+    return Math.floor(GLOBAL_OBSERVER_MIN_ZOOM_DY + zoom_factor * (GLOBAL_OBSERVER_MID_ZOOM_DY - GLOBAL_OBSERVER_MIN_ZOOM_DY));
   } else {
     // Phase 2: MID to MAX (40-80 tiles -> dy 600-1200)
-    var zoom_factor = (spread - SPREAD_MID) / (SPREAD_MAX - SPREAD_MID);
-    return Math.floor(MID_ZOOM_DY + zoom_factor * (MAX_ZOOM_DY - MID_ZOOM_DY));
+    var zoom_factor = (spread - GLOBAL_OBSERVER_SPREAD_MID) / (GLOBAL_OBSERVER_SPREAD_MAX - GLOBAL_OBSERVER_SPREAD_MID);
+    return Math.floor(GLOBAL_OBSERVER_MID_ZOOM_DY + zoom_factor * (GLOBAL_OBSERVER_MAX_ZOOM_DY - GLOBAL_OBSERVER_MID_ZOOM_DY));
   }
 }
 
@@ -857,8 +861,10 @@ function start_observer_global_view_intervals()
     if (has_units_for_any_player()) {
       clearInterval(observer_initial_center_interval);
       observer_initial_center_interval = null;
-      observer_center_global_view();
-      freelog(LOG_DEBUG, '[Observer Global] Initial center completed - found player units');
+      // Note: Don't call observer_center_global_view() here to avoid race condition
+      // with observer_auto_center_interval. The auto-center interval will handle
+      // centering within OBSERVER_AUTO_CENTER_MS (default 5 seconds).
+      freelog(LOG_DEBUG, '[Observer Global] Initial center completed - found player units, auto-center will handle positioning');
     } else if (initial_center_attempts >= MAX_INITIAL_CENTER_ATTEMPTS) {
       clearInterval(observer_initial_center_interval);
       observer_initial_center_interval = null;
