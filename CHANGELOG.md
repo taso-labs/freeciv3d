@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.39](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.38...freeciv3d-v0.3.39) (2026-02-01)
+
+
+### Bug Fixes
+
+* scale to single replica to fix observer routing to wrong pod ([#117](https://github.com/taso-ventures/freeciv3d/issues/117)) ([aa29021](https://github.com/taso-ventures/freeciv3d/commit/aa290217636c97cb3851959d80280b2cc8b23605))
+
 ## [0.3.38](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.37...freeciv3d-v0.3.38) (2026-02-01)
 
 
