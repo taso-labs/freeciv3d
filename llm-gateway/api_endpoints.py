@@ -791,26 +791,22 @@ async def get_observer_urls(
         # - Observer registration failures
         # - Incomplete game state synchronization
         #
-        # Stagger connections with minimal delays (global=0ms, player1=200ms, player2=400ms).
-        # Reduced from 0/500/1000ms to prevent compounding with client-side delays.
-        # 200ms spacing is sufficient to sequence connections without race conditions.
+        # Connection delays removed - Option B (lazy loading in agent-clash-client) handles
+        # loading iframes one at a time when user selects them, eliminating the need for stagger.
         observer_urls = {
             "global": (
                 f"{webclient_path}?action=observe&civserverport={game_port}"
                 f"&embed=1&autojoin=1&name={global_viewer_name}&camera=strategic"
-                f"&connection_delay=0"
             ),
             "player1": (
                 f"{webclient_path}?action=observe&civserverport={game_port}"
                 f"&observe_player={player1_name}&follow={player1_name}"
                 f"&embed=1&autojoin=1&name={player1_viewer_name}&camera=cinematic"
-                f"&connection_delay=200"
             ),
             "player2": (
                 f"{webclient_path}?action=observe&civserverport={game_port}"
                 f"&observe_player={player2_name}&follow={player2_name}"
                 f"&embed=1&autojoin=1&name={player2_viewer_name}&camera=cinematic"
-                f"&connection_delay=400"
             )
         }
 

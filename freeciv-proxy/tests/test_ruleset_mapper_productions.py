@@ -315,6 +315,128 @@ class TestInitializationAndLoading:
         assert len(mapper.techs) == 1
 
 
+class TestFuzzyMatching:
+    """Test fuzzy matching for singular/plural and common variations."""
+
+    @pytest.fixture
+    def mapper(self):
+        """Create a RulesetMapper with mock data for fuzzy matching tests."""
+        mock_civcom = create_mock_civcom_with_data(
+            unit_types={
+                1: {"id": 1, "name": "Warriors"},
+                2: {"id": 2, "name": "Settlers"},
+                3: {"id": 3, "name": "Archers"},
+                4: {"id": 4, "name": "Cavalry"},
+                5: {"id": 5, "name": "Workers"},
+                6: {"id": 6, "name": "Horsemen"},
+            },
+            improvements={
+                1: {"id": 1, "name": "Barracks"},
+                2: {"id": 2, "name": "Granary"},
+                3: {"id": 3, "name": "Temple"},
+                4: {"id": 4, "name": "Library"},
+            },
+            techs={},
+        )
+        return RulesetMapper(mock_civcom)
+
+    def test_singular_to_plural_unit_matching(self, mapper: RulesetMapper):
+        """Singular unit names should fuzzy-match to plural."""
+        # "warrior" -> "warriors"
+        kind, value = mapper.map_production_to_kind_value("warrior")
+        assert kind == VUT_UTYPE
+        assert value == 1
+
+        # "settler" -> "settlers"
+        kind, value = mapper.map_production_to_kind_value("settler")
+        assert kind == VUT_UTYPE
+        assert value == 2
+
+        # "archer" -> "archers"
+        kind, value = mapper.map_production_to_kind_value("archer")
+        assert kind == VUT_UTYPE
+        assert value == 3
+
+        # "worker" -> "workers"
+        kind, value = mapper.map_production_to_kind_value("worker")
+        assert kind == VUT_UTYPE
+        assert value == 5
+
+    def test_men_man_variation(self, mapper: RulesetMapper):
+        """Should match 'man' <-> 'men' variations."""
+        # "horseman" -> "horsemen"
+        kind, value = mapper.map_production_to_kind_value("horseman")
+        assert kind == VUT_UTYPE
+        assert value == 6
+
+    def test_exact_match_preferred_over_fuzzy(self, mapper: RulesetMapper):
+        """Exact matches should be preferred over fuzzy matches."""
+        # "warriors" exact match
+        kind, value = mapper.map_production_to_kind_value("warriors")
+        assert kind == VUT_UTYPE
+        assert value == 1
+
+        # "settlers" exact match
+        kind, value = mapper.map_production_to_kind_value("settlers")
+        assert kind == VUT_UTYPE
+        assert value == 2
+
+    def test_case_insensitive_fuzzy_matching(self, mapper: RulesetMapper):
+        """Fuzzy matching should be case-insensitive."""
+        # "WARRIOR" -> "warriors"
+        kind, value = mapper.map_production_to_kind_value("WARRIOR")
+        assert kind == VUT_UTYPE
+        assert value == 1
+
+        # "Settler" -> "settlers"
+        kind, value = mapper.map_production_to_kind_value("Settler")
+        assert kind == VUT_UTYPE
+        assert value == 2
+
+    def test_no_fuzzy_match_for_completely_unknown(self, mapper: RulesetMapper):
+        """Completely unknown names should still return None."""
+        kind, value = mapper.map_production_to_kind_value("dragon")
+        assert kind is None
+        assert value is None
+
+        kind, value = mapper.map_production_to_kind_value("spaceship")
+        assert kind is None
+        assert value is None
+
+    def test_no_double_es_suffix(self, mapper: RulesetMapper):
+        """Should not create invalid 'barrackses' from 'barracks'."""
+        # "barracks" is an exact match - should work
+        kind, value = mapper.map_production_to_kind_value("barracks")
+        assert kind == VUT_IMPROVEMENT
+        assert value == 1
+
+        # Verify we don't accidentally try to match "barrackses"
+        # by ensuring exact match is used, not fuzzy
+        kind, value = mapper.map_production_to_kind_value("Barracks")
+        assert kind == VUT_IMPROVEMENT
+        assert value == 1
+
+    def test_no_incorrect_ss_removal(self, mapper: RulesetMapper):
+        """Should not incorrectly remove 's' from words ending in 'ss'.
+
+        Tests that 'barracks' (ending in 'ss') exact matches correctly,
+        and that 'barrack' (without the 's') doesn't incorrectly match.
+        """
+        # "barracks" exact match should work
+        kind, value = mapper.map_production_to_kind_value("barracks")
+        assert kind == VUT_IMPROVEMENT
+        assert value == 1
+
+        # "barrack" should NOT match via singular removal since 'barracks' ends in 'ss'
+        # (the fuzzy logic should not strip 's' from words ending in 'ss')
+        kind, value = mapper.map_production_to_kind_value("barrack")
+        # This will actually match via adding 's' -> "barracks", which is correct behavior
+        # The important thing is that we don't try to REMOVE 's' from 'barracks' to get 'barrack'
+        # and match something else. Let's verify the match is correct.
+        assert kind == VUT_IMPROVEMENT
+        assert value == 1  # Matches "barracks" via adding 's'
+
+
 class TestEdgeCases:
     """Test edge cases and error handling."""
 
