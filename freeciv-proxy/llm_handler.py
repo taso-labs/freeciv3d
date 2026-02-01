@@ -931,6 +931,30 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 self.packet_buffer.clear()
                 logger.warning(f"🔓 Packet buffering DISABLED due to error for {self.agent_id} - cleared {buffer_count} buffered packets")
 
+                # FIX: Clean up stale CivCom to prevent "Duplicate login name" loop
+                # When E142 occurs (e.g., civserver rejects with "Duplicate login name"),
+                # there may be a stale CivCom still connected to civserver from a previous
+                # failed reconnection attempt. Kill it so the next attempt can succeed.
+                # Game state is preserved in civserver - client passes player_id on reconnect.
+                try:
+                    stale_civcom = civcom_registry.get_civcom(game_id, self.agent_id)
+                    if stale_civcom and stale_civcom is not self.civcom:
+                        logger.warning(
+                            f"🧹 Cleaning up STALE CivCom for {self.agent_id} after E142:\n"
+                            f"   Stale CivCom alive: {stale_civcom.is_alive() if hasattr(stale_civcom, 'is_alive') else 'N/A'}\n"
+                            f"   Stale CivCom stopped: {stale_civcom.stopped if hasattr(stale_civcom, 'stopped') else 'N/A'}\n"
+                            f"   This allows next reconnection attempt to succeed"
+                        )
+                        stale_civcom.stopped = True
+                        stale_civcom.close_connection()
+                        civcom_registry.unregister_game(game_id, self.agent_id)
+                    # Also clean up our own civcom if it exists
+                    if self.civcom:
+                        self.civcom.stopped = True
+                        self.civcom.close_connection()
+                except Exception as cleanup_err:
+                    logger.error(f"Error cleaning up stale CivCom for {self.agent_id}: {cleanup_err}")
+
                 error_response = {
                     'type': 'error',
                     'code': 'E142',
@@ -967,10 +991,30 @@ class LLMWSHandler(websocket.WebSocketHandler):
             self.packet_buffer.clear()
             logger.warning(f"🔓 Packet buffering DISABLED due to exception for {self.agent_id} - cleared {buffer_count} buffered packets")
 
+            # FIX: Clean up stale CivCom to prevent "Duplicate login name" loop
+            # Same as E142 handler - kill any stale connections so next attempt succeeds
+            try:
+                if 'game_id' in locals() and game_id and self.agent_id:
+                    stale_civcom = civcom_registry.get_civcom(game_id, self.agent_id)
+                    if stale_civcom and stale_civcom is not self.civcom:
+                        logger.warning(
+                            f"🧹 Cleaning up STALE CivCom for {self.agent_id} after auth exception:\n"
+                            f"   Exception: {e}\n"
+                            f"   This allows next reconnection attempt to succeed"
+                        )
+                        stale_civcom.stopped = True
+                        stale_civcom.close_connection()
+                        civcom_registry.unregister_game(game_id, self.agent_id)
+                if self.civcom:
+                    self.civcom.stopped = True
+                    self.civcom.close_connection()
+            except Exception as cleanup_err:
+                logger.error(f"Error cleaning up stale CivCom for {self.agent_id}: {cleanup_err}")
+
             error_response = error_handler.handle_system_error(
-                agent_id=self.agent_id, 
-                operation="authentication", 
-                error=e, 
+                agent_id=self.agent_id,
+                operation="authentication",
+                error=e,
                 session_id=self.session_id
             )
             self.write_message(error_response.to_json())
