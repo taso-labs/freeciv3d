@@ -337,8 +337,10 @@ if __name__ == "__main__":
         # Sending pings every 30s ensures connections stay alive through all proxies
         # Agent-clash client also sends pings (5s interval), but server-side pings provide
         # redundancy and ensure bidirectional keepalive
+        # Increased to 180s (3 min) for LLM agent connections that may have slow response times
+        # Must match llm-gateway's uvicorn ws-ping-timeout (docker-entrypoint.sh, start-llm-gateway.sh)
         websocket_ping_interval=30,  # Send ping every 30 seconds
-        websocket_ping_timeout=60,   # Close connection if no pong received within 60 seconds
+        websocket_ping_timeout=180,  # Close connection if no pong received within 180 seconds (3 min)
         )
 
         # Log WebSocket settings at startup

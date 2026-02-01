@@ -25,7 +25,11 @@ if [ ! -f "/tmp/llm-gateway-deps-installed" ]; then
 fi
 
 echo "Starting LLM Gateway on port ${LLM_GATEWAY_PORT}..."
-/home/docker/.local/bin/uvicorn main:app --host ${LLM_GATEWAY_HOST} --port ${LLM_GATEWAY_PORT} --log-level ${LOG_LEVEL,,} --ws-max-size 104857600 &
+# CRITICAL: Set ws-ping-timeout for LLM agents (default 20s is way too short for LLM inference)
+# Without this, connections drop during long LLM calls when agent can't respond to WebSocket pings
+# timeout must be > interval + max_busy_time (each ping tracked individually!)
+# With interval=30s, timeout=180s: handles LLM calls up to ~150s with safety margin
+/home/docker/.local/bin/uvicorn main:app --host ${LLM_GATEWAY_HOST} --port ${LLM_GATEWAY_PORT} --log-level ${LOG_LEVEL,,} --ws-max-size 104857600 --ws-ping-interval 30 --ws-ping-timeout 180 &
 
 # Store the PID for later cleanup
 echo $! > /tmp/llm-gateway.pid

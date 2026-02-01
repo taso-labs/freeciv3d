@@ -303,3 +303,22 @@ function does_player_own_city(player, city)
 {
   return city_owner_player_id(city) === player.playerno;
 }
+
+/**************************************************************************
+  Returns true if the specified player is a barbarian nation.
+  Used to filter barbarians from global observer view calculations.
+**************************************************************************/
+function is_barbarian_player(player_id)
+{
+  var player = players[player_id];
+  if (!player) return false;
+
+  // Nations may not be loaded yet during early connection
+  if (typeof nations === 'undefined') return false;
+
+  var nation = nations[player['nation']];
+  if (!nation) return false;
+
+  // Check if nation has a non-zero barbarian_type (0 = NOT_A_BARBARIAN)
+  return nation['barbarian_type'] != null && nation['barbarian_type'] !== NOT_A_BARBARIAN;
+}

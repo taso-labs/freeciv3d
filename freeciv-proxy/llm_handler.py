@@ -1021,7 +1021,21 @@ class LLMWSHandler(websocket.WebSocketHandler):
 
     async def _handle_state_query(self, msg_data: Dict[str, Any]):
         """Handle optimized state query for LLM (async to support turn advance wait)"""
-        logger.info(f"🔍 STATE_QUERY received from agent {self.agent_id}")
+        # Get resume context for debugging post-recovery issues
+        game_session = game_session_manager.sessions.get(self.game_id) if self.game_id else None
+        resume_context = ""
+        if game_session:
+            time_since_resume = ""
+            if game_session.last_resumed_at:
+                seconds_since = time.time() - game_session.last_resumed_at
+                time_since_resume = f" | seconds_since_resume={seconds_since:.1f}"
+            resume_context = f" | resume_count={game_session.resume_count}{time_since_resume}"
+
+        current_turn = getattr(self.civcom, 'turn', 'unknown') if self.civcom else 'unknown'
+        logger.info(
+            f"🔍 STATE_QUERY received: agent={self.agent_id} | turn={current_turn} | "
+            f"game_id={self.game_id}{resume_context}"
+        )
         
         # Extract correlation_id for request/response matching
         correlation_id = msg_data.get('correlation_id')
@@ -1488,9 +1502,22 @@ class LLMWSHandler(websocket.WebSocketHandler):
 
     def _handle_action(self, msg_data: Dict[str, Any]):
         """Handle and validate LLM action"""
-        logger.info(f"🎯 _handle_action ENTRY: agent={self.agent_id}")
-        logger.info(f"🎯 msg_data keys: {list(msg_data.keys())}")
-        logger.info(f"🎯 msg_data: {msg_data}")
+        # Get resume context for debugging post-recovery issues
+        game_session = game_session_manager.sessions.get(self.game_id) if self.game_id else None
+        resume_context = ""
+        if game_session:
+            time_since_resume = ""
+            if game_session.last_resumed_at:
+                seconds_since = time.time() - game_session.last_resumed_at
+                time_since_resume = f" | seconds_since_resume={seconds_since:.1f}"
+            resume_context = f" | resume_count={game_session.resume_count}{time_since_resume}"
+
+        current_turn = getattr(self.civcom, 'turn', 'unknown') if self.civcom else 'unknown'
+        action_type = msg_data.get('action', {}).get('type', msg_data.get('type', 'unknown'))
+        logger.info(
+            f"🎯 ACTION_RECEIVED: agent={self.agent_id} | turn={current_turn} | "
+            f"action_type={action_type} | game_id={self.game_id}{resume_context}"
+        )
         
         # Extract correlation_id for request/response matching
         correlation_id = msg_data.get('correlation_id')
@@ -4232,7 +4259,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
 
         Called after successful authentication/reconnection. If the game
         is paused and all players are now reconnected, resume the game
-        by restoring the original timeout.
+        by restoring the original timeout and notifying all agents.
         """
         if not self.game_id:
             return
@@ -4244,11 +4271,13 @@ class LLMWSHandler(websocket.WebSocketHandler):
 
             # Only proceed if game is paused
             if not game_session.is_paused:
+                logger.debug(f"🔍 RESUME_CHECK: game_id={self.game_id} | is_paused=False | agent={self.agent_id}")
                 return
 
             # Update handler reference and check all_connected under lock
             # This prevents race conditions when multiple handlers reconnect simultaneously
             all_connected = False
+            handlers_to_notify = []
             with game_session._players_lock:
                 # Update the player's handler reference in the game session
                 # (needed because handler is new after reconnection)
@@ -4258,35 +4287,100 @@ class LLMWSHandler(websocket.WebSocketHandler):
 
                 # Check if all players are now connected with valid handlers and civcom
                 all_connected = True
+                connection_status = {}
                 for agent_id, player_info in game_session.players.items():
                     handler = player_info.handler
                     if not handler:
-                        logger.debug(f"Player {agent_id} missing handler")
+                        connection_status[agent_id] = "missing_handler"
                         all_connected = False
-                        break
-                    if not handler.civcom:
-                        logger.debug(f"Player {agent_id} missing civcom")
+                    elif not handler.civcom:
+                        connection_status[agent_id] = "missing_civcom"
                         all_connected = False
-                        break
-                    if handler.civcom.stopped:
-                        logger.debug(f"Player {agent_id} civcom is stopped")
+                    elif handler.civcom.stopped:
+                        connection_status[agent_id] = "civcom_stopped"
                         all_connected = False
-                        break
+                    else:
+                        connection_status[agent_id] = "connected"
+                        handlers_to_notify.append(handler)
+
+                logger.info(
+                    f"🔍 RESUME_CHECK: game_id={self.game_id} | triggered_by={self.agent_id} | "
+                    f"all_connected={all_connected} | status={connection_status}"
+                )
 
             # Resume outside the lock (to avoid holding lock during I/O)
             if all_connected:
+                # Get current turn before resume for logging
+                current_turn = getattr(self.civcom, 'turn', 'unknown') if self.civcom else 'unknown'
+
                 logger.info(
-                    f"All players reconnected for game {self.game_id} - resuming game\n"
-                    f"   Players: {list(game_session.players.keys())}"
+                    f"🎮 GAME_RESUME_INITIATED: game_id={self.game_id} | "
+                    f"current_turn={current_turn} | players={list(game_session.players.keys())}"
                 )
-                game_session.resume_game(self.civcom)
+
+                resume_success = game_session.resume_game(self.civcom)
+
+                if resume_success:
+                    # CRITICAL: Notify all agents that the game has resumed
+                    # Without this, agents don't know they can continue playing!
+                    self._notify_agents_game_resumed(handlers_to_notify, current_turn, game_session)
+                else:
+                    logger.error(
+                        f"❌ GAME_RESUME_FAILED: game_id={self.game_id} | "
+                        f"resume_game returned False"
+                    )
             else:
-                logger.debug(
-                    f"Game {self.game_id} still paused - waiting for all players to reconnect"
+                logger.info(
+                    f"⏸️ GAME_STILL_PAUSED: game_id={self.game_id} | "
+                    f"waiting_for_players | status={connection_status}"
                 )
 
         except Exception as e:
-            logger.error(f"Error in _check_and_resume_game for {self.agent_id}: {e}")
+            logger.error(f"❌ RESUME_CHECK_ERROR: game_id={self.game_id} | agent={self.agent_id} | error={e}")
+
+    def _notify_agents_game_resumed(self, handlers, current_turn, game_session):
+        """Send game_resumed notification to all connected agents.
+
+        This is CRITICAL for agents to know they should continue playing after
+        a recovery/reconnection cycle. Without this notification, agents may
+        sit idle waiting for something that will never come.
+
+        Args:
+            handlers: List of LLMWSHandler instances to notify
+            current_turn: Current game turn number
+            game_session: GameSession instance for game metadata
+        """
+        notification = {
+            'type': 'game_resumed',
+            'game_id': self.game_id,
+            'turn': current_turn,
+            'message': 'Game has resumed after reconnection. Please query state and continue playing.',
+            'action_required': 'state_query',
+            'timestamp': time.time(),
+        }
+
+        notified_count = 0
+        failed_count = 0
+
+        for handler in handlers:
+            try:
+                handler.write_message(json.dumps(notification))
+                notified_count += 1
+                logger.info(
+                    f"📤 GAME_RESUMED_NOTIFICATION_SENT: game_id={self.game_id} | "
+                    f"agent={handler.agent_id} | turn={current_turn}"
+                )
+            except Exception as e:
+                failed_count += 1
+                logger.error(
+                    f"❌ GAME_RESUMED_NOTIFICATION_FAILED: game_id={self.game_id} | "
+                    f"agent={handler.agent_id} | error={e}"
+                )
+
+        logger.info(
+            f"🎮 GAME_RESUMED_NOTIFICATIONS_COMPLETE: game_id={self.game_id} | "
+            f"notified={notified_count} | failed={failed_count} | turn={current_turn}"
+        )
 
     def on_close(self):
         """Handle WebSocket connection close"""
