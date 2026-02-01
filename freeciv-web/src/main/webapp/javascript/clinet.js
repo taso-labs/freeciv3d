@@ -120,11 +120,23 @@ function websocket_init()
 
   ws.onopen = function() {
     freelog(LOG_DEBUG, "WebSocket opened successfully!");
+    // Notify parent iframe that WebSocket is connected
+    if (typeof notify_parent_iframe === 'function') {
+      notify_parent_iframe('websocket_connected', {
+        ws_url: ws_url
+      });
+    }
     check_websocket_ready();
   };
 
   ws.onerror = function(error) {
     freelog(LOG_ERROR, "WebSocket error: " + error);
+    // Notify parent iframe of WebSocket error
+    if (typeof notify_parent_error === 'function') {
+      notify_parent_error('WEBSOCKET_ERROR', 'WebSocket connection error', {
+        error: String(error)
+      });
+    }
   };
 
   ws.onmessage = function (event) {
@@ -174,6 +186,15 @@ function websocket_init()
        observer_retry_in_progress = false;
      }, typeof OBSERVER_RETRY_DELAY_MS !== 'undefined' ? OBSERVER_RETRY_DELAY_MS : 1500);
      return;  // Don't show error dialog, we're retrying
+   }
+
+   // Notify parent iframe of connection failure
+   if (typeof notify_parent_error === 'function') {
+     notify_parent_error('WEBSOCKET_CLOSED', 'Connection to server closed', {
+       code: event.code,
+       reason: event.reason,
+       wasClean: event.wasClean
+     });
    }
 
    swal("Network Error", "Connection to server is closed. Please reload the page to restart. Sorry!", "error");

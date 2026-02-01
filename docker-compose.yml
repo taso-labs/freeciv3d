@@ -53,7 +53,7 @@ services:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       # Local streaming configuration (used by LocalStreamManager)
-      - STREAMING_MODE=local
+      - STREAMING_MODE=disabled
       - STREAMER_IMAGE_LOCAL=freeciv3d-streaming
       - DOCKER_NETWORK=freeciv3d_default
       - LOCAL_RTMP_BASE_URL=rtmp://mediamtx:1935

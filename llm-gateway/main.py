@@ -443,11 +443,15 @@ class LLMGateway:
             # Get default civserver port from environment variable (configurable via docker-compose.yml)
             default_port = int(os.getenv("DEFAULT_CIVSERVER_PORT", "6001"))
 
+            # Get game config from session (contains max_turns, etc.)
+            game_config = self.game_sessions.get(game_id, {}).get("config", {})
+
             auth_msg = {
                 "type": "llm_connect",
                 "agent_id": f"llm_player_{game_id[:8]}",
                 "api_token": api_token,
-                "port": default_port
+                "port": default_port,
+                "game_config": game_config
             }
 
             await websocket.send(json.dumps(auth_msg))
