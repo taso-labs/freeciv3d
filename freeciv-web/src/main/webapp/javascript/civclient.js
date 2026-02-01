@@ -181,6 +181,52 @@ function notify_parent_error(error_code, error_message, details)
 var observer_centered_notified = false;
 
 /****************************************************************************
+  Helper function for fallback centering and parent notification.
+  Attempts to center on any explored tile, or notifies parent of failure.
+  Used by multiple timeout/failure code paths to prevent code duplication.
+
+  @param reason - String describing why fallback was needed (for logging/debugging)
+  @param extra_data - Optional object with additional data to include in notification
+****************************************************************************/
+function notify_observer_centered_fallback(reason, extra_data)
+{
+  if (observer_centered_notified) return;
+
+  var explored_tile = find_first_explored_tile();
+  if (explored_tile) {
+    center_tile_mapcanvas(explored_tile);
+    freelog(LOG_DEBUG, '[Observer] Fallback: Centered on explored tile at (' +
+            explored_tile['x'] + ',' + explored_tile['y'] + ') - ' + reason);
+    observer_centered_notified = true;
+    var notification_data = {
+      center_type: 'fallback_explored',
+      reason: reason,
+      location: { x: explored_tile['x'], y: explored_tile['y'] }
+    };
+    if (extra_data) {
+      for (var key in extra_data) {
+        notification_data[key] = extra_data[key];
+      }
+    }
+    notify_parent_iframe('observer_centered', notification_data);
+  } else {
+    // No explored tiles available - still notify parent but log warning for visibility
+    console.warn('[Observer] No explored tiles available for fallback centering - ' + reason);
+    observer_centered_notified = true;
+    var notification_data = {
+      center_type: 'none',
+      reason: reason
+    };
+    if (extra_data) {
+      for (var key in extra_data) {
+        notification_data[key] = extra_data[key];
+      }
+    }
+    notify_parent_iframe('observer_centered', notification_data);
+  }
+}
+
+/****************************************************************************
   Initialize observer follow mode from URL parameter.
   Parses ?follow=player_name and sets up auto-centering on that player.
 ****************************************************************************/
@@ -254,28 +300,7 @@ function init_observer_follow_mode()
         clearInterval(observer_player_search_interval);
         observer_player_search_interval = null;
         console.warn('[Observer] Player not found after', MAX_INITIAL_CENTER_ATTEMPTS, 'polling attempts:', follow_param);
-
-        // Fallback: Center on any explored tile to prevent black screen
-        var explored_tile = find_first_explored_tile();
-        if (explored_tile) {
-          center_tile_mapcanvas(explored_tile);
-          freelog(LOG_DEBUG, '[Observer] Fallback: Centered on explored tile at (' +
-                  explored_tile['x'] + ',' + explored_tile['y'] + ') - player not found');
-          if (!observer_centered_notified) {
-            observer_centered_notified = true;
-            notify_parent_iframe('observer_centered', {
-              center_type: 'fallback_explored',
-              reason: 'player_not_found',
-              location: { x: explored_tile['x'], y: explored_tile['y'] }
-            });
-          }
-        } else {
-          // No explored tiles - notify parent anyway to hide loading overlay
-          notify_parent_iframe('observer_centered', {
-            center_type: 'none',
-            reason: 'no_tiles_explored'
-          });
-        }
+        notify_observer_centered_fallback('player_not_found');
       }
     }, INITIAL_CENTER_POLL_INTERVAL_MS);
   }
@@ -289,8 +314,11 @@ function start_observer_follow_intervals()
 {
   if (observer_follow_player === null) return;
 
-  // Try to center immediately to send notification to parent ASAP
-  // This prevents parent timeout while waiting for interval to fire
+  // Try to center immediately to send notification to parent ASAP.
+  // This call will likely fail to find cities/units (data not loaded yet), but that's OK:
+  // - If no data: sends 'center_type: none' notification so parent knows iframe is alive
+  // - If data exists: centers immediately without waiting for interval
+  // Either way, the parent receives observer_centered before its fallback timeout fires.
   observer_center_on_followed_player();
 
   // Start auto-centering interval
@@ -315,30 +343,7 @@ function start_observer_follow_intervals()
       clearInterval(observer_initial_center_interval);
       observer_initial_center_interval = null;
       console.warn('[Observer] Cities/units for player', observer_follow_player, 'not loaded after', MAX_INITIAL_CENTER_ATTEMPTS, 'attempts, trying fallback');
-
-      // Fallback: Center on any explored tile to prevent black screen
-      var explored_tile = find_first_explored_tile();
-      if (explored_tile) {
-        center_tile_mapcanvas(explored_tile);
-        freelog(LOG_DEBUG, '[Observer] Fallback: Centered on explored tile at (' +
-                explored_tile['x'] + ',' + explored_tile['y'] + ') - player data not loaded');
-        if (!observer_centered_notified) {
-          observer_centered_notified = true;
-          notify_parent_iframe('observer_centered', {
-            center_type: 'fallback_explored',
-            reason: 'player_data_timeout',
-            player_id: observer_follow_player,
-            location: { x: explored_tile['x'], y: explored_tile['y'] }
-          });
-        }
-      } else {
-        // No explored tiles - notify parent anyway to hide loading overlay
-        notify_parent_iframe('observer_centered', {
-          center_type: 'none',
-          reason: 'no_tiles_explored',
-          player_id: observer_follow_player
-        });
-      }
+      notify_observer_centered_fallback('player_data_timeout', { player_id: observer_follow_player });
     }
   }, INITIAL_CENTER_POLL_INTERVAL_MS);
 }
@@ -493,7 +498,8 @@ function observer_center_on_followed_player()
   }
 
   // No cities, units, or explored tiles found - still notify parent to prevent timeout
-  freelog(LOG_DEBUG, '[Observer] No cities, units, or explored tiles found for player ' + observer_follow_player);
+  // Log as warning for visibility (this means user will see black screen)
+  console.warn('[Observer] No cities, units, or explored tiles found for player ' + observer_follow_player + ' - black screen unavoidable');
   if (!observer_centered_notified) {
     observer_centered_notified = true;
     notify_parent_iframe('observer_centered', {
