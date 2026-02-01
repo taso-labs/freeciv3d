@@ -255,13 +255,6 @@ function init_observer_follow_mode()
 
   if (!observing) return;
 
-  // Parse follow parameter
-  var follow_param = $.getUrlVar('follow');
-  if (!follow_param) return;
-
-  // Decode URL-encoded characters (e.g., AI%2A1 → AI*1)
-  follow_param = decodeURIComponent(follow_param);
-
   // Parse autocenter interval with bounds checking to prevent DoS
   var autocenter_param = $.getUrlVar('autocenter');
   if (autocenter_param) {
@@ -272,6 +265,20 @@ function init_observer_follow_mode()
       console.warn('[Observer] Invalid autocenter value (must be ' + MIN_AUTOCENTER_MS + '-' + MAX_AUTOCENTER_MS + 'ms), using default:', OBSERVER_AUTO_CENTER_MS);
     }
   }
+
+  // Parse follow parameter
+  var follow_param = $.getUrlVar('follow');
+
+  // Global view mode: when follow is missing or explicitly "global"
+  if (!follow_param || follow_param === 'global') {
+    observer_follow_player = null;
+    freelog(LOG_DEBUG, '[Observer] Global view mode - will center on all players');
+    start_observer_global_view_intervals();
+    return;
+  }
+
+  // Decode URL-encoded characters (e.g., AI%2A1 → AI*1)
+  follow_param = decodeURIComponent(follow_param);
 
   // Find player by name, username, or playerno (with null checks for defensive coding)
   for (var player_id in players) {
@@ -625,6 +632,242 @@ function center_on_player_units_with_zoom(player_id)
   return true;
 }
 
+// Track last global spread for hysteresis to avoid jarring zoom changes
+var observer_last_global_spread = null;
+var GLOBAL_SPREAD_CHANGE_THRESHOLD = 10;  // Only recalc zoom if spread changes by >10 tiles
+
+/****************************************************************************
+  Calculate the centroid and spread of all units from ALL non-barbarian
+  alive players. Used for global observer view to fit all players in view.
+  Returns: { centroid: {x, y}, spread: number, count: number, player_count: number }
+  Returns null if no non-barbarian players have units.
+****************************************************************************/
+function get_all_players_units_centroid_and_spread()
+{
+  if (typeof units === 'undefined' || typeof players === 'undefined') return null;
+
+  var sum_x = 0, sum_y = 0, count = 0;
+  var min_x = Infinity, max_x = -Infinity;
+  var min_y = Infinity, max_y = -Infinity;
+  var players_with_units = {};
+
+  for (var unit_id in units) {
+    var punit = units[unit_id];
+    var owner_id = punit['owner'];
+
+    // Skip barbarian players
+    if (is_barbarian_player(owner_id)) continue;
+
+    // Skip dead players
+    var player = players[owner_id];
+    if (!player || !player['is_alive']) continue;
+
+    var ptile = index_to_tile(punit['tile']);
+    if (ptile) {
+      sum_x += ptile['x'];
+      sum_y += ptile['y'];
+      count++;
+      min_x = Math.min(min_x, ptile['x']);
+      max_x = Math.max(max_x, ptile['x']);
+      min_y = Math.min(min_y, ptile['y']);
+      max_y = Math.max(max_y, ptile['y']);
+      players_with_units[owner_id] = true;
+    }
+  }
+
+  if (count === 0) return null;
+
+  var centroid_x = Math.floor(sum_x / count);
+  var centroid_y = Math.floor(sum_y / count);
+  var spread = Math.max(max_x - min_x, max_y - min_y);
+  var player_count = Object.keys(players_with_units).length;
+
+  return {
+    centroid: { x: centroid_x, y: centroid_y },
+    spread: spread,
+    count: count,
+    player_count: player_count,
+    tile: { x: centroid_x, y: centroid_y }
+  };
+}
+
+/****************************************************************************
+  Calculate camera height (zoom) based on global unit spread.
+  Extended zoom range for multi-player scenarios:
+  - dy=300 for spread 0-5 tiles (clustered)
+  - dy=600 for spread ~40 tiles (medium)
+  - dy=1200 for spread 80+ tiles (very spread out)
+  Uses two-phase linear interpolation for smooth curve.
+****************************************************************************/
+function calculate_zoom_for_global_spread(spread)
+{
+  var MIN_ZOOM_DY = 300;
+  var MID_ZOOM_DY = 600;
+  var MAX_ZOOM_DY = 1200;
+  var SPREAD_MIN = 5;
+  var SPREAD_MID = 40;
+  var SPREAD_MAX = 80;
+
+  if (spread <= SPREAD_MIN) return MIN_ZOOM_DY;
+  if (spread >= SPREAD_MAX) return MAX_ZOOM_DY;
+
+  // Two-phase interpolation for smooth curve
+  if (spread <= SPREAD_MID) {
+    // Phase 1: MIN to MID (5-40 tiles -> dy 300-600)
+    var zoom_factor = (spread - SPREAD_MIN) / (SPREAD_MID - SPREAD_MIN);
+    return Math.floor(MIN_ZOOM_DY + zoom_factor * (MID_ZOOM_DY - MIN_ZOOM_DY));
+  } else {
+    // Phase 2: MID to MAX (40-80 tiles -> dy 600-1200)
+    var zoom_factor = (spread - SPREAD_MID) / (SPREAD_MAX - SPREAD_MID);
+    return Math.floor(MID_ZOOM_DY + zoom_factor * (MAX_ZOOM_DY - MID_ZOOM_DY));
+  }
+}
+
+/****************************************************************************
+  Center view on ALL players' units with dynamic zoom.
+  Zoom only updates if spread changes significantly (>10 tiles).
+  Returns unit_data object if successfully centered, null if no units found.
+****************************************************************************/
+function center_on_all_players_with_zoom()
+{
+  var unit_data = get_all_players_units_centroid_and_spread();
+  if (!unit_data) return null;
+
+  // Only recalculate zoom if spread changed significantly or first time
+  var should_update_zoom = (
+    observer_last_global_spread === null ||
+    Math.abs(unit_data.spread - observer_last_global_spread) >= GLOBAL_SPREAD_CHANGE_THRESHOLD
+  );
+
+  if (should_update_zoom) {
+    var target_dy = calculate_zoom_for_global_spread(unit_data.spread);
+    camera_dy = target_dy;
+    observer_last_global_spread = unit_data.spread;
+    freelog(LOG_DEBUG, '[Observer Global] Zoom updated: spread=' + unit_data.spread +
+            ' tiles, ' + unit_data.player_count + ' players, dy=' + target_dy);
+  }
+
+  center_tile_mapcanvas(unit_data.tile);
+
+  freelog(LOG_DEBUG, '[Observer Global] Centered on ' + unit_data.count +
+          ' unit(s) from ' + unit_data.player_count + ' player(s) at (' +
+          unit_data.centroid.x + ',' + unit_data.centroid.y + ')');
+
+  return unit_data;
+}
+
+/****************************************************************************
+  Main entry point for global observer view (no specific player followed).
+  Centers on combined centroid of all players with appropriate zoom.
+  Falls back to explored tile if no units exist.
+****************************************************************************/
+function observer_center_global_view()
+{
+  // Try to center on all players' units with dynamic zoom
+  // center_on_all_players_with_zoom() returns unit_data on success, null on failure
+  var unit_data = center_on_all_players_with_zoom();
+  if (unit_data) {
+    // Notify parent on first successful center
+    if (!observer_centered_notified) {
+      observer_centered_notified = true;
+      observer_parent_notified = true;
+      notify_parent_iframe('observer_centered', {
+        center_type: 'global_units',
+        player_count: unit_data.player_count,
+        unit_count: unit_data.count,
+        spread: unit_data.spread
+      });
+    }
+    return;
+  }
+
+  // Fall back to any explored tile (prevents black screen)
+  var explored_tile = find_first_explored_tile();
+  if (explored_tile) {
+    center_tile_mapcanvas(explored_tile);
+    freelog(LOG_DEBUG, '[Observer Global] Centered on explored tile at (' +
+            explored_tile['x'] + ',' + explored_tile['y'] + ') - no player units found');
+    if (!observer_centered_notified) {
+      observer_centered_notified = true;
+      observer_parent_notified = true;
+      notify_parent_iframe('observer_centered', {
+        center_type: 'fallback_explored',
+        reason: 'no_player_units',
+        location: { x: explored_tile['x'], y: explored_tile['y'] }
+      });
+    }
+    return;
+  }
+
+  // No units or explored tiles - notify parent once but keep trying
+  if (!observer_parent_notified) {
+    observer_parent_notified = true;
+    console.warn('[Observer Global] No units or explored tiles found - will retry');
+    notify_parent_iframe('observer_centered', {
+      center_type: 'none',
+      reason: 'no_visible_content'
+    });
+  }
+}
+
+/****************************************************************************
+  Check if any non-barbarian alive player has units.
+  Quick check used for polling before expensive centroid calculation.
+****************************************************************************/
+function has_units_for_any_player()
+{
+  if (typeof units === 'undefined' || typeof players === 'undefined') return false;
+
+  for (var unit_id in units) {
+    var punit = units[unit_id];
+    var owner_id = punit['owner'];
+
+    // Skip barbarians
+    if (is_barbarian_player(owner_id)) continue;
+
+    // Skip dead players
+    var player = players[owner_id];
+    if (!player || !player['is_alive']) continue;
+
+    return true;  // Found at least one valid unit
+  }
+  return false;
+}
+
+/****************************************************************************
+  Start global view intervals for observer without a specific follow target.
+  Sets up periodic centering on all players' combined units.
+****************************************************************************/
+function start_observer_global_view_intervals()
+{
+  // Try to center immediately
+  observer_center_global_view();
+
+  // Start auto-centering interval
+  observer_auto_center_interval = setInterval(
+    observer_center_global_view,
+    OBSERVER_AUTO_CENTER_MS
+  );
+
+  // Poll for any player units to load
+  var initial_center_attempts = 0;
+  observer_initial_center_interval = setInterval(function() {
+    initial_center_attempts++;
+
+    if (has_units_for_any_player()) {
+      clearInterval(observer_initial_center_interval);
+      observer_initial_center_interval = null;
+      observer_center_global_view();
+      freelog(LOG_DEBUG, '[Observer Global] Initial center completed - found player units');
+    } else if (initial_center_attempts >= MAX_INITIAL_CENTER_ATTEMPTS) {
+      clearInterval(observer_initial_center_interval);
+      observer_initial_center_interval = null;
+      console.warn('[Observer Global] No player units loaded after', MAX_INITIAL_CENTER_ATTEMPTS, 'attempts');
+      notify_observer_centered_fallback('global_units_timeout');
+    }
+  }, INITIAL_CENTER_POLL_INTERVAL_MS);
+}
+
 /****************************************************************************
   Clean up observer follow mode - clear interval and reset state.
 ****************************************************************************/
@@ -644,6 +887,7 @@ function cleanup_observer_follow_mode()
   }
   observer_follow_player = null;
   observer_last_unit_spread = null;
+  observer_last_global_spread = null;
 }
 
 /****************************************************************************
