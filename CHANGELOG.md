@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.40](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.39...freeciv3d-v0.3.40) (2026-02-01)
+
+
+### Bug Fixes
+
+* settlers spawn with full movement points on valid terrain ([#119](https://github.com/taso-ventures/freeciv3d/issues/119)) ([8156ed6](https://github.com/taso-ventures/freeciv3d/commit/8156ed661ed8e148e2d83b206a9db9c9dd0c1448))
+
 ## [0.3.39](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.38...freeciv3d-v0.3.39) (2026-02-01)
 
 
