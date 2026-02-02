@@ -517,6 +517,23 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 )
             self.game_id = game_id
 
+            # Fallback: Accept player_id from message for late reconnection
+            # This handles the case where session expired but client retained player_id
+            if not is_reconnecting:
+                provided_player_id = msg_data.get('player_id')
+                if provided_player_id is not None:
+                    try:
+                        provided_player_id = int(provided_player_id)
+                        if 0 <= provided_player_id < 512:  # Valid player range (not observer)
+                            previous_player_id = provided_player_id
+                            is_reconnecting = True
+                            logger.info(
+                                f"🔄 Late reconnection for {self.agent_id} with provided player_id={provided_player_id}\n"
+                                f"   Session expired but client retained player_id for game {game_id}"
+                            )
+                    except (ValueError, TypeError):
+                        logger.warning(f"Invalid player_id provided by {self.agent_id}: {provided_player_id}")
+
             # Create new session if not reconnecting
             if not is_reconnecting:
                 self.session_info = session_manager.create_session(

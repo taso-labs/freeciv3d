@@ -32,6 +32,12 @@ services:
       #   - After this, session is terminated and game state is lost
       #   - Default: 3600s (1 hour)
       #
+      # SESSION_SUSPENSION_TIMEOUT_SECS: How long a suspended session is reconnectable (Python)
+      #   - When agent disconnects, session enters "suspended" state for this duration
+      #   - Agent can reconnect and resume without losing player_id
+      #   - Default: 86400s (24 hours) to match port allocation lifetime
+      #   - For late reconnection (after this expires), agent must pass player_id in llm_connect
+      #
       # STALE_ALLOCATION_THRESHOLD_MINUTES: Port cleanup threshold (Java, in Tomcat)
       #   - Set via: JAVA_OPTS=-Dfreeciv.stale.allocation.threshold.minutes=10
       #   - Allocations without activity for this long are auto-released
@@ -43,6 +49,7 @@ services:
       #   STALE_ALLOCATION_THRESHOLD < SESSION_TIMEOUT (allow reconnect before cleanup)
       # ──────────────────────────────────────────────────────────────────────
       - SESSION_TIMEOUT_SECONDS=${SESSION_TIMEOUT_SECONDS:-3600}
+      - SESSION_SUSPENSION_TIMEOUT_SECS=${SESSION_SUSPENSION_TIMEOUT_SECS:-86400}
       - MAX_LLM_AGENTS=${MAX_LLM_AGENTS:-10}
       - MAX_SESSIONS_PER_PLAYER=${MAX_SESSIONS_PER_PLAYER:-3}
       - CACHE_TTL_SECONDS=${CACHE_TTL_SECONDS:-5}

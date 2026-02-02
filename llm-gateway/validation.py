@@ -105,6 +105,12 @@ class LLMConnectData(BaseModel):
         description="Preferred leader name",
         max_length=100
     )
+    player_id: Optional[int] = Field(
+        default=None,
+        description="Player ID for late reconnection (when session expired but allocation exists)",
+        ge=0,
+        lt=512
+    )
 
     @validator('api_token')
     def validate_token(cls, v):
