@@ -112,6 +112,11 @@ GAME_INFO_WAIT_TIMEOUT_SEC = 2.0  # Max wait for PACKET_GAME_INFO
 GAME_INFO_POLL_INTERVAL_SEC = 0.1  # Polling interval
 GAME_INFO_LOG_INTERVAL_SEC = 0.5  # Debug log frequency
 
+# Connection health monitoring - threshold for marking connection as dead
+# After this many consecutive send failures, the connection is marked dead and game is paused
+# Higher values provide more tolerance for transient network issues
+CONNECTION_DEAD_FAILURE_THRESHOLD = llm_config.get('connection.dead_failure_threshold', 20)
+
 # Unit actions that require movement points
 # Used for local moves tracking in pre-submission validation
 UNIT_ACTIONS_REQUIRING_MOVES = frozenset([
@@ -4225,10 +4230,8 @@ class LLMWSHandler(websocket.WebSocketHandler):
         self._send_failure_count += 1
 
         # After threshold, mark connection as dead and attempt one proactive pause
-        # Threshold of 20 provides ~20 seconds tolerance for transient network issues
-        # (packets sent roughly every second during active game)
-        FAILURE_THRESHOLD = 20
-        if self._send_failure_count >= FAILURE_THRESHOLD:
+        # Uses configurable CONNECTION_DEAD_FAILURE_THRESHOLD (default 20)
+        if self._send_failure_count >= CONNECTION_DEAD_FAILURE_THRESHOLD:
             self._connection_dead = True  # Stop tracking further failures
             logger.error(
                 f"Connection dead for {self.agent_id} "
