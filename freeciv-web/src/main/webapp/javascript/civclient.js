@@ -861,10 +861,9 @@ function start_observer_global_view_intervals()
     if (has_units_for_any_player()) {
       clearInterval(observer_initial_center_interval);
       observer_initial_center_interval = null;
-      // Note: Don't call observer_center_global_view() here to avoid race condition
-      // with observer_auto_center_interval. The auto-center interval will handle
-      // centering within OBSERVER_AUTO_CENTER_MS (default 5 seconds).
-      freelog(LOG_DEBUG, '[Observer Global] Initial center completed - found player units, auto-center will handle positioning');
+      // Center immediately when units are found (don't wait for auto-center interval)
+      observer_center_global_view();
+      freelog(LOG_DEBUG, '[Observer Global] Initial center completed - centered on player units');
     } else if (initial_center_attempts >= MAX_INITIAL_CENTER_ATTEMPTS) {
       clearInterval(observer_initial_center_interval);
       observer_initial_center_interval = null;
