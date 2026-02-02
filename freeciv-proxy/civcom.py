@@ -468,6 +468,12 @@ class CivCom(Thread):
             packet: The packet string to send
             packet_size: Size of packet in bytes (pre-calculated for efficiency)
         """
+        # ZOMBIE CONNECTION FIX: Check if connection is marked as dead - skip forwarding silently
+        # This prevents endless WebSocketClosedError logs when agent has disconnected
+        # but civserver is still sending packets (e.g., pings, game updates)
+        if hasattr(conn, '_connection_dead') and conn._connection_dead:
+            return  # Don't log - just skip (reduces log spam during suspension)
+
         # ERR-P-003 FIX: Basic connection check - don't be too aggressive
         # Tornado's WebSocketHandler doesn't expose ws_connection the way we were checking
         if not conn:

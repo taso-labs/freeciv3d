@@ -4225,7 +4225,9 @@ class LLMWSHandler(websocket.WebSocketHandler):
         self._send_failure_count += 1
 
         # After threshold, mark connection as dead and attempt one proactive pause
-        FAILURE_THRESHOLD = 3
+        # Threshold of 20 provides ~20 seconds tolerance for transient network issues
+        # (packets sent roughly every second during active game)
+        FAILURE_THRESHOLD = 20
         if self._send_failure_count >= FAILURE_THRESHOLD:
             self._connection_dead = True  # Stop tracking further failures
             logger.error(
