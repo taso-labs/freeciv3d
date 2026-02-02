@@ -86,10 +86,9 @@ function set_client_state(newstate)
         if (observing) {
           center_tile_mapcanvas(map_pos_to_tile(map['xsize'] / 2, map['ysize'] / 2));
 
-          // Initialize observer player attachment (sends /observe command if observe_player param set)
-          if (typeof execute_observe_player_attachment === 'function') {
-            execute_observe_player_attachment();
-          }
+          // NOTE: Player attachment now happens at connection time in packhand.js
+          // to ensure tiles are received with correct fog-of-war filtering.
+          // See request_observe_game() which is called with player_to_attach param.
 
           // Initialize observer follow mode (auto-centering on followed player)
           if (typeof init_observer_follow_mode === 'function') {

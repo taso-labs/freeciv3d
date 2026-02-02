@@ -1263,6 +1263,37 @@ function init_autojoin_mode()
 ****************************************************************************/
 
 /****************************************************************************
+  Find a player by name using case-insensitive matching.
+  Returns the actual player name with correct case, or null if not found.
+  This is needed because URL parameters may have different case than actual
+  player names (e.g., "grok-41_fast" vs "Grok-41_Fast").
+****************************************************************************/
+function find_player_name_case_insensitive(name)
+{
+  if (!name || typeof players === 'undefined') {
+    return null;
+  }
+
+  // SECURITY: Validate player name format before lookup
+  if (!SAFE_PLAYER_NAME_REGEX.test(name)) {
+    console.error('[Observer] Invalid player name format:', name);
+    return null;
+  }
+
+  var name_lower = name.toLowerCase();
+
+  for (var player_id in players) {
+    if (players[player_id] && players[player_id]['name']) {
+      if (players[player_id]['name'].toLowerCase() === name_lower) {
+        return players[player_id]['name'];
+      }
+    }
+  }
+
+  return null;
+}
+
+/****************************************************************************
   Get the observe_player URL parameter, handling URL encoding.
   Returns player name to observe, or null if not specified.
 ****************************************************************************/
@@ -1289,6 +1320,14 @@ function request_observe_player(player_name)
   if (player_name && !SAFE_PLAYER_NAME_REGEX.test(player_name)) {
     console.error('[Observer] Invalid player name contains unsafe characters:', player_name);
     return;
+  }
+
+  // Try to resolve the player name with correct case (case-insensitive lookup)
+  if (player_name) {
+    var actual_player_name = find_player_name_case_insensitive(player_name);
+    if (actual_player_name) {
+      player_name = actual_player_name;
+    }
   }
 
   observe_player = player_name;
@@ -1665,7 +1704,8 @@ function set_phase_start()
 }
 
 /**************************************************************************
-  Request to observe the game. Includes retry logic for failed connections.
+  Request to observe the game as a global observer.
+  Includes retry logic for failed connections.
 **************************************************************************/
 function request_observe_game()
 {
