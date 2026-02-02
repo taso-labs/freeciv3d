@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.42](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.41...freeciv3d-v0.3.42) (2026-02-02)
+
+
+### Bug Fixes
+
+* settler movement and observer code cleanup ([#123](https://github.com/taso-ventures/freeciv3d/issues/123)) ([0a7a419](https://github.com/taso-ventures/freeciv3d/commit/0a7a4198a0daecd2a1b84e2aba60fee8ee9fb471))
+
 ## [0.3.41](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.40...freeciv3d-v0.3.41) (2026-02-01)
 
 
