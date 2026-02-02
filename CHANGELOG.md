@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.44](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.43...freeciv3d-v0.3.44) (2026-02-02)
+
+
+### Bug Fixes
+
+* stop forwarding packets to dead WebSocket connections ([#127](https://github.com/taso-ventures/freeciv3d/issues/127)) ([6298f87](https://github.com/taso-ventures/freeciv3d/commit/6298f87fea00d90058ee35d64380762c0e899bea))
+
 ## [0.3.43](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.42...freeciv3d-v0.3.43) (2026-02-02)
 
 
