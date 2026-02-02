@@ -112,6 +112,11 @@ GAME_INFO_WAIT_TIMEOUT_SEC = 2.0  # Max wait for PACKET_GAME_INFO
 GAME_INFO_POLL_INTERVAL_SEC = 0.1  # Polling interval
 GAME_INFO_LOG_INTERVAL_SEC = 0.5  # Debug log frequency
 
+# Connection health monitoring - threshold for marking connection as dead
+# After this many consecutive send failures, the connection is marked dead and game is paused
+# Higher values provide more tolerance for transient network issues
+CONNECTION_DEAD_FAILURE_THRESHOLD = llm_config.get('connection.dead_failure_threshold', 20)
+
 # Unit actions that require movement points
 # Used for local moves tracking in pre-submission validation
 UNIT_ACTIONS_REQUIRING_MOVES = frozenset([
@@ -511,6 +516,23 @@ class LLMWSHandler(websocket.WebSocketHandler):
                     f"   Game ID: {game_id}"
                 )
             self.game_id = game_id
+
+            # Fallback: Accept player_id from message for late reconnection
+            # This handles the case where session expired but client retained player_id
+            if not is_reconnecting:
+                provided_player_id = msg_data.get('player_id')
+                if provided_player_id is not None:
+                    try:
+                        provided_player_id = int(provided_player_id)
+                        if 0 <= provided_player_id < 512:  # Valid player range (not observer)
+                            previous_player_id = provided_player_id
+                            is_reconnecting = True
+                            logger.info(
+                                f"🔄 Late reconnection for {self.agent_id} with provided player_id={provided_player_id}\n"
+                                f"   Session expired but client retained player_id for game {game_id}"
+                            )
+                    except (ValueError, TypeError):
+                        logger.warning(f"Invalid player_id provided by {self.agent_id}: {provided_player_id}")
 
             # Create new session if not reconnecting
             if not is_reconnecting:
@@ -4225,8 +4247,8 @@ class LLMWSHandler(websocket.WebSocketHandler):
         self._send_failure_count += 1
 
         # After threshold, mark connection as dead and attempt one proactive pause
-        FAILURE_THRESHOLD = 3
-        if self._send_failure_count >= FAILURE_THRESHOLD:
+        # Uses configurable CONNECTION_DEAD_FAILURE_THRESHOLD (default 20)
+        if self._send_failure_count >= CONNECTION_DEAD_FAILURE_THRESHOLD:
             self._connection_dead = True  # Stop tracking further failures
             logger.error(
                 f"Connection dead for {self.agent_id} "

@@ -456,7 +456,7 @@ class MySQLSessionManager:
 
     def suspend_session(self, session_id: str, reason: str = "admin") -> bool:
         """Suspend a session temporarily"""
-        suspension_timeout = int(os.getenv('SESSION_SUSPENSION_TIMEOUT_SECS', '300'))
+        suspension_timeout = int(os.getenv('SESSION_SUSPENSION_TIMEOUT_SECS', '86400'))
 
         try:
             with self._get_connection() as conn:
@@ -968,7 +968,7 @@ class InMemorySessionManager:
             session = self.sessions.get(session_id)
             if session and session.state == SessionState.ACTIVE:
                 session.state = SessionState.SUSPENDED
-                suspension_timeout = int(os.getenv('SESSION_SUSPENSION_TIMEOUT_SECS', '300'))
+                suspension_timeout = int(os.getenv('SESSION_SUSPENSION_TIMEOUT_SECS', '86400'))
                 session.expires_at = time.time() + suspension_timeout
                 logger.info(f"Suspended session {session_id}: {reason} (expires in {suspension_timeout}s)")
                 return True

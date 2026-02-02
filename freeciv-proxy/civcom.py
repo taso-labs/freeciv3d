@@ -468,6 +468,22 @@ class CivCom(Thread):
             packet: The packet string to send
             packet_size: Size of packet in bytes (pre-calculated for efficiency)
         """
+        # ZOMBIE CONNECTION FIX: Check if connection is marked as dead - skip forwarding silently
+        # This prevents endless WebSocketClosedError logs when agent has disconnected
+        # but civserver is still sending packets (e.g., pings, game updates)
+        # NOTE: No race condition here - Tornado's event loop is single-threaded, so no other
+        # callback can run between this check and write_message() below.
+        if hasattr(conn, '_connection_dead') and conn._connection_dead:
+            # Track dropped packets for debugging (log every 100th packet to avoid spam)
+            if not hasattr(self, '_dead_conn_packet_drops'):
+                self._dead_conn_packet_drops = 0
+            self._dead_conn_packet_drops += 1
+            if self._dead_conn_packet_drops % 100 == 1:
+                logger.debug(
+                    f"🔇 Dropped {self._dead_conn_packet_drops} packet(s) for dead connection {self.username}"
+                )
+            return
+
         # ERR-P-003 FIX: Basic connection check - don't be too aggressive
         # Tornado's WebSocketHandler doesn't expose ws_connection the way we were checking
         if not conn:
