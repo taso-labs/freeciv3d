@@ -431,4 +431,87 @@ describe('Observer Player Attachment', () => {
       expect(send_message).toHaveBeenCalledWith('/observe AI*2');
     });
   });
+
+  // ===========================================================================
+  // request_observe_game() Tests - Connection-Time FOW Attachment
+  // ===========================================================================
+
+  describe('request_observe_game()', () => {
+    beforeEach(() => {
+      // Mock setup_observer_timeout_with_retry
+      global.setup_observer_timeout_with_retry = jest.fn();
+      global.freelog = jest.fn();
+      global.LOG_DEBUG = 0;
+    });
+
+    test('should be defined as a global function', () => {
+      expect(typeof request_observe_game).toBe('function');
+    });
+
+    test('should send global /observe when called without player parameter', () => {
+      request_observe_game();
+
+      expect(send_message).toHaveBeenCalledWith('/observe ');
+      expect(setup_observer_timeout_with_retry).toHaveBeenCalledWith('global');
+    });
+
+    test('should send global /observe when called with null', () => {
+      request_observe_game(null);
+
+      expect(send_message).toHaveBeenCalledWith('/observe ');
+      expect(setup_observer_timeout_with_retry).toHaveBeenCalledWith('global');
+    });
+
+    test('should send player-specific /observe when player_to_attach is provided', () => {
+      request_observe_game('AI*1');
+
+      expect(send_message).toHaveBeenCalledWith('/observe AI*1');
+      expect(setup_observer_timeout_with_retry).toHaveBeenCalledWith('AI*1');
+    });
+
+    test('should send player-specific /observe for AI*2', () => {
+      request_observe_game('AI*2');
+
+      expect(send_message).toHaveBeenCalledWith('/observe AI*2');
+      expect(setup_observer_timeout_with_retry).toHaveBeenCalledWith('AI*2');
+    });
+
+    test('should send player-specific /observe for human player names', () => {
+      request_observe_game('HumanPlayer');
+
+      expect(send_message).toHaveBeenCalledWith('/observe HumanPlayer');
+      expect(setup_observer_timeout_with_retry).toHaveBeenCalledWith('HumanPlayer');
+    });
+
+    test('should reject invalid player names and fall back to global', () => {
+      const consoleSpy = jest.spyOn(console, 'error').mockImplementation();
+
+      // Player names with spaces or special chars should be rejected
+      request_observe_game('; malicious');
+
+      expect(send_message).toHaveBeenCalledWith('/observe ');
+      expect(setup_observer_timeout_with_retry).toHaveBeenCalledWith('global');
+      expect(consoleSpy).toHaveBeenCalled();
+
+      consoleSpy.mockRestore();
+    });
+
+    test('should accept valid player names with asterisk (AI*1 format)', () => {
+      request_observe_game('AI*1');
+
+      expect(send_message).toHaveBeenCalledWith('/observe AI*1');
+    });
+
+    test('should accept valid player names with underscore', () => {
+      request_observe_game('Player_1');
+
+      expect(send_message).toHaveBeenCalledWith('/observe Player_1');
+    });
+
+    test('should accept valid player names with hyphen', () => {
+      request_observe_game('Player-1');
+
+      expect(send_message).toHaveBeenCalledWith('/observe Player-1');
+    });
+  });
 });

@@ -220,10 +220,7 @@ static struct tile *place_starting_unit(struct tile *starttile,
   map_show_circle(pplayer, ptile, game.server.init_vis_radius_sq);
 
   if (utype != NULL) {
-    /* Create unit with: veteran_level=0, homecity_id=0, moves_left=-1.
-     * moves_left=-1 means "full movement points" (fresh unit), as opposed
-     * to 0 which would mean "already moved this turn". */
-    (void) create_unit(pplayer, ptile, utype, 0, 0, -1);
+    (void) create_unit(pplayer, ptile, utype, FALSE, 0, 0);
     return ptile;
   }
 
