@@ -861,10 +861,9 @@ function start_observer_global_view_intervals()
     if (has_units_for_any_player()) {
       clearInterval(observer_initial_center_interval);
       observer_initial_center_interval = null;
-      // Note: Don't call observer_center_global_view() here to avoid race condition
-      // with observer_auto_center_interval. The auto-center interval will handle
-      // centering within OBSERVER_AUTO_CENTER_MS (default 5 seconds).
-      freelog(LOG_DEBUG, '[Observer Global] Initial center completed - found player units, auto-center will handle positioning');
+      // Center immediately when units are found (don't wait for auto-center interval)
+      observer_center_global_view();
+      freelog(LOG_DEBUG, '[Observer Global] Initial center completed - centered on player units');
     } else if (initial_center_attempts >= MAX_INITIAL_CENTER_ATTEMPTS) {
       clearInterval(observer_initial_center_interval);
       observer_initial_center_interval = null;
@@ -1263,6 +1262,37 @@ function init_autojoin_mode()
 ****************************************************************************/
 
 /****************************************************************************
+  Find a player by name using case-insensitive matching.
+  Returns the actual player name with correct case, or null if not found.
+  This is needed because URL parameters may have different case than actual
+  player names (e.g., "grok-41_fast" vs "Grok-41_Fast").
+****************************************************************************/
+function find_player_name_case_insensitive(name)
+{
+  if (!name || typeof players === 'undefined') {
+    return null;
+  }
+
+  // SECURITY: Validate player name format before lookup
+  if (!SAFE_PLAYER_NAME_REGEX.test(name)) {
+    console.error('[Observer] Invalid player name format:', name);
+    return null;
+  }
+
+  var name_lower = name.toLowerCase();
+
+  for (var player_id in players) {
+    if (players[player_id] && players[player_id]['name']) {
+      if (players[player_id]['name'].toLowerCase() === name_lower) {
+        return players[player_id]['name'];
+      }
+    }
+  }
+
+  return null;
+}
+
+/****************************************************************************
   Get the observe_player URL parameter, handling URL encoding.
   Returns player name to observe, or null if not specified.
 ****************************************************************************/
@@ -1289,6 +1319,14 @@ function request_observe_player(player_name)
   if (player_name && !SAFE_PLAYER_NAME_REGEX.test(player_name)) {
     console.error('[Observer] Invalid player name contains unsafe characters:', player_name);
     return;
+  }
+
+  // Try to resolve the player name with correct case (case-insensitive lookup)
+  if (player_name) {
+    var actual_player_name = find_player_name_case_insensitive(player_name);
+    if (actual_player_name) {
+      player_name = actual_player_name;
+    }
   }
 
   observe_player = player_name;
@@ -1665,7 +1703,8 @@ function set_phase_start()
 }
 
 /**************************************************************************
-  Request to observe the game. Includes retry logic for failed connections.
+  Request to observe the game as a global observer.
+  Includes retry logic for failed connections.
 **************************************************************************/
 function request_observe_game()
 {

@@ -642,6 +642,20 @@ global.is_attached_observer = function() {
   return global.observe_player !== null && global.observe_player !== '';
 };
 
+/**
+ * Request to observe the game as a global observer.
+ * Sends /observe command to server and sets up retry timeout.
+ */
+global.request_observe_game = function() {
+  global.send_message("/observe ");
+  global.setup_observer_timeout_with_retry('global');
+};
+
+/**
+ * Setup observer timeout with retry logic (mock for tests)
+ */
+global.setup_observer_timeout_with_retry = jest.fn();
+
 // Player/city/unit globals
 global.players = {};
 global.cities = {};
