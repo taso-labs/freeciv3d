@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.43](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.42...freeciv3d-v0.3.43) (2026-02-02)
+
+
+### Bug Fixes
+
+* restore immediate observer centering when units found ([#125](https://github.com/taso-ventures/freeciv3d/issues/125)) ([dd53421](https://github.com/taso-ventures/freeciv3d/commit/dd534218d2c52e879b0f372ff24fb356eb713ba8))
+
 ## [0.3.42](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.41...freeciv3d-v0.3.42) (2026-02-02)
 
 
