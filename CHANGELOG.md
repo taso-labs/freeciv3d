@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.3.46](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.45...freeciv3d-v0.3.46) (2026-02-05)
+
+
+### Bug Fixes
+
+* unblock agent reconnection fields ([#133](https://github.com/taso-ventures/freeciv3d/issues/133)) ([3576874](https://github.com/taso-ventures/freeciv3d/commit/3576874d0ea6870d7fedf96459f4fee2b0f06eeb))
+
+
+### Miscellaneous
+
+* Add Claude Code GitHub Workflow ([#131](https://github.com/taso-ventures/freeciv3d/issues/131)) ([2d6e9f1](https://github.com/taso-ventures/freeciv3d/commit/2d6e9f1d04074df453ab9d396f3bf590539735e9))
+
 ## [0.3.45](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.44...freeciv3d-v0.3.45) (2026-02-05)
 
 
