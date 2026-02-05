@@ -46,7 +46,27 @@ function init_map_tiletype_image()
     }
   }
 
+  // CRITICAL: Update shader uniform reference after creating new texture.
+  // This fixes a race condition where init_webgl_mapview() captures an old/empty
+  // maptiletypes reference before this function creates the real texture.
+  // Without this, the first observer shows black terrain while later observers work.
+  update_shader_tiletype_uniform();
+
  }
+
+/****************************************************************************
+  Update the shader uniform to reference the current maptiletypes texture.
+  Must be called after init_map_tiletype_image() creates a new texture object
+  to ensure the shader uses the correct texture reference.
+****************************************************************************/
+function update_shader_tiletype_uniform()
+{
+  if (typeof freeciv_uniforms !== 'undefined' && freeciv_uniforms !== null
+      && freeciv_uniforms.maptiles && maptiletypes) {
+    freeciv_uniforms.maptiles.value = maptiletypes;
+    freelog(LOG_DEBUG, '[Terrain] Updated shader uniform to new maptiletypes texture');
+  }
+}
 
 /****************************************************************************
   ...

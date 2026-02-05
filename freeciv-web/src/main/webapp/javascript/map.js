@@ -141,6 +141,14 @@ function replay_pending_tile_packets()
       handle_tile_info(packets[i]);
     }
     freelog(LOG_DEBUG, '[Observer] Finished replaying buffered tile packets');
+
+    // Force texture upload to GPU after replaying all buffered tile packets.
+    // This ensures the terrain is visible even if individual tile updates
+    // didn't trigger needsUpdate (e.g., due to race conditions).
+    if (typeof maptiletypes !== 'undefined' && maptiletypes !== null) {
+      maptiletypes.needsUpdate = true;
+      freelog(LOG_DEBUG, '[Observer] Forced maptiletypes texture update after replay');
+    }
   }
 }
 
