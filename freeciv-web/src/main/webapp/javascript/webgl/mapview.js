@@ -229,6 +229,14 @@ function init_webgl_mapview() {
 
   // High-resolution terrain-mesh shown in mapview.
   if (!webgpu) {
+    // CRITICAL: After creating freeciv_uniforms, ensure maptiletypes uniform
+    // is pointing to the current texture. This handles the race condition where
+    // init_map_tiletype_image() may have already created a new texture object
+    // before this function ran.
+    if (typeof update_shader_tiletype_uniform === 'function') {
+      update_shader_tiletype_uniform();
+    }
+
     terrain_material = new THREE.ShaderMaterial({
       uniforms: freeciv_uniforms,
       vertexShader: vertex_shader,
