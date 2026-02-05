@@ -36,6 +36,13 @@ function webgl_preload()
 {
   $.blockUI({ message: "<h2>Downloading 3D models <span id='download_progress'></span></h2>" });
 
+  // CRITICAL: Initialize placeholder tiletype texture early, before any packets arrive.
+  // This ensures maptiletypes is never undefined when renderer_init() creates shader uniforms.
+  // The real texture will replace this when init_map_tiletype_image() runs after map info arrives.
+  if (typeof init_placeholder_tiletype_texture === 'function') {
+    init_placeholder_tiletype_texture();
+  }
+
   loader = new GLTFLoader();
   const dracoLoader = new DRACOLoader();
   dracoLoader.setDecoderPath( '/javascript/webgl/libs/' );

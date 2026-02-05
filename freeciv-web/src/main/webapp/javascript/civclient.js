@@ -109,6 +109,7 @@ var parent_notification_origin = '*';
   - websocket_connected: Connected to game server
   - game_running: Game state is C_S_RUNNING
   - renderer_ready: Three.js renderer started, map visible
+  - terrain_ready: Tile texture populated with terrain data (safe to show map)
   - observer_centered: Camera positioned on followed player
   - error: Any error that prevents proper display
 ****************************************************************************/
@@ -182,6 +183,14 @@ var observer_centered_notified = false;
 // Track if we've sent ANY notification to parent (including "nothing found")
 // This prevents duplicate notifications while still allowing retry centering
 var observer_parent_notified = false;
+// Track if we've sent terrain_ready notification (fires once per game load)
+var terrain_ready_notified = false;
+// Track if terrain data has been populated into the texture (set by handle_map_info)
+// This flag enables renderer_init to know when it's safe to fire terrain_ready
+var terrain_data_populated = false;
+// Track if renderer has completed initialization (set by renderer_init)
+// Used for coordinating terrain_ready notification when packets arrive late
+var renderer_initialized = false;
 
 /****************************************************************************
   Helper function for fallback centering and parent notification.
@@ -1188,6 +1197,13 @@ function reset_observer_state_for_retry()
   // Reset retry-in-progress flag (in case called from elsewhere)
   observer_retry_in_progress = false;
 
+  // CRITICAL: Reset map to empty object to prevent handle_game_info() from
+  // triggering C_S_RUNNING before handle_map_info() runs on retry.
+  // This was causing the terrain texture race condition.
+  if (typeof map !== 'undefined') {
+    map = {};
+  }
+
   // Reset tile state (defined in packhand.js)
   if (typeof tiles_initialized !== 'undefined') {
     tiles_initialized = false;
@@ -1196,9 +1212,29 @@ function reset_observer_state_for_retry()
     pending_tile_packets = [];
   }
 
+  // Reset terrain texture state to force re-creation on retry
+  if (typeof maptiletypes !== 'undefined') {
+    maptiletypes = null;
+  }
+  if (typeof maptiles_data !== 'undefined') {
+    maptiles_data = null;
+  }
+  if (typeof freeciv_uniforms !== 'undefined') {
+    freeciv_uniforms = null;
+  }
+
   // Reset parent notification state so retry can send notifications again
   observer_centered_notified = false;
   observer_parent_notified = false;
+  if (typeof terrain_ready_notified !== 'undefined') {
+    terrain_ready_notified = false;
+  }
+  if (typeof terrain_data_populated !== 'undefined') {
+    terrain_data_populated = false;
+  }
+  if (typeof renderer_initialized !== 'undefined') {
+    renderer_initialized = false;
+  }
 }
 
 /****************************************************************************
@@ -1703,13 +1739,38 @@ function set_phase_start()
 }
 
 /**************************************************************************
-  Request to observe the game as a global observer.
+  Request to observe the game. Supports both global observation and
+  player-specific FOW attachment via the observe_player URL parameter.
   Includes retry logic for failed connections.
+
+  @param player_to_attach - Optional player name to attach to. If not provided,
+                           falls back to the observe_player global (from URL).
+                           Pass null explicitly for global observation.
 **************************************************************************/
-function request_observe_game()
+function request_observe_game(player_to_attach)
 {
-  send_message("/observe ");
-  setup_observer_timeout_with_retry('global');
+  // Use explicit parameter if provided, otherwise check URL-param global
+  var target_player = player_to_attach;
+  if (target_player === undefined) {
+    target_player = observe_player;  // From URL param via init_observe_player_mode()
+  }
+
+  if (target_player && target_player !== '') {
+    // Player-specific FOW observation
+    // SECURITY: Validate player name to prevent command injection
+    if (!SAFE_PLAYER_NAME_REGEX.test(target_player)) {
+      console.error('[Observer] Invalid player name contains unsafe characters:', target_player);
+      send_message("/observe ");
+      setup_observer_timeout_with_retry('global');
+      return;
+    }
+    send_message('/observe ' + target_player);
+    setup_observer_timeout_with_retry(target_player);
+  } else {
+    // Global observer
+    send_message("/observe ");
+    setup_observer_timeout_with_retry('global');
+  }
 }
 
 /**************************************************************************

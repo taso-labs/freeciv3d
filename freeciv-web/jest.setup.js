@@ -245,6 +245,15 @@ global.observer_auto_center_interval = null;
 global.OBSERVER_AUTO_CENTER_MS = 5000;
 global.embed_mode = false;
 
+// Parent iframe notification state flags
+global.terrain_ready_notified = false;
+global.observer_centered_notified = false;
+global.observer_parent_notified = false;
+// Terrain data population flag (set when texture has actual terrain data)
+global.terrain_data_populated = false;
+// Renderer initialization flag (set when renderer_init completes)
+global.renderer_initialized = false;
+
 // =============================================================================
 // FOLLOW PLAYER SYSTEM (from civclient.js)
 // =============================================================================
@@ -643,12 +652,37 @@ global.is_attached_observer = function() {
 };
 
 /**
- * Request to observe the game as a global observer.
+ * Request to observe the game. Supports both global observation and
+ * player-specific FOW attachment via the observe_player global variable.
  * Sends /observe command to server and sets up retry timeout.
+ *
+ * @param player_to_attach - Optional player name to attach to. If not provided,
+ *                          falls back to the observe_player global (from URL).
+ *                          Pass null explicitly for global observation.
  */
-global.request_observe_game = function() {
-  global.send_message("/observe ");
-  global.setup_observer_timeout_with_retry('global');
+global.request_observe_game = function(player_to_attach) {
+  // Use explicit parameter if provided, otherwise check URL-param global
+  var target_player = player_to_attach;
+  if (target_player === undefined) {
+    target_player = global.observe_player;  // From URL param via init_observe_player_mode()
+  }
+
+  if (target_player && target_player !== '') {
+    // Player-specific FOW observation
+    // SECURITY: Validate player name to prevent command injection
+    if (!global.SAFE_PLAYER_NAME_REGEX.test(target_player)) {
+      console.error('[Observer] Invalid player name contains unsafe characters:', target_player);
+      global.send_message("/observe ");
+      global.setup_observer_timeout_with_retry('global');
+      return;
+    }
+    global.send_message('/observe ' + target_player);
+    global.setup_observer_timeout_with_retry(target_player);
+  } else {
+    // Global observer
+    global.send_message("/observe ");
+    global.setup_observer_timeout_with_retry('global');
+  }
 };
 
 /**
@@ -692,6 +726,10 @@ global.index_to_tile = jest.fn((index) => ({
 // Logging function mock
 global.freelog = jest.fn();
 global.LOG_DEBUG = 0;
+
+// Parent iframe notification mock
+global.notify_parent_iframe = jest.fn();
+global.notify_parent_error = jest.fn();
 
 // =============================================================================
 // TEST UTILITIES
@@ -751,6 +789,13 @@ global.resetAllMocks = () => {
   global.cities = {};
   global.units = {};
   global.client = { conn: { playing: null, observer: false } };
+
+  // Reset parent iframe notification state flags
+  global.terrain_ready_notified = false;
+  global.observer_centered_notified = false;
+  global.observer_parent_notified = false;
+  global.terrain_data_populated = false;
+  global.renderer_initialized = false;
 
   // Reset embed mode globals
   global.audio_enabled = true;
