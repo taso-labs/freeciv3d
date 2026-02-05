@@ -1197,12 +1197,30 @@ function reset_observer_state_for_retry()
   // Reset retry-in-progress flag (in case called from elsewhere)
   observer_retry_in_progress = false;
 
+  // CRITICAL: Reset map to empty object to prevent handle_game_info() from
+  // triggering C_S_RUNNING before handle_map_info() runs on retry.
+  // This was causing the terrain texture race condition.
+  if (typeof map !== 'undefined') {
+    map = {};
+  }
+
   // Reset tile state (defined in packhand.js)
   if (typeof tiles_initialized !== 'undefined') {
     tiles_initialized = false;
   }
   if (typeof pending_tile_packets !== 'undefined') {
     pending_tile_packets = [];
+  }
+
+  // Reset terrain texture state to force re-creation on retry
+  if (typeof maptiletypes !== 'undefined') {
+    maptiletypes = null;
+  }
+  if (typeof maptiles_data !== 'undefined') {
+    maptiles_data = null;
+  }
+  if (typeof freeciv_uniforms !== 'undefined') {
+    freeciv_uniforms = null;
   }
 
   // Reset parent notification state so retry can send notifications again

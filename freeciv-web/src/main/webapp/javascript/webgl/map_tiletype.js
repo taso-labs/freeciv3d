@@ -38,7 +38,7 @@ function init_placeholder_tiletype_texture()
   maptiletypes.minFilter = THREE.NearestFilter;
   maptiletypes.needsUpdate = true;
 
-  freelog(LOG_DEBUG, '[Terrain] Created placeholder 1x1 texture for maptiletypes');
+  console.log('[Terrain] Created placeholder 1x1 texture for maptiletypes');
 }
 
 /****************************************************************************
@@ -47,6 +47,8 @@ function init_placeholder_tiletype_texture()
 ****************************************************************************/
 function init_map_tiletype_image()
 {
+  console.log('[Terrain] init_map_tiletype_image called, map size:', map.xsize, 'x', map.ysize);
+
   maptiles_data = new Uint8Array( 4 * map.xsize * map.ysize );
 
   maptiletypes = new THREE.DataTexture(maptiles_data, map.xsize, map.ysize);
@@ -73,6 +75,7 @@ function init_map_tiletype_image()
   // Without this, the first observer shows black terrain while later observers work.
   update_shader_tiletype_uniform();
 
+  console.log('[Terrain] Real texture created, freeciv_uniforms exists:', typeof freeciv_uniforms !== 'undefined' && freeciv_uniforms !== null);
  }
 
 /****************************************************************************
@@ -85,7 +88,12 @@ function update_shader_tiletype_uniform()
   if (typeof freeciv_uniforms !== 'undefined' && freeciv_uniforms !== null
       && freeciv_uniforms.maptiles && maptiletypes) {
     freeciv_uniforms.maptiles.value = maptiletypes;
-    freelog(LOG_DEBUG, '[Terrain] Updated shader uniform to new maptiletypes texture');
+    console.log('[Terrain] Updated shader uniform to new maptiletypes texture');
+  } else {
+    console.log('[Terrain] update_shader_tiletype_uniform skipped:',
+      'freeciv_uniforms=', typeof freeciv_uniforms !== 'undefined' && freeciv_uniforms !== null,
+      'maptiles=', typeof freeciv_uniforms !== 'undefined' && freeciv_uniforms !== null && freeciv_uniforms.maptiles,
+      'maptiletypes=', maptiletypes !== null);
   }
 }
 
