@@ -534,8 +534,10 @@ class LLMWSHandler(websocket.WebSocketHandler):
                     except (ValueError, TypeError):
                         logger.warning(f"Invalid player_id provided by {self.agent_id}: {provided_player_id}")
 
-            # Create new session if not reconnecting
-            if not is_reconnecting:
+            # Create new session if we don't have one from resume
+            # Late reconnection (player_id provided, session expired) still needs a
+            # fresh session for tracking, expiry, and activity management.
+            if self.session_info is None:
                 self.session_info = session_manager.create_session(
                     self.agent_id,
                     api_token,
