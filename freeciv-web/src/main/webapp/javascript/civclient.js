@@ -188,6 +188,9 @@ var terrain_ready_notified = false;
 // Track if terrain data has been populated into the texture (set by handle_map_info)
 // This flag enables renderer_init to know when it's safe to fire terrain_ready
 var terrain_data_populated = false;
+// Track if renderer has completed initialization (set by renderer_init)
+// Used for coordinating terrain_ready notification when packets arrive late
+var renderer_initialized = false;
 
 /****************************************************************************
   Helper function for fallback centering and parent notification.
@@ -1210,6 +1213,9 @@ function reset_observer_state_for_retry()
   }
   if (typeof terrain_data_populated !== 'undefined') {
     terrain_data_populated = false;
+  }
+  if (typeof renderer_initialized !== 'undefined') {
+    renderer_initialized = false;
   }
 }
 

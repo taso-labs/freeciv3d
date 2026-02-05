@@ -96,24 +96,33 @@ function renderer_init() {
         });
       }
 
-      // Fire terrain_ready AFTER renderer_ready, when terrain data is populated.
-      // This ensures both conditions are met: renderer initialized AND terrain in texture.
-      // Solves race condition where iframe shows sky-only before terrain renders.
-      if (typeof terrain_data_populated !== 'undefined' && terrain_data_populated
-          && typeof terrain_ready_notified !== 'undefined' && !terrain_ready_notified
-          && typeof notify_parent_iframe === 'function'
-          && typeof map !== 'undefined' && map
-          && typeof map.xsize === 'number' && typeof map.ysize === 'number') {
-        terrain_ready_notified = true;
-        notify_parent_iframe('terrain_ready', {
-          map_xsize: map.xsize,
-          map_ysize: map.ysize,
-          total_tiles: map.xsize * map.ysize
-        });
-        freelog(LOG_DEBUG, '[IframeNotify] terrain_ready fired from renderer_init, tiles: ' + (map.xsize * map.ysize));
-      } else if (typeof terrain_data_populated !== 'undefined' && !terrain_data_populated) {
-        freelog(LOG_DEBUG, '[Renderer] terrain_data_populated=false, terrain_ready deferred');
+      // Mark renderer as initialized so packhand.js can fire terrain_ready if it arrives late
+      if (typeof renderer_initialized !== 'undefined') {
+        renderer_initialized = true;
       }
+
+      // Use requestAnimationFrame to ensure at least one render frame completes
+      // before firing terrain_ready. This guarantees the GPU has the texture data.
+      requestAnimationFrame(function() {
+        // Fire terrain_ready AFTER renderer_ready, when terrain data is populated.
+        // This ensures both conditions are met: renderer initialized AND terrain in texture.
+        // Solves race condition where iframe shows sky-only before terrain renders.
+        if (typeof terrain_data_populated !== 'undefined' && terrain_data_populated
+            && typeof terrain_ready_notified !== 'undefined' && !terrain_ready_notified
+            && typeof notify_parent_iframe === 'function'
+            && typeof map !== 'undefined' && map
+            && typeof map.xsize === 'number' && typeof map.ysize === 'number') {
+          terrain_ready_notified = true;
+          notify_parent_iframe('terrain_ready', {
+            map_xsize: map.xsize,
+            map_ysize: map.ysize,
+            total_tiles: map.xsize * map.ysize
+          });
+          freelog(LOG_DEBUG, '[IframeNotify] terrain_ready fired from renderer_init, tiles: ' + (map.xsize * map.ysize));
+        } else if (typeof terrain_data_populated !== 'undefined' && !terrain_data_populated) {
+          freelog(LOG_DEBUG, '[Renderer] terrain_data_populated=false, terrain_ready deferred to packhand.js');
+        }
+      });
     }, 300);
     freelog(LOG_DEBUG, '[Renderer] renderer_init() completed successfully');
   }

@@ -251,6 +251,8 @@ global.observer_centered_notified = false;
 global.observer_parent_notified = false;
 // Terrain data population flag (set when texture has actual terrain data)
 global.terrain_data_populated = false;
+// Renderer initialization flag (set when renderer_init completes)
+global.renderer_initialized = false;
 
 // =============================================================================
 // FOLLOW PLAYER SYSTEM (from civclient.js)
@@ -793,6 +795,7 @@ global.resetAllMocks = () => {
   global.observer_centered_notified = false;
   global.observer_parent_notified = false;
   global.terrain_data_populated = false;
+  global.renderer_initialized = false;
 
   // Reset embed mode globals
   global.audio_enabled = true;

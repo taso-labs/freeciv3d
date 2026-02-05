@@ -580,6 +580,26 @@ function handle_map_info(packet)
     terrain_data_populated = true;
     freelog(LOG_DEBUG, '[Terrain] Data populated in texture, tiles: ' + (map.xsize * map.ysize) +
             ', buffered_replayed: ' + buffered_count);
+
+    // FALLBACK: If renderer already initialized (e.g., during retry), fire terrain_ready now.
+    // This handles the race condition where renderer_init's setTimeout fired before this packet arrived.
+    if (typeof renderer_initialized !== 'undefined' && renderer_initialized
+        && typeof terrain_ready_notified !== 'undefined' && !terrain_ready_notified
+        && typeof notify_parent_iframe === 'function') {
+      // Use requestAnimationFrame to ensure GPU has uploaded the texture
+      requestAnimationFrame(function() {
+        if (!terrain_ready_notified) {  // Double-check in case of race
+          terrain_ready_notified = true;
+          notify_parent_iframe('terrain_ready', {
+            map_xsize: map.xsize,
+            map_ysize: map.ysize,
+            total_tiles: map.xsize * map.ysize,
+            source: 'packhand_fallback'  // Debug: indicates late packet arrival
+          });
+          freelog(LOG_DEBUG, '[IframeNotify] terrain_ready fired from packhand.js (renderer already initialized)');
+        }
+      });
+    }
   }
 
   // For observers joining a game in progress, manually trigger C_S_RUNNING
