@@ -219,6 +219,11 @@ class LLMWSHandler(websocket.WebSocketHandler):
         self.unit_moves_consumed: Dict[int, int] = {}
         self.last_tracked_turn: Optional[int] = None
 
+        # State push subscription tracking
+        # When subscribed, this handler receives real-time state updates from CivCom
+        self._state_subscription_id: Optional[str] = None
+        self._state_subscription_fog_of_war: bool = True
+
     def open(self):
         """Handle WebSocket connection opening"""
         logger.info(f"LLM agent connection opened: {self.id}")
@@ -390,6 +395,10 @@ class LLMWSHandler(websocket.WebSocketHandler):
                     self._handle_city_actions_query(msg_data)
                 elif msg_type == 'chat':
                     self._handle_chat(msg_data)
+                elif msg_type == 'subscribe_state':
+                    await self._handle_subscribe_state(msg_data)
+                elif msg_type == 'unsubscribe_state':
+                    self._handle_unsubscribe_state(msg_data)
                 elif self.is_llm_agent:
                     # Enhanced message forwarding with validation logging
                     # Log messages without "pid" field for debugging, but still forward them
@@ -2005,6 +2014,177 @@ class LLMWSHandler(websocket.WebSocketHandler):
                     }
                 )
             )
+
+    # =========================================================================
+    # State Push Subscription Handlers
+    # =========================================================================
+
+    async def _handle_subscribe_state(self, msg_data: Dict[str, Any]):
+        """Handle subscribe_state message - register for real-time state updates.
+
+        Args:
+            msg_data: Message dict with optional fields:
+                - data.fog_of_war: bool (default True) - if False, receive global view
+                - data.include_actions: bool (default True) - include action results
+                - correlation_id: str - for request/response matching
+
+        Response:
+            {
+                "type": "subscribe_state_ack",
+                "subscription_id": "sub_abc123",
+                "fog_of_war": true,
+                "timestamp": 1234567890.0
+            }
+        """
+        correlation_id = msg_data.get('correlation_id')
+
+        if not self.is_llm_agent:
+            error_response = {
+                "type": "error",
+                "code": "E401",
+                "message": "Not authenticated as LLM agent"
+            }
+            if correlation_id:
+                error_response["correlation_id"] = correlation_id
+            self.write_message(json.dumps(error_response))
+            return
+
+        if not self.civcom:
+            error_response = {
+                "type": "error",
+                "code": "E123",
+                "message": "Not connected to game server"
+            }
+            if correlation_id:
+                error_response["correlation_id"] = correlation_id
+            self.write_message(json.dumps(error_response))
+            return
+
+        # Extract options from data field
+        data = msg_data.get('data', {})
+        fog_of_war = data.get('fog_of_war', True)
+        include_actions = data.get('include_actions', True)
+
+        # Unsubscribe from any existing subscription
+        if self._state_subscription_id:
+            self.civcom.unsubscribe_state(self._state_subscription_id)
+            logger.debug(f"Replaced existing subscription {self._state_subscription_id} for {self.agent_id}")
+
+        # Subscribe to state changes with our push callback
+        subscription_id = self.civcom.subscribe_state(
+            callback=self._on_state_change,
+            fog_of_war=fog_of_war,
+            include_actions=include_actions
+        )
+
+        self._state_subscription_id = subscription_id
+        self._state_subscription_fog_of_war = fog_of_war
+
+        logger.info(
+            f"Agent {self.agent_id} subscribed to state updates: "
+            f"id={subscription_id}, fog_of_war={fog_of_war}"
+        )
+
+        # Send acknowledgment
+        response = {
+            "type": "subscribe_state_ack",
+            "subscription_id": subscription_id,
+            "fog_of_war": fog_of_war,
+            "include_actions": include_actions,
+            "timestamp": time.time()
+        }
+        if correlation_id:
+            response["correlation_id"] = correlation_id
+
+        self.write_message(json.dumps(response))
+
+    def _handle_unsubscribe_state(self, msg_data: Dict[str, Any]):
+        """Handle unsubscribe_state message - stop receiving state updates.
+
+        Args:
+            msg_data: Message dict with optional:
+                - correlation_id: str - for request/response matching
+
+        Response:
+            {
+                "type": "unsubscribe_state_ack",
+                "success": true,
+                "timestamp": 1234567890.0
+            }
+        """
+        correlation_id = msg_data.get('correlation_id')
+
+        if not self._state_subscription_id:
+            response = {
+                "type": "unsubscribe_state_ack",
+                "success": False,
+                "message": "No active subscription",
+                "timestamp": time.time()
+            }
+            if correlation_id:
+                response["correlation_id"] = correlation_id
+            self.write_message(json.dumps(response))
+            return
+
+        # Unsubscribe from CivCom
+        success = False
+        if self.civcom:
+            success = self.civcom.unsubscribe_state(self._state_subscription_id)
+
+        old_id = self._state_subscription_id
+        self._state_subscription_id = None
+
+        logger.info(f"Agent {self.agent_id} unsubscribed from state updates: id={old_id}")
+
+        response = {
+            "type": "unsubscribe_state_ack",
+            "success": success,
+            "subscription_id": old_id,
+            "timestamp": time.time()
+        }
+        if correlation_id:
+            response["correlation_id"] = correlation_id
+
+        self.write_message(json.dumps(response))
+
+    async def _on_state_change(self, change_data: Dict[str, Any]):
+        """Callback invoked by CivCom when state changes occur.
+
+        This is called from CivCom._emit_state_change() when units, cities, players,
+        or turns change. We format and push the update to the WebSocket client.
+
+        Args:
+            change_data: Dict with:
+                - change_type: str (e.g., 'city_created', 'unit_removed', 'turn_started')
+                - turn: int
+                - player_id: int or None
+                - details: dict with change-specific data
+                - full_state: dict with complete current state (respects fog_of_war)
+        """
+        if not self._state_subscription_id:
+            return  # No longer subscribed
+
+        try:
+            message = {
+                "type": "state_update",
+                "subscription_id": self._state_subscription_id,
+                "timestamp": time.time(),
+                "data": change_data
+            }
+
+            # Write to WebSocket (use IOLoop callback for thread safety)
+            self.io_loop.add_callback(self._write_state_update, message)
+
+        except Exception as e:
+            logger.error(f"Error pushing state update to {self.agent_id}: {e}", exc_info=True)
+
+    def _write_state_update(self, message: Dict[str, Any]):
+        """Write state update to WebSocket (called from IOLoop for thread safety)."""
+        try:
+            if self.ws_connection:
+                self.write_message(json.dumps(message))
+        except Exception as e:
+            logger.error(f"Failed to write state update to {self.agent_id}: {e}")
 
     def _handle_player_ready(self, msg_data: Dict[str, Any]):
         """Handle player ready status from LLM agent"""

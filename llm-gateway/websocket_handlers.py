@@ -835,6 +835,31 @@ class AgentWebSocketHandler:
             # Preserve optional fields
             if "correlation_id" in message:
                 transformed["correlation_id"] = message["correlation_id"]
+        elif msg_type == "subscribe_state":
+            # Proxy expects: {type: "subscribe_state", data: {fog_of_war: bool, include_actions: bool}, correlation_id (opt)}
+            # Gateway format: {type: "subscribe_state", data: {...}, ...}
+            subscribe_data = {}
+            if "data" in message and isinstance(message["data"], dict):
+                subscribe_data = message["data"]
+
+            transformed = {
+                "type": "subscribe_state",
+                "data": {
+                    "fog_of_war": subscribe_data.get("fog_of_war", True),
+                    "include_actions": subscribe_data.get("include_actions", True)
+                }
+            }
+
+            # Preserve optional correlation_id
+            if "correlation_id" in message:
+                transformed["correlation_id"] = message["correlation_id"]
+        elif msg_type == "unsubscribe_state":
+            # Proxy expects: {type: "unsubscribe_state", correlation_id (opt)}
+            transformed = {"type": "unsubscribe_state"}
+
+            # Preserve optional correlation_id
+            if "correlation_id" in message:
+                transformed["correlation_id"] = message["correlation_id"]
         elif msg_type == "conn_pong":
             # Agent is responding to a conn_ping we may have sent earlier
             # However, CivCom already handles civserver keep-alive internally (PACKET_CONN_PING/PONG)

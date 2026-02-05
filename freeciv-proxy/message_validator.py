@@ -54,6 +54,8 @@ class MessageType(Enum):
     UNIT_ACTIONS_QUERY = "unit_actions_query"  # Query available actions for a unit
     CITY_ACTIONS_QUERY = "city_actions_query"  # Query available actions for a city
     CHAT = "chat"  # Send chat message/command to game server
+    SUBSCRIBE_STATE = "subscribe_state"  # Subscribe to real-time state push updates
+    UNSUBSCRIBE_STATE = "unsubscribe_state"  # Unsubscribe from state push updates
 
 class MessageValidator:
     """
@@ -223,6 +225,49 @@ class MessageValidator:
             },
             "field_constraints": {
                 "message": {"max_length": 500},
+                "correlation_id": {"max_length": 64, "pattern": r"^[a-zA-Z0-9_-]+$"},
+                "trace_context": {"max_keys": 5},
+            },
+        },
+        MessageType.SUBSCRIBE_STATE: {
+            "required_fields": ["type"],
+            "optional_fields": [
+                "data",
+                "agent_id",
+                "timestamp",
+                "correlation_id",
+                "trace_context",
+            ],
+            "field_types": {
+                "type": str,
+                "data": dict,
+                "agent_id": str,
+                "timestamp": (int, float),
+                "correlation_id": str,
+                "trace_context": dict,
+            },
+            "field_constraints": {
+                "correlation_id": {"max_length": 64, "pattern": r"^[a-zA-Z0-9_-]+$"},
+                "trace_context": {"max_keys": 5},
+                "data": {"max_keys": 5},  # fog_of_war, include_actions
+            },
+        },
+        MessageType.UNSUBSCRIBE_STATE: {
+            "required_fields": ["type"],
+            "optional_fields": [
+                "agent_id",
+                "timestamp",
+                "correlation_id",
+                "trace_context",
+            ],
+            "field_types": {
+                "type": str,
+                "agent_id": str,
+                "timestamp": (int, float),
+                "correlation_id": str,
+                "trace_context": dict,
+            },
+            "field_constraints": {
                 "correlation_id": {"max_length": 64, "pattern": r"^[a-zA-Z0-9_-]+$"},
                 "trace_context": {"max_keys": 5},
             },

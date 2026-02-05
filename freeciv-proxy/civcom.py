@@ -405,6 +405,14 @@ class CivCom(Thread):
         self.port_semaphore: Optional['threading.Semaphore'] = None
         self.handshake_complete = Event()
 
+        # State push subscribers - list of callbacks to notify on state changes
+        # Each subscriber is a dict with:
+        #   - 'callback': async function to call with state change data
+        #   - 'fog_of_war': bool - if True, filter state to subscriber's player view
+        #   - 'subscription_id': unique identifier for this subscription
+        #   - 'include_actions': bool - if True, include action result notifications
+        self._state_subscribers: List[Dict[str, Any]] = []
+
         logger.info(
             f"🆕 CivCom instance created:\n"
             f"   username={username}, port={civserverport}, key={key}\n"
@@ -428,6 +436,177 @@ class CivCom(Thread):
                 # Clear reference to prevent double-release
                 self.port_semaphore = None
                 self.handshake_complete.set()
+
+    # =========================================================================
+    # State Push Subscription Methods
+    # =========================================================================
+
+    def subscribe_state(self, callback, fog_of_war: bool = True, include_actions: bool = True) -> str:
+        """Register a callback for real-time state change notifications.
+
+        Args:
+            callback: Async function to call with state change data.
+                      Signature: async def callback(change_data: dict) -> None
+            fog_of_war: If True (default), filter state to this connection's player view.
+                       If False, provide global view (all units/cities visible).
+            include_actions: If True (default), include action result notifications.
+
+        Returns:
+            Subscription ID (string) for later unsubscription.
+
+        Example change_data structure:
+            {
+                'change_type': 'city_created' | 'city_updated' | 'city_removed' |
+                              'unit_created' | 'unit_updated' | 'unit_removed' |
+                              'player_updated' | 'turn_started' | 'game_ended',
+                'turn': 5,
+                'player_id': 1,  # The player who triggered the change (if applicable)
+                'details': {...},  # Change-specific details (e.g., city/unit data)
+                'full_state': {...}  # Complete current state (respects fog_of_war)
+            }
+        """
+        import uuid
+        subscription_id = f"sub_{uuid.uuid4().hex[:12]}"
+
+        subscriber = {
+            'callback': callback,
+            'fog_of_war': fog_of_war,
+            'subscription_id': subscription_id,
+            'include_actions': include_actions
+        }
+
+        self._state_subscribers.append(subscriber)
+        logger.info(
+            f"[{self.username}] State subscription added: id={subscription_id}, "
+            f"fog_of_war={fog_of_war}, include_actions={include_actions}"
+        )
+        return subscription_id
+
+    def unsubscribe_state(self, subscription_id: str) -> bool:
+        """Remove a state change subscription.
+
+        Args:
+            subscription_id: The ID returned from subscribe_state().
+
+        Returns:
+            True if subscription was found and removed, False otherwise.
+        """
+        for i, sub in enumerate(self._state_subscribers):
+            if sub['subscription_id'] == subscription_id:
+                self._state_subscribers.pop(i)
+                logger.info(f"[{self.username}] State subscription removed: id={subscription_id}")
+                return True
+
+        logger.warning(f"[{self.username}] Subscription not found for removal: id={subscription_id}")
+        return False
+
+    def _emit_state_change(self, change_type: str, details: Dict[str, Any], player_id: Optional[int] = None):
+        """Notify all subscribers of a state change.
+
+        This is called internally when state mutations occur (city/unit creation,
+        updates, removal, turn changes, etc.).
+
+        Args:
+            change_type: Type of change (e.g., 'city_created', 'unit_removed')
+            details: Change-specific data (e.g., the city or unit that changed)
+            player_id: The player who triggered/owns the change (if applicable)
+        """
+        if not self._state_subscribers:
+            return  # No subscribers, skip processing
+
+        # Build change data for each subscriber (respecting fog_of_war)
+        for sub in self._state_subscribers:
+            try:
+                # Get state based on fog_of_war setting
+                if sub['fog_of_war']:
+                    # Filtered view - only this player's units/cities
+                    full_state = self.get_full_state(self.player_id)
+                else:
+                    # Global view - all units/cities visible
+                    full_state = self.get_full_state_global()
+
+                change_data = {
+                    'change_type': change_type,
+                    'turn': self.game_turn,
+                    'player_id': player_id,
+                    'details': details,
+                    'full_state': full_state
+                }
+
+                # Schedule the callback (don't await - fire and forget)
+                callback = sub['callback']
+                if asyncio.iscoroutinefunction(callback):
+                    asyncio.create_task(self._safe_emit_callback(callback, change_data, sub['subscription_id']))
+                else:
+                    # Sync callback - wrap in try/except
+                    try:
+                        callback(change_data)
+                    except Exception as e:
+                        logger.error(f"State subscriber callback error (sync): {e}", exc_info=True)
+
+            except Exception as e:
+                logger.error(
+                    f"Error building state change for subscriber {sub['subscription_id']}: {e}",
+                    exc_info=True
+                )
+
+    async def _safe_emit_callback(self, callback, change_data: Dict[str, Any], subscription_id: str):
+        """Safely execute an async subscriber callback with error handling."""
+        try:
+            await callback(change_data)
+        except Exception as e:
+            logger.error(
+                f"State subscriber callback error (async) for {subscription_id}: {e}",
+                exc_info=True
+            )
+
+    def get_full_state_global(self) -> Dict[str, Any]:
+        """Get complete game state with NO fog-of-war filtering.
+
+        This is used for observer connections that need to see all players'
+        units and cities for stats tracking and spectator views.
+
+        Returns:
+            Complete state dict with all units/cities from all players.
+        """
+        map_info = self._get_valid_map_info()
+        all_players_raw = getattr(self, 'all_players', [])
+        players_dict = self._normalize_to_dict(all_players_raw)
+
+        # Global view: include ALL units and cities without filtering
+        all_units = self._normalize_to_dict(self.player_units)
+        # Merge in other_units if they exist and are tracked separately
+        other_units = getattr(self, 'other_units', {})
+        if other_units:
+            all_units.update(self._normalize_to_dict(other_units))
+
+        all_cities = self._normalize_to_dict(self.player_cities)
+
+        game_turn = getattr(self, 'game_turn', 1)
+        game_phase = getattr(self, 'game_phase', 'movement')
+        game_dict = {
+            'turn': game_turn,
+            'phase': game_phase,
+            'is_over': getattr(self, 'game_is_over', False),
+            'winners': getattr(self, 'winners', [])
+        }
+
+        techs_dict = self._build_techs_dict()
+        wonders_dict = self._build_wonders_dict(all_players_raw)
+        spaceship_dict = self._build_spaceship_dict()
+
+        return {
+            'turn': game_turn,
+            'phase': game_phase,
+            'units': all_units,
+            'cities': all_cities,
+            'players': players_dict,
+            'techs': techs_dict,
+            'wonders': wonders_dict,
+            'spaceship': spaceship_dict,
+            'map': map_info,
+            'game': game_dict
+        }
 
     def invalidate_action_cache(self, player_id=None, cache_type=None):
         """Invalidate cached actions when game state changes.
@@ -1494,6 +1673,13 @@ class CivCom(Thread):
                 self.turn_started = True  # Signal to state_query that turn is active
                 self.turn_advance_event.set()  # Wake up any coroutines waiting for turn start
 
+                # Emit state change event for subscribers
+                self._emit_state_change(
+                    'turn_started',
+                    {'turn': new_turn},
+                    player_id=None
+                )
+
             # CRITICAL: Connection info packet - contains player_num assignment
             # This is the FIX for the PACKET_CONN_INFO bug
             elif packet_type == PACKET_CONN_INFO:
@@ -1542,13 +1728,21 @@ class CivCom(Thread):
                         # Log if name field is missing - helps debug protocol issues
                         logger.warning(f"PACKET_PLAYER_INFO missing 'name' field for player {player_id}, using fallback")
                         player_name = f'Player{player_id}'
-                    self.all_players.append({
+                    player_data = {
                         'id': player_id,
                         'name': player_name,
                         'nation': nation_name,  # String name (e.g., 'Romans', 'Americans')
                         'score': packet.get('score', 0),
                         'gold': packet.get('gold', 0)
-                    })
+                    }
+                    self.all_players.append(player_data)
+
+                    # Emit state change event for subscribers
+                    self._emit_state_change(
+                        'player_updated',
+                        {'player': player_data},
+                        player_id=player_id
+                    )
 
             # NOTE: PACKET_RESEARCH_INFO is handled later in the packet processing chain
             # at line ~1465 where it's stored in self.research_info (the authoritative store)
@@ -1601,8 +1795,18 @@ class CivCom(Thread):
                     if not isinstance(self.player_units, dict):
                         self.player_units = {}
 
+                    # Detect if this is a new unit or an update
+                    is_new_unit = unit_id not in self.player_units
+
                     self.player_units[unit_id] = unit_data
                     total_units = len(self.player_units)
+
+                    # Emit state change event for subscribers
+                    self._emit_state_change(
+                        'unit_created' if is_new_unit else 'unit_updated',
+                        {'unit_id': unit_id, 'unit': unit_data},
+                        player_id=owner
+                    )
 
                     # Track when we receive our first unit (for initial state readiness)
                     if not self.initial_units_received and self.player_id is not None and owner == self.player_id:
@@ -1658,9 +1862,20 @@ class CivCom(Thread):
                     if not isinstance(self.player_cities, dict):
                         self.player_cities = {}
 
+                    # Detect if this is a new city or an update
+                    is_new_city = city_id not in self.player_cities
+
                     self.player_cities[city_id] = city_data
                     # Invalidate wonder cache for this player (city improvements may have changed)
                     self._wonder_cache.pop(f"{owner}_wonders", None)
+
+                    # Emit state change event for subscribers
+                    self._emit_state_change(
+                        'city_created' if is_new_city else 'city_updated',
+                        {'city_id': city_id, 'city': city_data},
+                        player_id=owner
+                    )
+
                     logger.info(f"✓ Stored city {city_id} ({city_data['name']}, size={city_data['size']}) for owner {owner}")
 
             # City removal packet - sent when a city is destroyed or disbanded
@@ -1679,6 +1894,13 @@ class CivCom(Thread):
                     # Invalidate wonder cache for previous owner (wonders may be lost)
                     if owner is not None:
                         self._wonder_cache.pop(f"{owner}_wonders", None)
+
+                    # Emit state change event for subscribers
+                    self._emit_state_change(
+                        'city_removed',
+                        {'city_id': city_id, 'city_name': city_name, 'city': removed_city},
+                        player_id=owner
+                    )
 
                     logger.info(f"✓ Removed city {city_id} ({city_name}) for owner {owner}")
 
@@ -1739,7 +1961,16 @@ class CivCom(Thread):
                 if unit_id is not None and isinstance(self.player_units, dict):
                     if unit_id in self.player_units:
                         removed_unit = self.player_units.pop(unit_id)
-                        unit_type = removed_unit.get('utype', 'unknown')
+                        unit_type = removed_unit.get('type', 'unknown')
+                        owner = removed_unit.get('owner')
+
+                        # Emit state change event for subscribers
+                        self._emit_state_change(
+                            'unit_removed',
+                            {'unit_id': unit_id, 'unit_type': unit_type, 'unit': removed_unit},
+                            player_id=owner
+                        )
+
                         logger.info(f"✓ Removed unit {unit_id} (type={unit_type}) - consumed/destroyed")
                     else:
                         logger.debug(f"Received PACKET_UNIT_REMOVE for unit {unit_id} (not in our tracked units)")
@@ -1961,6 +2192,14 @@ class CivCom(Thread):
                     f"🏁 GAME OVER for {self.username}:\n"
                     f"   Received PACKET_ENDGAME_REPORT, game has ended.\n"
                     f"   Waiting for PACKET_ENDGAME_PLAYER packets with winner info."
+                )
+
+                # Emit state change event for subscribers
+                # Note: winners list may be empty until PACKET_ENDGAME_PLAYER packets arrive
+                self._emit_state_change(
+                    'game_ended',
+                    {'turn': self.game_turn},
+                    player_id=None
                 )
 
             # ENDGAME PLAYER packet - contains per-player endgame stats

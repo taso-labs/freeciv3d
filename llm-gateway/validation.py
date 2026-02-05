@@ -175,6 +175,22 @@ class ActionData(BaseModel):
         return v
 
 
+class SubscribeStateData(BaseModel):
+    """Validation for SUBSCRIBE_STATE message data
+
+    Used to subscribe to real-time state push updates from the game server.
+    """
+    fog_of_war: bool = Field(
+        True,
+        description="If True (default), receive player's fog-of-war view. "
+                    "If False, receive global view (all units/cities visible)."
+    )
+    include_actions: bool = Field(
+        True,
+        description="If True (default), include action result notifications in updates."
+    )
+
+
 class LLMMessage(BaseModel):
     """Complete LLM message validation"""
     type: str = Field(..., pattern=r'^[a-z_]+$')
@@ -188,7 +204,10 @@ class LLMMessage(BaseModel):
         valid_types = [
             'llm_connect', 'llm_disconnect', 'state_query', 'state_update',
             'action', 'action_result', 'turn_start', 'turn_end',
-            'ping', 'pong', 'error', 'chat'
+            'ping', 'pong', 'error', 'chat',
+            # State push subscription messages
+            'subscribe_state', 'unsubscribe_state',
+            'subscribe_state_ack', 'unsubscribe_state_ack'
         ]
         if v not in valid_types:
             raise ValueError(f'Invalid message type: {v}')
@@ -215,6 +234,8 @@ class LLMMessage(BaseModel):
             StateQueryData(**v)
         elif msg_type == 'action':
             ActionData(**v)
+        elif msg_type == 'subscribe_state':
+            SubscribeStateData(**v)
 
         return v
 
