@@ -80,6 +80,8 @@ class MessageValidator:
                 "auto_ready",
                 "trace_context",  # OpenTelemetry trace propagation
                 "game_config",  # Custom game settings (map size, landmass, etc.)
+                "player_id",  # For late reconnection when session expired
+                "expected_turn",  # State verification on reconnection
             ],
             "field_types": {
                 "type": str,
@@ -90,7 +92,10 @@ class MessageValidator:
                 "leader_name": str,
                 "game_id": str,
                 "trace_context": dict,
+                "auto_ready": bool,
                 "game_config": dict,
+                "player_id": int,
+                "expected_turn": int,
             },
             "field_constraints": {
                 "agent_id": {"max_length": 50, "pattern": r"^[a-zA-Z0-9_-]+$"},
@@ -101,6 +106,8 @@ class MessageValidator:
                 "leader_name": {"max_length": 100},
                 "trace_context": {"max_keys": 5},  # trace_id, span_id, trace_flags, trace_state
                 "game_config": {"max_keys": 20},  # Limit config keys to prevent oversized payloads
+                "player_id": {"min_value": 0, "max_value": 511},
+                "expected_turn": {"min_value": 0, "max_value": 32767},
             },
         },
         MessageType.STATE_QUERY: {

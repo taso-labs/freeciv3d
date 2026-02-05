@@ -111,6 +111,11 @@ class LLMConnectData(BaseModel):
         ge=0,
         lt=512
     )
+    expected_turn: Optional[int] = Field(
+        default=None,
+        description="Expected game turn for state verification on reconnection",
+        ge=0
+    )
 
     @validator('api_token')
     def validate_token(cls, v):
