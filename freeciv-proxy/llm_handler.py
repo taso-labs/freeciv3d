@@ -534,8 +534,10 @@ class LLMWSHandler(websocket.WebSocketHandler):
                     except (ValueError, TypeError):
                         logger.warning(f"Invalid player_id provided by {self.agent_id}: {provided_player_id}")
 
-            # Create new session if not reconnecting
-            if not is_reconnecting:
+            # Create new session if we don't have one from resume
+            # Late reconnection (player_id provided, session expired) still needs a
+            # fresh session for tracking, expiry, and activity management.
+            if self.session_info is None:
                 self.session_info = session_manager.create_session(
                     self.agent_id,
                     api_token,
@@ -612,15 +614,26 @@ class LLMWSHandler(websocket.WebSocketHandler):
 
                     # STATE VERIFICATION: Check if expected_turn matches actual game state
                     # This catches the case where reconnection went to a different/reset game
+                    # Allow ±1 turn tolerance for reused CivCom: a narrow race condition exists
+                    # where the civserver advances a turn between agent disconnect and pause
+                    # command delivery. Session resumption already proves game identity, so
+                    # the turn check is a secondary sanity check here.
                     if expected_turn is not None:
                         current_turn = getattr(self.civcom, 'game_turn', 0)
-                        if current_turn != expected_turn:
+                        turn_drift = abs(current_turn - expected_turn)
+                        if turn_drift > 1:
                             self._abort_with_state_mismatch(
                                 expected_turn, current_turn,
                                 'Game may have been reset or connected to wrong server',
                                 correlation_id
                             )
                             return
+                        elif turn_drift == 1:
+                            logger.warning(
+                                f"⚠️ Turn drift of 1 for {self.agent_id} (reused CivCom): "
+                                f"expected={expected_turn}, actual={current_turn}. "
+                                f"Likely race between disconnect and pause command."
+                            )
                         else:
                             logger.info(
                                 f"✅ State verification passed for {self.agent_id} (reused CivCom): turn={current_turn}"
@@ -652,13 +665,20 @@ class LLMWSHandler(websocket.WebSocketHandler):
                             await asyncio.sleep(GAME_INFO_POLL_INTERVAL_SEC)
 
                         waited = time.monotonic() - start_time
-                        if current_turn != expected_turn:
+                        turn_drift = abs(current_turn - expected_turn)
+                        if turn_drift > 1:
                             self._abort_with_state_mismatch(
                                 expected_turn, current_turn,
                                 'Game may have been reset due to civserver --quitidle timeout',
                                 correlation_id, waited
                             )
                             return
+                        elif turn_drift == 1:
+                            logger.warning(
+                                f"⚠️ Turn drift of 1 for {self.agent_id} (new CivCom): "
+                                f"expected={expected_turn}, actual={current_turn} (waited {waited:.1f}s). "
+                                f"Likely race between disconnect and pause command."
+                            )
                         else:
                             logger.info(
                                 f"✅ State verification passed for {self.agent_id} (new CivCom): turn={current_turn} (waited {waited:.1f}s)"
@@ -900,6 +920,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                     'player_id': self.player_id,
                     'game_id': self.game_id,
                     'civserver_port': game_session.civserver_port,  # SPECTATOR FIX: Port for spectator URL generation
+                    'server_turn': getattr(self.civcom, 'game_turn', 0) if self.civcom else 0,
                     'session_expires_in': int(self.session_info.expires_at - time.time()),
                     'status': 'authenticated',
                     'auto_ready': auto_ready,  # Indicates if player was auto-marked ready
