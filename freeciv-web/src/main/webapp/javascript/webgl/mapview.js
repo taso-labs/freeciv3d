@@ -177,8 +177,6 @@ function webgl_start_renderer()
  This will render the map terrain mesh.
 ****************************************************************************/
 function init_webgl_mapview() {
-  console.log('[Terrain] init_webgl_mapview called, maptiletypes:', maptiletypes ? (maptiletypes.image ? maptiletypes.image.width + 'x' + maptiletypes.image.height : 'no image') : 'null');
-
   selected_unit_material = new THREE.MeshBasicMaterial( { color: 0xf6f7bf, transparent: true, opacity: 0.7} );
 
   var vertex_shader = $('#terrain_vertex_shh').html();
