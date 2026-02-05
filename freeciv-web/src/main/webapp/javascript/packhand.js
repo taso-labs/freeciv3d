@@ -571,21 +571,15 @@ function handle_map_info(packet)
     freelog(LOG_DEBUG, '[Observer] handle_map_info: after replay, non_zero_tiles (sample)=' + non_zero_count);
   }
 
-  // Notify parent that terrain texture is populated and ready to display.
-  // This fires AFTER tile data is in the texture, unlike renderer_ready
-  // which fires when Three.js starts (before tile data arrives).
-  // This solves the race condition where iframes show sky-only background.
-  if (typeof terrain_ready_notified !== 'undefined' && !terrain_ready_notified
-      && typeof notify_parent_iframe === 'function'
+  // Mark terrain data as populated in texture.
+  // The actual terrain_ready notification is fired by renderer_init() AFTER the renderer
+  // is initialized, to ensure both conditions are met: terrain data populated AND renderer ready.
+  // This solves the race condition where terrain_ready fired before renderer could display it.
+  if (typeof terrain_data_populated !== 'undefined'
       && map && typeof map.xsize === 'number' && typeof map.ysize === 'number') {
-    terrain_ready_notified = true;
-    notify_parent_iframe('terrain_ready', {
-      map_xsize: map.xsize,
-      map_ysize: map.ysize,
-      total_tiles: map.xsize * map.ysize,
-      buffered_tiles_replayed: buffered_count
-    });
-    freelog(LOG_DEBUG, '[IframeNotify] terrain_ready fired, tiles: ' + (map.xsize * map.ysize));
+    terrain_data_populated = true;
+    freelog(LOG_DEBUG, '[Terrain] Data populated in texture, tiles: ' + (map.xsize * map.ysize) +
+            ', buffered_replayed: ' + buffered_count);
   }
 
   // For observers joining a game in progress, manually trigger C_S_RUNNING

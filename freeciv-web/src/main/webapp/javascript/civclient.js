@@ -185,6 +185,9 @@ var observer_centered_notified = false;
 var observer_parent_notified = false;
 // Track if we've sent terrain_ready notification (fires once per game load)
 var terrain_ready_notified = false;
+// Track if terrain data has been populated into the texture (set by handle_map_info)
+// This flag enables renderer_init to know when it's safe to fire terrain_ready
+var terrain_data_populated = false;
 
 /****************************************************************************
   Helper function for fallback centering and parent notification.
@@ -1204,6 +1207,9 @@ function reset_observer_state_for_retry()
   observer_parent_notified = false;
   if (typeof terrain_ready_notified !== 'undefined') {
     terrain_ready_notified = false;
+  }
+  if (typeof terrain_data_populated !== 'undefined') {
+    terrain_data_populated = false;
   }
 }
 

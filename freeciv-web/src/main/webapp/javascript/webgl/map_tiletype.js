@@ -21,6 +21,27 @@ var maptiletypes;
 var maptiles_data;
 
 /****************************************************************************
+  Initialize a 1x1 placeholder texture for maptiletypes.
+  This ensures maptiletypes is never undefined when init_webgl_mapview() runs,
+  preventing shader failures due to undefined uniform values.
+  Called early during page initialization, before any packets arrive.
+****************************************************************************/
+function init_placeholder_tiletype_texture()
+{
+  if (maptiletypes != null) return;  // Already initialized
+
+  // Create minimal 1x1 texture as placeholder
+  var placeholder_data = new Uint8Array(4);  // RGBA for 1 pixel
+  maptiletypes = new THREE.DataTexture(placeholder_data, 1, 1);
+  maptiletypes.colorSpace = THREE.NoColorSpace;
+  maptiletypes.magFilter = THREE.NearestFilter;
+  maptiletypes.minFilter = THREE.NearestFilter;
+  maptiletypes.needsUpdate = true;
+
+  freelog(LOG_DEBUG, '[Terrain] Created placeholder 1x1 texture for maptiletypes');
+}
+
+/****************************************************************************
   Returns a texture containing each map tile, where the color of each pixel
   indicates which Freeciv tile type the pixel is.
 ****************************************************************************/

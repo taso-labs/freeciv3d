@@ -249,6 +249,8 @@ global.embed_mode = false;
 global.terrain_ready_notified = false;
 global.observer_centered_notified = false;
 global.observer_parent_notified = false;
+// Terrain data population flag (set when texture has actual terrain data)
+global.terrain_data_populated = false;
 
 // =============================================================================
 // FOLLOW PLAYER SYSTEM (from civclient.js)
@@ -790,6 +792,7 @@ global.resetAllMocks = () => {
   global.terrain_ready_notified = false;
   global.observer_centered_notified = false;
   global.observer_parent_notified = false;
+  global.terrain_data_populated = false;
 
   // Reset embed mode globals
   global.audio_enabled = true;
