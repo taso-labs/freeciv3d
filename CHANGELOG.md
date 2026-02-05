@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.45](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.44...freeciv3d-v0.3.45) (2026-02-05)
+
+
+### Features
+
+* add terrain_ready event for iframe loading communication ([#129](https://github.com/taso-ventures/freeciv3d/issues/129)) ([bcf7edd](https://github.com/taso-ventures/freeciv3d/commit/bcf7edddb958b9fe3ab19645ea1053928ac98c9f))
+
 ## [0.3.44](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.43...freeciv3d-v0.3.44) (2026-02-02)
 
 
