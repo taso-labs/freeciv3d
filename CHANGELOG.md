@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.47](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.46...freeciv3d-v0.3.47) (2026-02-06)
+
+
+### Bug Fixes
+
+* **gateway:** prevent proxy reconnection race condition ([#134](https://github.com/taso-ventures/freeciv3d/issues/134)) ([9b019b6](https://github.com/taso-ventures/freeciv3d/commit/9b019b66478a46702dcf1eb9469cea33d785171c))
+
 ## [0.3.46](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.45...freeciv3d-v0.3.46) (2026-02-05)
 
 
