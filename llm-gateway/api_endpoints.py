@@ -295,6 +295,37 @@ async def get_game_state(
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
+@router.get("/game/{game_id}/global-state")
+async def get_global_game_state(
+    game_id: str,
+    auth: Dict[str, Any] = Depends(verify_api_key)
+) -> Dict[str, Any]:
+    """Get authoritative global game state without fog of war.
+
+    Returns all units, cities, and players from the game server's in-memory
+    state. Used by match orchestrator for stats collection.
+    """
+    try:
+        if gateway is None:
+            raise HTTPException(status_code=500, detail="Gateway not initialized")
+
+        result = await gateway.get_global_game_state(game_id)
+
+        if not result["success"]:
+            if "not found" in result["error"].lower():
+                raise HTTPException(status_code=404, detail=result["error"])
+            else:
+                raise HTTPException(status_code=500, detail=result["error"])
+
+        return result
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting global game state for {game_id}: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
 @router.post("/game/{game_id}/action")
 async def submit_action(
     game_id: str,

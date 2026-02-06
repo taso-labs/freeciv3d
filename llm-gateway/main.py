@@ -767,6 +767,49 @@ class LLMGateway:
                 "error": f"State query failed: {str(e)}"
             }
 
+    async def get_global_game_state(self, game_id: str) -> Dict[str, Any]:
+        """Get authoritative global game state without fog of war filtering.
+
+        Used by match orchestrator for stats collection. Unlike get_game_state(),
+        this returns all units/cities from all players regardless of visibility.
+        """
+        try:
+            if game_id not in self.game_sessions:
+                return {
+                    "success": False,
+                    "error": f"Game not found: {game_id}"
+                }
+
+            state_request = {
+                "type": "global_state_query",
+            }
+
+            response = await self._send_request_and_wait(game_id, state_request, timeout=15.0)
+
+            if response.get("type") == "global_state_response":
+                return {
+                    "success": True,
+                    "data": response.get("data", {}),
+                    "timestamp": response.get("timestamp")
+                }
+            elif response.get("type") == "error":
+                return {
+                    "success": False,
+                    "error": response.get("message", "Unknown error from proxy")
+                }
+            else:
+                return {
+                    "success": False,
+                    "error": response.get("error", "Unknown error from proxy")
+                }
+
+        except Exception as e:
+            logger.error(f"Error getting global game state for {game_id}: {e}")
+            return {
+                "success": False,
+                "error": f"Global state query failed: {str(e)}"
+            }
+
     async def submit_action(self, game_id: str, action: Dict[str, Any]) -> Dict[str, Any]:
         """Submit action to FreeCiv proxy"""
         try:

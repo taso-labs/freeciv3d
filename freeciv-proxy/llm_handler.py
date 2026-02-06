@@ -391,6 +391,8 @@ class LLMWSHandler(websocket.WebSocketHandler):
                     self._handle_city_actions_query(msg_data)
                 elif msg_type == 'chat':
                     self._handle_chat(msg_data)
+                elif msg_type == 'global_state_query':
+                    await self._handle_global_state_query(msg_data)
                 elif self.is_llm_agent:
                     # Enhanced message forwarding with validation logging
                     # Log messages without "pid" field for debugging, but still forward them
@@ -1260,6 +1262,81 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 'details': {
                     'agent_id': self.agent_id,
                     'player_id': self.player_id,
+                    'error': str(e)
+                }
+            }
+            if correlation_id:
+                error_response['correlation_id'] = correlation_id
+            self.write_message(json.dumps(error_response))
+
+    async def _handle_global_state_query(self, msg_data: Dict[str, Any]):
+        """Handle global state query - returns full state without fog of war filtering.
+
+        Unlike state_query (which returns a single player's fog-of-war view),
+        this returns the authoritative global state from CivCom for stats/observer use.
+        """
+        correlation_id = msg_data.get('correlation_id')
+
+        if not self.is_llm_agent:
+            logger.warning(f"❌ Agent {self.agent_id} not authenticated for global_state_query")
+            error_response = {
+                'type': 'error',
+                'code': 'E120',
+                'message': 'Not authenticated as LLM agent'
+            }
+            if correlation_id:
+                error_response['correlation_id'] = correlation_id
+            self.write_message(json.dumps(error_response))
+            return
+
+        if not self.civcom or self.civcom.stopped:
+            logger.error(
+                f"❌ GLOBAL_STATE_QUERY FAILED for {self.agent_id}: civcom not connected"
+            )
+            error_response = {
+                'type': 'error',
+                'code': 'E123',
+                'message': 'Connection to game server lost',
+                'details': {
+                    'agent_id': self.agent_id,
+                    'suggestion': 'Reconnect to game server'
+                }
+            }
+            if correlation_id:
+                error_response['correlation_id'] = correlation_id
+            self.write_message(json.dumps(error_response))
+            return
+
+        try:
+            full_state = self.civcom.get_full_state_global()
+
+            logger.info(
+                f"✓ GLOBAL_STATE_QUERY SUCCESS for agent {self.agent_id}:\n"
+                f"   Turn: {full_state.get('turn', 'N/A')}\n"
+                f"   Units: {len(full_state.get('units', {}))}\n"
+                f"   Cities: {len(full_state.get('cities', {}))}\n"
+                f"   Players: {len(full_state.get('players', {}))}"
+            )
+
+            response = {
+                'type': 'global_state_response',
+                'data': full_state,
+                'timestamp': time.time()
+            }
+            if correlation_id:
+                response['correlation_id'] = correlation_id
+            self.write_message(json.dumps(response))
+
+        except Exception as e:
+            logger.exception(
+                f"❌ GLOBAL_STATE_QUERY EXCEPTION for agent {self.agent_id}: {e}"
+            )
+            error_response = {
+                'type': 'error',
+                'code': 'E121',
+                'message': f'Global state query failed: {str(e)}',
+                'details': {
+                    'agent_id': self.agent_id,
                     'error': str(e)
                 }
             }

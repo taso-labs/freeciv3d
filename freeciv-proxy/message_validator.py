@@ -54,6 +54,7 @@ class MessageType(Enum):
     UNIT_ACTIONS_QUERY = "unit_actions_query"  # Query available actions for a unit
     CITY_ACTIONS_QUERY = "city_actions_query"  # Query available actions for a city
     CHAT = "chat"  # Send chat message/command to game server
+    GLOBAL_STATE_QUERY = "global_state_query"  # Query full global state (no fog of war)
 
 class MessageValidator:
     """
@@ -230,6 +231,19 @@ class MessageValidator:
             },
             "field_constraints": {
                 "message": {"max_length": 500},
+                "correlation_id": {"max_length": 64, "pattern": r"^[a-zA-Z0-9_-]+$"},
+                "trace_context": {"max_keys": 5},
+            },
+        },
+        MessageType.GLOBAL_STATE_QUERY: {
+            "required_fields": ["type"],
+            "optional_fields": ["correlation_id", "trace_context"],
+            "field_types": {
+                "type": str,
+                "correlation_id": str,
+                "trace_context": dict,
+            },
+            "field_constraints": {
                 "correlation_id": {"max_length": 64, "pattern": r"^[a-zA-Z0-9_-]+$"},
                 "trace_context": {"max_keys": 5},
             },

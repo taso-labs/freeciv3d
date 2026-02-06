@@ -856,6 +856,10 @@ class AgentWebSocketHandler:
             # Preserve optional fields
             if "correlation_id" in message:
                 transformed["correlation_id"] = message["correlation_id"]
+        elif msg_type == "global_state_query":
+            # Pass through with type and correlation_id
+            allowed_fields = {"type", "correlation_id"}
+            transformed = {k: v for k, v in transformed.items() if k in allowed_fields}
         elif msg_type == "conn_pong":
             # Agent is responding to a conn_ping we may have sent earlier
             # However, CivCom already handles civserver keep-alive internally (PACKET_CONN_PING/PONG)

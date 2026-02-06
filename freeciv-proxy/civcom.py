@@ -2468,6 +2468,53 @@ class CivCom(Thread):
             'game': game_dict
         }
 
+    def get_full_state_global(self) -> dict:
+        """Get complete game state with NO fog-of-war filtering.
+
+        Returns all units and cities from all players, providing an
+        authoritative global view for stats tracking and observer APIs.
+
+        Returns:
+            Complete state dict with all units/cities from all players.
+        """
+        map_info = self._get_valid_map_info()
+        all_players_raw = getattr(self, 'all_players', [])
+        players_dict = self._normalize_to_dict(all_players_raw)
+
+        # Global view: include ALL units without filtering by owner
+        all_units = self._normalize_to_dict(self.player_units)
+        other_units = getattr(self, 'other_units', {})
+        if other_units:
+            all_units.update(self._normalize_to_dict(other_units))
+
+        all_cities = self._normalize_to_dict(self.player_cities)
+
+        game_turn = getattr(self, 'game_turn', 1)
+        game_phase = getattr(self, 'game_phase', 'movement')
+        game_dict = {
+            'turn': game_turn,
+            'phase': game_phase,
+            'is_over': getattr(self, 'game_is_over', False),
+            'winners': getattr(self, 'winners', [])
+        }
+
+        techs_dict = self._build_techs_dict()
+        wonders_dict = self._build_wonders_dict(all_players_raw)
+        spaceship_dict = self._build_spaceship_dict()
+
+        return {
+            'turn': game_turn,
+            'phase': game_phase,
+            'units': all_units,
+            'cities': all_cities,
+            'players': players_dict,
+            'techs': techs_dict,
+            'wonders': wonders_dict,
+            'spaceship': spaceship_dict,
+            'map': map_info,
+            'game': game_dict
+        }
+
     def _get_valid_map_info(self):
         """Return map_info with valid dimensions or a default."""
         map_info = getattr(self, 'map_info', {})
