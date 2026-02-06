@@ -215,5 +215,73 @@ class TestBasicFunctionality:
         assert data["data"]["code"] == "E011"
 
 
+class TestGlobalStateEndpoint:
+    """Test global state REST endpoint"""
+
+    def test_global_state_success(self):
+        """Test successful global state retrieval"""
+        client = TestClient(app)
+
+        with patch("api_endpoints.gateway") as mock_gw:
+            mock_gw.get_global_game_state = AsyncMock(return_value={
+                "success": True,
+                "data": {
+                    "turn": 5,
+                    "phase": "movement",
+                    "units": {"10": {"id": 10, "owner": 0, "type": "Warriors"}},
+                    "cities": {"1": {"id": 1, "owner": 0, "name": "Berlin"}},
+                    "players": {"0": {"id": 0, "gold": 100}},
+                },
+                "timestamp": 1700000000.0,
+            })
+
+            response = client.get("/api/game/game-123/global-state")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["success"] is True
+        assert data["data"]["turn"] == 5
+        assert "10" in data["data"]["units"]
+        assert "1" in data["data"]["cities"]
+        mock_gw.get_global_game_state.assert_called_once_with("game-123")
+
+    def test_global_state_game_not_found(self):
+        """Test global state when game doesn't exist"""
+        client = TestClient(app)
+
+        with patch("api_endpoints.gateway") as mock_gw:
+            mock_gw.get_global_game_state = AsyncMock(return_value={
+                "success": False,
+                "error": "Game not found: nonexistent",
+            })
+
+            response = client.get("/api/game/nonexistent/global-state")
+
+        assert response.status_code == 404
+
+    def test_global_state_server_error(self):
+        """Test global state when gateway returns non-404 error"""
+        client = TestClient(app)
+
+        with patch("api_endpoints.gateway") as mock_gw:
+            mock_gw.get_global_game_state = AsyncMock(return_value={
+                "success": False,
+                "error": "CivCom connection lost",
+            })
+
+            response = client.get("/api/game/game-123/global-state")
+
+        assert response.status_code == 500
+
+    def test_global_state_gateway_not_initialized(self):
+        """Test global state when gateway is None"""
+        client = TestClient(app)
+
+        with patch("api_endpoints.gateway", None):
+            response = client.get("/api/game/game-123/global-state")
+
+        assert response.status_code == 500
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
