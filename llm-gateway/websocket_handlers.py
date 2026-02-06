@@ -311,7 +311,9 @@ class AgentWebSocketHandler:
                 span.set_attribute("proxy.url", proxy_url)
 
             # Use retry logic for resilient connection establishment
-            self.proxy_connection = await self._connect_to_proxy_with_retry(proxy_url)
+            # IMPORTANT: Store in local variable first to avoid race condition
+            # The old listener's finally block sets self.proxy_connection = None
+            new_connection = await self._connect_to_proxy_with_retry(proxy_url)
 
             # Issue #6 Fix: Cancel any existing listener task before creating new one
             # This prevents "cannot call recv while another coroutine is running recv" error
@@ -323,6 +325,9 @@ class AgentWebSocketHandler:
                     await self._proxy_listener_task
                 except asyncio.CancelledError:
                     pass  # Expected when cancelling
+
+            # Now safe to assign the new connection (after old listener's finally block ran)
+            self.proxy_connection = new_connection
 
             # Start listening for proxy messages in background
             self._proxy_listener_task = asyncio.create_task(self._listen_to_proxy())
