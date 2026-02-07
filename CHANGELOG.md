@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.48](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.47...freeciv3d-v0.3.48) (2026-02-07)
+
+
+### Bug Fixes
+
+* **gateway:** prevent stale CivCom registry poisoning causing unit-not-found ([#136](https://github.com/taso-ventures/freeciv3d/issues/136)) ([2ac2933](https://github.com/taso-ventures/freeciv3d/commit/2ac2933b3266148070442b5071d54b0d4fbe8a8d))
+
 ## [0.3.47](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.46...freeciv3d-v0.3.47) (2026-02-06)
 
 
