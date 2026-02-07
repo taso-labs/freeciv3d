@@ -576,6 +576,7 @@ class TestOwnershipFilters(unittest.TestCase):
 
         handler = Mock(spec=LLMWSHandler)
         handler.player_id = 1
+        handler.game_id = 'test_game'
         handler.civcom = Mock()
         handler.civcom.get_full_state.return_value = {
             'units': {

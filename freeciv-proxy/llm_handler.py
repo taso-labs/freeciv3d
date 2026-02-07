@@ -2184,7 +2184,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
             any_success = False
 
             for unit_id in unit_ids:
-                result = state_extractor.get_unit_actions(unit_id, self.player_id)
+                result = state_extractor.get_unit_actions(unit_id, self.player_id, game_id=self.game_id)
                 unit_key = str(unit_id)
 
                 if result.get('error'):
@@ -2414,7 +2414,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
             any_success = False
 
             for city_id in city_ids:
-                result = state_extractor.get_city_actions(city_id, self.player_id)
+                result = state_extractor.get_city_actions(city_id, self.player_id, game_id=self.game_id)
                 city_key = str(city_id)
 
                 if result.get('error'):
@@ -2937,7 +2937,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
             for unit_id_str, unit in player_units.items():
                 try:
                     unit_id = int(unit_id_str)
-                    result = state_extractor.get_unit_actions(unit_id, self.player_id)
+                    result = state_extractor.get_unit_actions(unit_id, self.player_id, game_state=game_state, game_id=self.game_id)
 
                     if result.get('error'):
                         error_code = result.get('error_code', '')

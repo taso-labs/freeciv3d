@@ -692,35 +692,41 @@ class StateExtractor:
             normalized['type'] = normalized.pop('action')
         return normalized
 
-    def get_unit_actions(self, unit_id: int, player_id: int) -> Dict[str, Any]:
+    def get_unit_actions(self, unit_id: int, player_id: int, game_state: Dict[str, Any] = None, game_id: str = None) -> Dict[str, Any]:
         """
         Get available actions for a specific unit.
-        
+
         Args:
             unit_id: The ID of the unit to query
             player_id: The ID of the player making the query
-            
+            game_state: Optional pre-fetched game state (avoids stale CivCom registry lookup)
+            game_id: Optional game_id to scope CivCom registry lookups
+
         Returns:
             Dictionary with:
             - 'unit_type': str - Type name of the unit
             - 'actions': list - Available actions for this unit
             - 'location': dict - Current x, y coordinates
-            
+
             Or on error:
             - 'error': str - Error message
             - 'error_code': str - Error code (E230, E231, etc.)
         """
         try:
-            # Get civcom for current game
-            civcom = self._get_civcom_for_player(player_id)
-            if not civcom:
-                return {
-                    'error': 'Not connected to game server',
-                    'error_code': 'E500'
-                }
-            
-            # Get full state to find the unit
-            state = civcom.get_full_state(player_id)
+            # Use pre-fetched state if available (avoids stale CivCom registry lookup)
+            if game_state is not None:
+                state = game_state
+            else:
+                # Get civcom for current game
+                civcom = self._get_civcom_for_player(player_id, game_id=game_id)
+                if not civcom:
+                    return {
+                        'error': 'Not connected to game server',
+                        'error_code': 'E500'
+                    }
+
+                # Get full state to find the unit
+                state = civcom.get_full_state(player_id)
             units = state.get('units', {})
             
             # Handle both dict and list formats
@@ -745,7 +751,7 @@ class StateExtractor:
             
             # Generate available actions based on unit type
             unit_type = unit.get('type_name', unit.get('type', 'Unknown'))
-            actions = self._generate_unit_actions(unit, state, player_id)
+            actions = self._generate_unit_actions(unit, state, player_id, game_id=game_id)
             
             return {
                 'unit_type': unit_type,
@@ -760,27 +766,28 @@ class StateExtractor:
                 'error_code': 'E500'
             }
     
-    def get_city_actions(self, city_id: int, player_id: int) -> Dict[str, Any]:
+    def get_city_actions(self, city_id: int, player_id: int, game_id: str = None) -> Dict[str, Any]:
         """
         Get available actions for a specific city.
-        
+
         Args:
             city_id: The ID of the city to query
             player_id: The ID of the player making the query
-            
+            game_id: Optional game_id to scope CivCom registry lookups
+
         Returns:
             Dictionary with:
             - 'city_name': str - Name of the city
             - 'actions': list - Available actions for this city
             - 'location': dict - Current x, y coordinates
-            
+
             Or on error:
             - 'error': str - Error message
             - 'error_code': str - Error code (E240, E241, etc.)
         """
         try:
             # Get civcom for current game
-            civcom = self._get_civcom_for_player(player_id)
+            civcom = self._get_civcom_for_player(player_id, game_id=game_id)
             if not civcom:
                 return {
                     'error': 'Not connected to game server',
@@ -828,29 +835,52 @@ class StateExtractor:
                 'error_code': 'E500'
             }
     
-    def _get_civcom_for_player(self, player_id: int) -> Optional[CivCom]:
-        """Get CivCom instance for a player from the registry"""
-        # Try to find civcom in registry
+    def _get_civcom_for_player(self, player_id: int, game_id: str = None) -> Optional[CivCom]:
+        """Get CivCom instance for a player, preferring self.civcom (current game).
+
+        Args:
+            player_id: The player ID to look up
+            game_id: Optional game_id to scope registry lookups (prevents cross-game poisoning)
+        """
+        # ALWAYS prefer self.civcom — set by the handler for the current game
+        if self.civcom and hasattr(self.civcom, 'player_id'):
+            if self.civcom.player_id == player_id:
+                return self.civcom
+
+        # Fallback: search registry, scoped by game_id if available
         for key, civcom in civcom_registry._civcom_instances.items():
-            if civcom and hasattr(civcom, 'player_id'):
+            if civcom and hasattr(civcom, 'player_id') and not getattr(civcom, 'stopped', False):
+                # If game_id provided, only match CivComs from the same game
+                if game_id and key[0] != game_id:
+                    continue
                 if civcom.player_id == player_id:
+                    # Warn if self.civcom exists but didn't match (genuine mismatch)
+                    # Debug-level if self.civcom is None (expected: no civcom injected)
+                    if self.civcom:
+                        logger.warning(
+                            f"Using registry CivCom for player {player_id} "
+                            f"(key={key}) — self.civcom.player_id="
+                            f"{getattr(self.civcom, 'player_id', 'N/A')}"
+                        )
+                    else:
+                        logger.debug(
+                            f"Using registry CivCom for player {player_id} (key={key})"
+                        )
                     return civcom
-        # Fallback: use self.civcom if available
-        if hasattr(self, 'civcom') and self.civcom:
-            return self.civcom
         return None
     
-    def _generate_unit_actions(self, unit: Dict[str, Any], state: Dict[str, Any], player_id: int) -> List[Dict[str, Any]]:
+    def _generate_unit_actions(self, unit: Dict[str, Any], state: Dict[str, Any], player_id: int, game_id: str = None) -> List[Dict[str, Any]]:
         """Generate all legal actions for a unit based on ruleset data and game state.
-        
+
         This method uses server-provided ruleset data to determine which actions
         a unit can perform, avoiding hardcoded values whenever possible.
-        
+
         Args:
             unit: Unit data dict from game state
             state: Full game state dict
             player_id: The player ID making the query
-            
+            game_id: Optional game_id to scope CivCom registry lookups
+
         Returns:
             List of action dicts with action type, params, and validity info
         """
@@ -888,7 +918,7 @@ class StateExtractor:
         is_transported = unit.get('transported', False)
         
         # Get civcom for ruleset data
-        civcom = self._get_civcom_for_player(player_id)
+        civcom = self._get_civcom_for_player(player_id, game_id=game_id)
         
         # Check if unit is currently working on an activity
         # These activities should not be interrupted
