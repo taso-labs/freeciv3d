@@ -11,6 +11,10 @@ metadata:
     description: "FreeCiv 3D game server with Cloud SQL Proxy sidecar"
 spec:
   replicas: 1
+  # Recreate strategy required: ReadWriteOnce PVC can only mount on one node.
+  # RollingUpdate would deadlock (new pod can't mount PVC while old pod holds it).
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: fciv-net

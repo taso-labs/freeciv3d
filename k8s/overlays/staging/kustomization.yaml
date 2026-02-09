@@ -115,16 +115,6 @@ patches:
         path: /spec/template/spec/initContainers/0/args/6
         value: "clashai-staging:us-central1:freeciv-staging-db-4e19c888"
 
-  # Use Recreate strategy for staging (brief downtime OK, no need for RollingUpdate)
-  - target:
-      kind: Deployment
-      name: fciv-net
-    patch: |-
-      - op: add
-        path: /spec/strategy
-        value:
-          type: Recreate
-
   # Staging resource limits (match production, fit e2-small nodes)
   - target:
       kind: Deployment
