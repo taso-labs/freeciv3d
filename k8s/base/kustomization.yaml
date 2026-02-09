@@ -19,6 +19,7 @@ resources:
   # Core services
   - fciv-net/nginx-config.yaml  # nginx sidecar config for WebSocket routing
   - fciv-net/deployment.yaml
+  - fciv-net/pvc.yaml
   - fciv-net/service.yaml
   - fciv-net/flyway-job.yaml
   - fciv-net/configmap.yaml

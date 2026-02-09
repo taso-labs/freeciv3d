@@ -497,10 +497,14 @@ class AgentWebSocketHandler:
                             proxy_message = json.dumps(agent_message)
                         # Transform error messages
                         elif msg_type == "error":
+                            error_code = msg_data.get('code', '')
+                            is_recoverable = msg_data.get('recoverable', True)
+
                             logger.error(
                                 f"❌ Error from proxy for agent {self.agent_id}:\n"
-                                f"   Code: {msg_data.get('code')}\n"
+                                f"   Code: {error_code}\n"
                                 f"   Message: {msg_data.get('message')}\n"
+                                f"   Recoverable: {is_recoverable}\n"
                                 f"   Details: {msg_data.get('details', {})}"
                             )
                             # Forward error as-is but nest in 'data' for consistency
@@ -511,6 +515,18 @@ class AgentWebSocketHandler:
                                 "data": msg_data
                             }
                             proxy_message = json.dumps(agent_message)
+
+                            # Terminal errors: close proxy connection to prevent futile retries
+                            if not is_recoverable:
+                                logger.warning(
+                                    f"🔴 Terminal error for agent {self.agent_id} (code={error_code}). "
+                                    f"Closing proxy connection — game state is irrecoverable."
+                                )
+                                try:
+                                    await self.websocket.send_text(proxy_message)
+                                except Exception as send_err:
+                                    logger.warning(f"Failed to send terminal error to agent {self.agent_id}: {send_err}")
+                                break  # Exits proxy listener loop → finally block closes connection
                         # Transform action_rejected messages
                         elif msg_type == "action_rejected":
                             logger.warning(

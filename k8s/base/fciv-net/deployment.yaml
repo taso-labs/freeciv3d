@@ -248,7 +248,7 @@ spec:
 
           volumeMounts:
             - name: game-data
-              mountPath: /var/lib/freeciv
+              mountPath: /var/lib/tomcat10/webapps/data/savegames
             - name: game-logs
               mountPath: /var/log/freeciv
 
@@ -325,7 +325,8 @@ spec:
 
       volumes:
         - name: game-data
-          emptyDir: {}
+          persistentVolumeClaim:
+            claimName: fciv-net-game-data
         - name: game-logs
           emptyDir: {}
         - name: nginx-config
