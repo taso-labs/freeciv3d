@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.49](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.48...freeciv3d-v0.3.49) (2026-02-09)
+
+
+### Bug Fixes
+
+* **proxy:** treat expected_turn=0 as unknown and increase drift tolerance to ±5 ([#138](https://github.com/taso-ventures/freeciv3d/issues/138)) ([9124a70](https://github.com/taso-ventures/freeciv3d/commit/9124a70744bb6afb3a27a59ffc14116fad3bae85))
+
 ## [0.3.48](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.47...freeciv3d-v0.3.48) (2026-02-07)
 
 
