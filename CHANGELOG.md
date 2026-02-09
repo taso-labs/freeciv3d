@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.50](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.49...freeciv3d-v0.3.50) (2026-02-09)
+
+
+### Bug Fixes
+
+* prevent game state loss on pod restart and recovery death spiral ([#140](https://github.com/taso-ventures/freeciv3d/issues/140)) ([447df62](https://github.com/taso-ventures/freeciv3d/commit/447df62dd628dabae5a53d3005d01ec27230974d))
+
 ## [0.3.49](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.48...freeciv3d-v0.3.49) (2026-02-09)
 
 
