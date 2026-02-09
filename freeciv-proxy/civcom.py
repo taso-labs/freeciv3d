@@ -2446,7 +2446,8 @@ class CivCom(Thread):
             'turn': game_turn,
             'phase': game_phase,
             'is_over': getattr(self, 'game_is_over', False),
-            'current_player': player_id
+            'current_player': player_id,
+            'winners': getattr(self, 'winners', [])
         }
 
         techs_dict = self._build_techs_dict()
@@ -2487,6 +2488,10 @@ class CivCom(Thread):
         if other_units:
             all_units.update(self._normalize_to_dict(other_units))
 
+        # player_cities already contains ALL cities from all players (despite the
+        # name suggesting only the current player's). other_cities is vestigial and
+        # empty in practice, so merging it is unnecessary — unlike other_units which
+        # may contain units discovered via fog-of-war updates.
         all_cities = self._normalize_to_dict(self.player_cities)
 
         game_turn = getattr(self, 'game_turn', 1)

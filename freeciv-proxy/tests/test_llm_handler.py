@@ -1063,5 +1063,141 @@ class TestExpectedTurnZeroFix(unittest.TestCase):
             "Negative expected_turn should be clamped to None at parse time")
 
 
+class TestGlobalStateQuery(unittest.TestCase):
+    """Tests for _handle_global_state_query handler.
+
+    Verifies authentication checks, CivCom connectivity validation,
+    successful state retrieval, and exception handling.
+    """
+
+    def _run_async(self, coro):
+        """Helper to run async coroutines in sync test methods."""
+        return asyncio.get_event_loop().run_until_complete(coro)
+
+    def _make_handler(self, is_llm_agent=True, civcom=None, civcom_stopped=False):
+        """Create a mock LLMWSHandler with the real _handle_global_state_query bound."""
+        from llm_handler import LLMWSHandler
+        from unittest.mock import Mock
+
+        handler = Mock(spec=LLMWSHandler)
+        handler.agent_id = 'test_agent'
+        handler.is_llm_agent = is_llm_agent
+
+        if civcom is not None:
+            handler.civcom = civcom
+            handler.civcom.stopped = civcom_stopped
+        else:
+            handler.civcom = None
+
+        handler._handle_global_state_query = LLMWSHandler._handle_global_state_query.__get__(
+            handler, LLMWSHandler
+        )
+        return handler
+
+    def test_rejects_unauthenticated_agent(self):
+        """Non-LLM agents should receive E120 error."""
+        handler = self._make_handler(is_llm_agent=False)
+
+        self._run_async(handler._handle_global_state_query({
+            'correlation_id': 'test-corr'
+        }))
+
+        handler.write_message.assert_called_once()
+        response = json.loads(handler.write_message.call_args[0][0])
+        self.assertEqual(response['type'], 'error')
+        self.assertEqual(response['code'], 'E120')
+        self.assertEqual(response['correlation_id'], 'test-corr')
+
+    def test_rejects_when_civcom_disconnected(self):
+        """Should return E123 when civcom is None."""
+        handler = self._make_handler(is_llm_agent=True, civcom=None)
+
+        self._run_async(handler._handle_global_state_query({}))
+
+        handler.write_message.assert_called_once()
+        response = json.loads(handler.write_message.call_args[0][0])
+        self.assertEqual(response['type'], 'error')
+        self.assertEqual(response['code'], 'E123')
+
+    def test_rejects_when_civcom_stopped(self):
+        """Should return E123 when civcom.stopped is True."""
+        from unittest.mock import Mock
+        civcom = Mock()
+        civcom.stopped = True
+        handler = self._make_handler(is_llm_agent=True, civcom=civcom, civcom_stopped=True)
+
+        self._run_async(handler._handle_global_state_query({}))
+
+        handler.write_message.assert_called_once()
+        response = json.loads(handler.write_message.call_args[0][0])
+        self.assertEqual(response['type'], 'error')
+        self.assertEqual(response['code'], 'E123')
+
+    def test_successful_global_state_response(self):
+        """Should return global_state_response with full state data."""
+        from unittest.mock import Mock
+
+        civcom = Mock()
+        civcom.stopped = False
+        civcom.get_full_state_global.return_value = {
+            'turn': 10,
+            'phase': 'movement',
+            'units': {'1': {'id': 1, 'owner': 0}},
+            'cities': {'2': {'id': 2, 'owner': 0, 'name': 'Berlin'}},
+            'players': {'0': {'id': 0, 'gold': 50}},
+        }
+        handler = self._make_handler(is_llm_agent=True, civcom=civcom)
+
+        self._run_async(handler._handle_global_state_query({
+            'correlation_id': 'corr-123'
+        }))
+
+        handler.write_message.assert_called_once()
+        response = json.loads(handler.write_message.call_args[0][0])
+        self.assertEqual(response['type'], 'global_state_response')
+        self.assertEqual(response['correlation_id'], 'corr-123')
+        self.assertEqual(response['data']['turn'], 10)
+        self.assertIn('1', response['data']['units'])
+        self.assertIn('2', response['data']['cities'])
+        self.assertIn('timestamp', response)
+
+    def test_exception_returns_e121_error(self):
+        """Should return E121 when get_full_state_global() raises."""
+        from unittest.mock import Mock
+
+        civcom = Mock()
+        civcom.stopped = False
+        civcom.get_full_state_global.side_effect = RuntimeError("CivCom internal error")
+        handler = self._make_handler(is_llm_agent=True, civcom=civcom)
+
+        self._run_async(handler._handle_global_state_query({
+            'correlation_id': 'corr-err'
+        }))
+
+        handler.write_message.assert_called_once()
+        response = json.loads(handler.write_message.call_args[0][0])
+        self.assertEqual(response['type'], 'error')
+        self.assertEqual(response['code'], 'E121')
+        self.assertEqual(response['correlation_id'], 'corr-err')
+        self.assertIn('CivCom internal error', response['message'])
+
+    def test_no_correlation_id_omitted_from_response(self):
+        """When no correlation_id provided, response should not include it."""
+        from unittest.mock import Mock
+
+        civcom = Mock()
+        civcom.stopped = False
+        civcom.get_full_state_global.return_value = {
+            'turn': 1, 'phase': 'movement',
+            'units': {}, 'cities': {}, 'players': {},
+        }
+        handler = self._make_handler(is_llm_agent=True, civcom=civcom)
+
+        self._run_async(handler._handle_global_state_query({}))
+
+        response = json.loads(handler.write_message.call_args[0][0])
+        self.assertNotIn('correlation_id', response)
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)

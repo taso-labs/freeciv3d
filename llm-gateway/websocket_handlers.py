@@ -857,8 +857,8 @@ class AgentWebSocketHandler:
             if "correlation_id" in message:
                 transformed["correlation_id"] = message["correlation_id"]
         elif msg_type == "global_state_query":
-            # Pass through with type and correlation_id
-            allowed_fields = {"type", "correlation_id"}
+            # Pass through with type, correlation_id, and trace_context
+            allowed_fields = {"type", "correlation_id", "trace_context"}
             transformed = {k: v for k, v in transformed.items() if k in allowed_fields}
         elif msg_type == "conn_pong":
             # Agent is responding to a conn_ping we may have sent earlier

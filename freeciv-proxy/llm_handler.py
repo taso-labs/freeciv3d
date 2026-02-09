@@ -1310,12 +1310,12 @@ class LLMWSHandler(websocket.WebSocketHandler):
         try:
             full_state = self.civcom.get_full_state_global()
 
-            logger.info(
-                f"✓ GLOBAL_STATE_QUERY SUCCESS for agent {self.agent_id}:\n"
-                f"   Turn: {full_state.get('turn', 'N/A')}\n"
-                f"   Units: {len(full_state.get('units', {}))}\n"
-                f"   Cities: {len(full_state.get('cities', {}))}\n"
-                f"   Players: {len(full_state.get('players', {}))}"
+            logger.debug(
+                f"✓ GLOBAL_STATE_QUERY SUCCESS for agent {self.agent_id}: "
+                f"turn={full_state.get('turn', 'N/A')}, "
+                f"units={len(full_state.get('units', {}))}, "
+                f"cities={len(full_state.get('cities', {}))}, "
+                f"players={len(full_state.get('players', {}))}"
             )
 
             response = {

@@ -772,6 +772,9 @@ class LLMGateway:
 
         Used by match orchestrator for stats collection. Unlike get_game_state(),
         this returns all units/cities from all players regardless of visibility.
+
+        Note: No server-side rate limiting — the caller (agent-clash match_service)
+        is expected to cache responses (1s TTL) to avoid excessive polling.
         """
         try:
             if game_id not in self.game_sessions:
