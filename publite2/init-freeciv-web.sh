@@ -45,6 +45,20 @@ if [ "$5" = "longturn" ]; then
     fi
   fi
 else
+  # Per-port save directory to isolate concurrent matches
+  savesdir="${savesdir}/port_${2}"
+  mkdir -p "${savesdir}"
+
+  # Auto-reload latest save on restart (recovery from pod eviction)
+  lastsave=$(ls -t "${savesdir}"/*.sav* 2>/dev/null | head -n 1)
+  if [ -n "${lastsave}" ]; then
+    savename=$(basename "${lastsave}")
+    # Strip all extensions (.sav.xz, .sav.zst, .sav.gz, .sav.bz2, .sav)
+    savename="${savename%.xz}"; savename="${savename%.zst}"; savename="${savename%.gz}"; savename="${savename%.bz2}"; savename="${savename%.sav}"
+    echo "Auto-reloading save: ${savename} from ${savesdir}"
+    addArgs --file "${savename}"
+  fi
+
   # 300 seconds (5 minutes) allows time for reconnection after WebSocket disruptions
   # Previously 20 seconds caused civserver to exit during network issues, destroying game state
   # Fix for mid-game reconnection failures (E142 + E120)
@@ -52,7 +66,7 @@ else
 fi
 addArgs --saves "${savesdir}"
 
-export FREECIV_SAVE_PATH=${savesdir};
+export FREECIV_SAVE_PATH="${savesdir}"
 rm -f "/var/lib/tomcat10/webapps/data/scorelogs/score-${2}.log"
 rm -f "../logs/freeciv-web-log-${2}.log"
 
@@ -68,6 +82,12 @@ python3 ../freeciv-proxy/freeciv-proxy.py "${3}" > "../logs/freeciv-proxy-${3}.l
 proxy_pid=$! && 
 ${HOME}/freeciv/bin/freeciv-web "${args[@]}" > "../logs/freeciv-web-stdout-${2}.log" 2> "../logs/freeciv-web-stderr-${2}.log"
 
-rc=$?; 
-kill -9 $proxy_pid; 
+rc=$?;
+kill -9 $proxy_pid;
+# Clean saves after normal game exit (exit code 0 = clean end)
+# Keeps saves only for crash recovery (non-zero exit = pod eviction, OOM, etc.)
+if [ $rc -eq 0 ]; then
+  rm -f "${savesdir}"/*.sav*
+  echo "Cleaned saves after normal game exit (port ${2})"
+fi
 exit $rc

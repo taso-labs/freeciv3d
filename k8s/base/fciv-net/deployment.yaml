@@ -11,6 +11,10 @@ metadata:
     description: "FreeCiv 3D game server with Cloud SQL Proxy sidecar"
 spec:
   replicas: 1
+  # Recreate strategy required: ReadWriteOnce PVC can only mount on one node.
+  # RollingUpdate would deadlock (new pod can't mount PVC while old pod holds it).
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: fciv-net
@@ -248,7 +252,7 @@ spec:
 
           volumeMounts:
             - name: game-data
-              mountPath: /var/lib/freeciv
+              mountPath: /var/lib/tomcat10/webapps/data/savegames
             - name: game-logs
               mountPath: /var/log/freeciv
 
@@ -325,7 +329,8 @@ spec:
 
       volumes:
         - name: game-data
-          emptyDir: {}
+          persistentVolumeClaim:
+            claimName: fciv-net-game-data
         - name: game-logs
           emptyDir: {}
         - name: nginx-config

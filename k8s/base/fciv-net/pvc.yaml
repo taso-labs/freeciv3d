@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: fciv-net-game-data
+  namespace: freeciv
+spec:
+  # ReadWriteOnce: volume mountable on one node only.
+  # This is compatible with replicas=1 (production default).
+  # If scaling to multiple replicas on different nodes, switch to
+  # ReadWriteMany with a Filestore-backed storageClassName.
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+  storageClassName: standard-rwo

@@ -50,3 +50,8 @@ set steepness 25
 
 metaconnection persistent
 metamessage New Freeciv-web Multiplayer Game
+
+# Autosave every turn for resilience and replayability
+# Freeciv-web defaults to 0 (disabled) — we override for our use case
+set autosaves TURN|GAMEOVER|QUITIDLE
+set saveturns 1

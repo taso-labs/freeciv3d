@@ -629,7 +629,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                         if turn_drift > TURN_DRIFT_TOLERANCE:
                             self._abort_with_state_mismatch(
                                 expected_turn, current_turn,
-                                'Game may have been reset or connected to wrong server',
+                                'Game state lost — connected to reset or different civserver instance',
                                 correlation_id
                             )
                             return
@@ -682,7 +682,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                         if turn_drift > TURN_DRIFT_TOLERANCE:
                             self._abort_with_state_mismatch(
                                 expected_turn, current_turn,
-                                'Game may have been reset due to civserver --quitidle timeout',
+                                'Game state lost — civserver restarted (pod eviction, OOM, or --quitidle timeout)',
                                 correlation_id, waited
                             )
                             return
