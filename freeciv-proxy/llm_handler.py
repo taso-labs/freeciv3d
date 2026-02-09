@@ -111,6 +111,7 @@ MAX_PACKET_BUFFER_BYTES = 5 * 1024 * 1024  # 5MB maximum buffer size (typical ga
 GAME_INFO_WAIT_TIMEOUT_SEC = 2.0  # Max wait for PACKET_GAME_INFO
 GAME_INFO_POLL_INTERVAL_SEC = 0.1  # Polling interval
 GAME_INFO_LOG_INTERVAL_SEC = 0.5  # Debug log frequency
+TURN_DRIFT_TOLERANCE = llm_config.get('reconnection.turn_drift_tolerance', 5)  # Max acceptable turn drift during reconnection
 
 # Connection health monitoring - threshold for marking connection as dead
 # After this many consecutive send failures, the connection is marked dead and game is paused
@@ -474,6 +475,9 @@ class LLMWSHandler(websocket.WebSocketHandler):
             if expected_turn is not None:
                 try:
                     expected_turn = int(expected_turn)
+                    if expected_turn < 0:
+                        logger.warning(f"Negative expected_turn={expected_turn} for {self.agent_id}, treating as None")
+                        expected_turn = None
                 except (ValueError, TypeError):
                     expected_turn = None
                     logger.warning(f"Invalid expected_turn value for {self.agent_id}, ignoring state verification")
@@ -614,30 +618,38 @@ class LLMWSHandler(websocket.WebSocketHandler):
 
                     # STATE VERIFICATION: Check if expected_turn matches actual game state
                     # This catches the case where reconnection went to a different/reset game
-                    # Allow ±1 turn tolerance for reused CivCom: a narrow race condition exists
-                    # where the civserver advances a turn between agent disconnect and pause
-                    # command delivery. Session resumption already proves game identity, so
-                    # the turn check is a secondary sanity check here.
-                    if expected_turn is not None:
+                    # Allow ±TURN_DRIFT_TOLERANCE turn tolerance for reused CivCom: pod restart
+                    # + recovery can take minutes, during which AI players advance turns.
+                    # Session resumption already proves game identity, so the turn check is
+                    # a secondary sanity check here. expected_turn=0 means "client doesn't
+                    # know the turn yet" (pregame only), so skip verification like None.
+                    if expected_turn is not None and expected_turn > 0:
                         current_turn = getattr(self.civcom, 'game_turn', 0)
                         turn_drift = abs(current_turn - expected_turn)
-                        if turn_drift > 1:
+                        if turn_drift > TURN_DRIFT_TOLERANCE:
                             self._abort_with_state_mismatch(
                                 expected_turn, current_turn,
                                 'Game may have been reset or connected to wrong server',
                                 correlation_id
                             )
                             return
-                        elif turn_drift == 1:
+                        elif turn_drift >= 1:
                             logger.warning(
-                                f"⚠️ Turn drift of 1 for {self.agent_id} (reused CivCom): "
+                                f"⚠️ Turn drift of {turn_drift} for {self.agent_id} (reused CivCom): "
                                 f"expected={expected_turn}, actual={current_turn}. "
-                                f"Likely race between disconnect and pause command."
+                                f"Allowed: within tolerance ({TURN_DRIFT_TOLERANCE})."
                             )
                         else:
                             logger.info(
                                 f"✅ State verification passed for {self.agent_id} (reused CivCom): turn={current_turn}"
                             )
+                    else:
+                        if expected_turn == 0:
+                            logger.info(
+                                f"Skipping state verification for {self.agent_id} "
+                                f"(expected_turn=0 indicates client doesn't know current turn)"
+                            )
+                        # else: expected_turn is None, no logging needed
                 else:
                     # New connection or no existing CivCom - create fresh
                     if is_reconnecting and not existing_civcom:
@@ -648,7 +660,8 @@ class LLMWSHandler(websocket.WebSocketHandler):
                     # FIX: State verification for fresh CivCom on reconnection (E120 detection)
                     # When we can't reuse CivCom and create a new one, verify the civserver
                     # hasn't lost game state (e.g., due to --quitidle timeout)
-                    if is_reconnecting and expected_turn is not None:
+                    # expected_turn=0 means "client doesn't know the turn yet", skip like None.
+                    if is_reconnecting and expected_turn is not None and expected_turn > 0:
                         # Wait for PACKET_GAME_INFO to set game_turn with retry loop
                         # This is more robust than a fixed sleep - handles network latency variations
                         start_time = time.monotonic()
@@ -666,23 +679,28 @@ class LLMWSHandler(websocket.WebSocketHandler):
 
                         waited = time.monotonic() - start_time
                         turn_drift = abs(current_turn - expected_turn)
-                        if turn_drift > 1:
+                        if turn_drift > TURN_DRIFT_TOLERANCE:
                             self._abort_with_state_mismatch(
                                 expected_turn, current_turn,
                                 'Game may have been reset due to civserver --quitidle timeout',
                                 correlation_id, waited
                             )
                             return
-                        elif turn_drift == 1:
+                        elif turn_drift >= 1:
                             logger.warning(
-                                f"⚠️ Turn drift of 1 for {self.agent_id} (new CivCom): "
+                                f"⚠️ Turn drift of {turn_drift} for {self.agent_id} (new CivCom): "
                                 f"expected={expected_turn}, actual={current_turn} (waited {waited:.1f}s). "
-                                f"Likely race between disconnect and pause command."
+                                f"Allowed: within tolerance ({TURN_DRIFT_TOLERANCE})."
                             )
                         else:
                             logger.info(
                                 f"✅ State verification passed for {self.agent_id} (new CivCom): turn={current_turn} (waited {waited:.1f}s)"
                             )
+                    elif is_reconnecting and expected_turn == 0:
+                        logger.info(
+                            f"Skipping state verification for {self.agent_id} "
+                            f"(expected_turn=0 indicates client doesn't know current turn)"
+                        )
 
                 # If reconnecting, send /take command to reclaim player slot from AI
                 # The civserver converts disconnected players to AI, so we need to take back our slot
