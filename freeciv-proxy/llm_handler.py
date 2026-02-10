@@ -1345,6 +1345,19 @@ class LLMWSHandler(websocket.WebSocketHandler):
                                 full_state.setdefault('players', {})[pid_key] = (
                                     other_players[pid_key]
                                 )
+                            # Merge wonders — derived from player_cities which is
+                            # fog-of-war limited.  Each CivCom's own player wonders
+                            # are authoritative.
+                            pkey = f'player{other_pid}'
+                            other_wonders = other_state.get('wonders', {})
+                            if pkey in other_wonders:
+                                full_state.setdefault('wonders', {})[pkey] = (
+                                    other_wonders[pkey]
+                                )
+                        # Merge spaceship — keyed by player label, merge missing entries
+                        for skey, sdata in other_state.get('spaceship', {}).items():
+                            if skey not in full_state.get('spaceship', {}):
+                                full_state.setdefault('spaceship', {})[skey] = sdata
                     except Exception as merge_err:
                         logger.warning(
                             f"Failed to merge state from civcom {key}: {merge_err}"

@@ -1244,6 +1244,8 @@ class TestGlobalStateAggregation(unittest.TestCase):
                 '1': {'id': 1, 'gold': 50, 'name': 'Player1'},
             },
             'techs': {'player1': ['Alphabet']},
+            'wonders': {'player1': ['Pyramids']},
+            'spaceship': {'player1': {'state': 0, 'structurals': 0}},
         }
 
         civcom_p0 = Mock()
@@ -1258,6 +1260,8 @@ class TestGlobalStateAggregation(unittest.TestCase):
                 '1': {'id': 1, 'gold': 0, 'name': 'Player1'},
             },
             'techs': {'player0': ['Bronze Working']},
+            'wonders': {'player0': ['Apollo Program']},
+            'spaceship': {'player0': {'state': 1, 'structurals': 3}},
         }
 
         registry_return = {
@@ -1299,6 +1303,20 @@ class TestGlobalStateAggregation(unittest.TestCase):
                          "Player 0 gold should come from player 0's CivCom (authoritative)")
         self.assertEqual(players['1']['gold'], 50,
                          "Player 1 gold should come from player 1's CivCom (authoritative)")
+
+        # Wonders should use each CivCom's authoritative data for its own player
+        wonders = response['data']['wonders']
+        self.assertIn('player0', wonders, "Player 0 wonders missing")
+        self.assertIn('player1', wonders, "Player 1 wonders missing")
+        self.assertIn('Apollo Program', wonders['player0'])
+        self.assertIn('Pyramids', wonders['player1'])
+
+        # Spaceship data should be merged from both CivComs
+        spaceship = response['data']['spaceship']
+        self.assertIn('player0', spaceship, "Player 0 spaceship missing")
+        self.assertIn('player1', spaceship, "Player 1 spaceship missing")
+        self.assertEqual(spaceship['player0']['state'], 1)
+        self.assertEqual(spaceship['player1']['state'], 0)
 
     def test_skips_stopped_civcom(self):
         """Stopped CivCom instances should be excluded from aggregation."""
