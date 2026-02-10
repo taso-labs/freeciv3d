@@ -649,25 +649,6 @@ class LLMGateway:
             logger.error(f"Max retry attempts reached for game {game_id}. Implementing circuit breaker.")
             # Could trigger alerts, disable game, etc.
 
-    async def _handle_proxy_message(self, game_id: str, message: Dict[str, Any]):
-        """Handle incoming message from FreeCiv proxy"""
-        try:
-            correlation_id = message.get("correlation_id")
-            if correlation_id:
-                # FIXED: Use RequestManager to resolve requests (prevents memory leaks)
-                success = await request_manager.resolve_request(correlation_id, message)
-                if success:
-                    logger.debug(f"Resolved pending request {correlation_id}")
-                else:
-                    logger.debug(f"No pending request found for correlation_id {correlation_id}")
-            else:
-                # Handle non-request messages (broadcasts, events, etc.)
-                logger.debug(f"Received non-correlated message from proxy: {message.get('type', 'unknown')}")
-                # Could forward to all connected agents, etc.
-
-        except Exception as e:
-            logger.error(f"Error handling proxy message: {e}")
-
     async def _send_request_and_wait(self, game_id: str, message: Dict[str, Any], timeout: float = DEFAULT_REQUEST_TIMEOUT) -> Dict[str, Any]:
         """Send request to proxy and wait for response"""
         # FIXED: Use RequestManager to prevent memory leaks (addresses lines 336-367 issue)
