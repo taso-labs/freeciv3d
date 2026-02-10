@@ -1234,6 +1234,7 @@ class TestGlobalStateAggregation(unittest.TestCase):
 
         civcom_p1 = Mock()
         civcom_p1.stopped = False
+        civcom_p1.player_id = 1
         civcom_p1.get_full_state_global.return_value = {
             'turn': 5, 'phase': 'movement',
             'units': {'101': {'id': 101, 'owner': 1, 'type': 'warriors'}},
@@ -1247,13 +1248,14 @@ class TestGlobalStateAggregation(unittest.TestCase):
 
         civcom_p0 = Mock()
         civcom_p0.stopped = False
+        civcom_p0.player_id = 0
         civcom_p0.get_full_state_global.return_value = {
             'turn': 5, 'phase': 'movement',
             'units': {'100': {'id': 100, 'owner': 0, 'type': 'settlers'}},
             'cities': {'200': {'id': 200, 'owner': 0, 'name': 'CityP0'}},
             'players': {
                 '0': {'id': 0, 'gold': 30, 'name': 'Player0'},
-                '1': {'id': 1, 'gold': 50, 'name': 'Player1'},
+                '1': {'id': 1, 'gold': 0, 'name': 'Player1'},
             },
             'techs': {'player0': ['Bronze Working']},
         }
@@ -1290,6 +1292,13 @@ class TestGlobalStateAggregation(unittest.TestCase):
         # Both players' techs should be present
         self.assertIn('player0', techs, "Player 0 techs missing from merged state")
         self.assertIn('player1', techs, "Player 1 techs missing from merged state")
+
+        # Player gold should use each CivCom's authoritative data for its own player
+        players = response['data']['players']
+        self.assertEqual(players['0']['gold'], 30,
+                         "Player 0 gold should come from player 0's CivCom (authoritative)")
+        self.assertEqual(players['1']['gold'], 50,
+                         "Player 1 gold should come from player 1's CivCom (authoritative)")
 
     def test_skips_stopped_civcom(self):
         """Stopped CivCom instances should be excluded from aggregation."""

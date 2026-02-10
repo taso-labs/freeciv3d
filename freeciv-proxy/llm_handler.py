@@ -1333,6 +1333,18 @@ class LLMWSHandler(websocket.WebSocketHandler):
                         for pkey, techs in other_state.get('techs', {}).items():
                             if pkey not in full_state.get('techs', {}):
                                 full_state['techs'][pkey] = techs
+                        # Merge players — each CivCom has accurate gold/score
+                        # only for its own player (other players' gold is hidden
+                        # by fog-of-war and reported as 0).  Use this CivCom's
+                        # data for its own player_id entry.
+                        other_pid = getattr(other_civcom, 'player_id', None)
+                        if other_pid is not None:
+                            pid_key = str(other_pid)
+                            other_players = other_state.get('players', {})
+                            if pid_key in other_players:
+                                full_state.setdefault('players', {})[pid_key] = (
+                                    other_players[pid_key]
+                                )
                     except Exception as merge_err:
                         logger.warning(
                             f"Failed to merge state from civcom {key}: {merge_err}"
