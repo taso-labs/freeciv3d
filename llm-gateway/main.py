@@ -777,7 +777,12 @@ class LLMGateway:
         is expected to cache responses (1s TTL) to avoid excessive polling.
         """
         try:
-            if game_id not in self.game_sessions:
+            # Check both game_sessions (REST-created games) and
+            # connection_manager (WebSocket-connected agents) for game existence.
+            # Agent-clash connects via WebSocket, so games are only registered
+            # in connection_manager — not in game_sessions.
+            game_info = await connection_manager.get_game_info(game_id)
+            if game_id not in self.game_sessions and game_info is None:
                 return {
                     "success": False,
                     "error": f"Game not found: {game_id}"
