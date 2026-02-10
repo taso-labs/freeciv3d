@@ -571,6 +571,21 @@ class LLMGateway:
                         "timestamp": time.time()
                     })
 
+            elif msg_type == "global_state_response":
+                # Global state response from proxy
+                logger.debug(f"Received global state response for {game_id}")
+
+                response_data = {
+                    "type": "global_state_response",
+                    "success": True,
+                    "data": message.get("data", {}),
+                    "timestamp": message.get("timestamp", time.time())
+                }
+
+                correlation_id = message.get("correlation_id")
+                if correlation_id:
+                    await request_manager.resolve_request(correlation_id, response_data)
+
             elif msg_type == "action_accepted":
                 # Action successfully executed
                 logger.info(f"Action accepted for {game_id}: {message.get('action')}")
