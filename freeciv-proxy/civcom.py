@@ -2470,13 +2470,16 @@ class CivCom(Thread):
         }
 
     def get_full_state_global(self) -> dict:
-        """Get complete game state with NO fog-of-war filtering.
+        """Get game state from THIS CivCom's perspective without owner filtering.
 
-        Returns all units and cities from all players, providing an
-        authoritative global view for stats tracking and observer APIs.
+        Returns all units/cities this connection has received packets for.
+        Note: each CivCom only receives packets for entities visible to its
+        player (fog-of-war), so the result may NOT include the other player's
+        assets.  Callers that need a true global view should merge results
+        from all CivCom instances for the game (see _handle_global_state_query).
 
         Returns:
-            Complete state dict with all units/cities from all players.
+            State dict with units/cities known to this CivCom instance.
         """
         map_info = self._get_valid_map_info()
         all_players_raw = getattr(self, 'all_players', [])
@@ -2488,10 +2491,9 @@ class CivCom(Thread):
         if other_units:
             all_units.update(self._normalize_to_dict(other_units))
 
-        # player_cities already contains ALL cities from all players (despite the
-        # name suggesting only the current player's). other_cities is vestigial and
-        # empty in practice, so merging it is unnecessary — unlike other_units which
-        # may contain units discovered via fog-of-war updates.
+        # player_cities contains cities this CivCom has received packets for.
+        # Due to fog-of-war, this may only include the controlling player's cities
+        # plus any enemy cities within visibility range.
         all_cities = self._normalize_to_dict(self.player_cities)
 
         game_turn = getattr(self, 'game_turn', 1)

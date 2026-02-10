@@ -1308,7 +1308,35 @@ class LLMWSHandler(websocket.WebSocketHandler):
             return
 
         try:
+            # Aggregate state from ALL CivCom instances for this game.
+            # Each CivCom only receives packets for units/cities visible to its
+            # player (fog-of-war).  Merging across all players produces the true
+            # authoritative global view.
             full_state = self.civcom.get_full_state_global()
+
+            if self.game_id:
+                all_civcoms = civcom_registry.get_all_for_game(self.game_id)
+                for key, other_civcom in all_civcoms.items():
+                    if other_civcom is self.civcom or other_civcom.stopped:
+                        continue
+                    try:
+                        other_state = other_civcom.get_full_state_global()
+                        # Merge units — keyed by unit id, so duplicates are harmless
+                        for uid, udata in other_state.get('units', {}).items():
+                            if uid not in full_state.get('units', {}):
+                                full_state['units'][uid] = udata
+                        # Merge cities — keyed by city id
+                        for cid, cdata in other_state.get('cities', {}).items():
+                            if cid not in full_state.get('cities', {}):
+                                full_state['cities'][cid] = cdata
+                        # Merge techs — keyed by player label
+                        for pkey, techs in other_state.get('techs', {}).items():
+                            if pkey not in full_state.get('techs', {}):
+                                full_state['techs'][pkey] = techs
+                    except Exception as merge_err:
+                        logger.warning(
+                            f"Failed to merge state from civcom {key}: {merge_err}"
+                        )
 
             logger.debug(
                 f"✓ GLOBAL_STATE_QUERY SUCCESS for agent {self.agent_id}: "
