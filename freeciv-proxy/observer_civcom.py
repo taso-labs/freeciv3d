@@ -70,6 +70,16 @@ class ObserverCivCom(CivCom):
         super().__init__(username, civserverport, key, civwebserver)
         self._observe_sent = False
 
+    def _release_handshake_semaphore(self):
+        """Override: observer has no semaphore, but must still set handshake_complete.
+
+        The base CivCom only calls handshake_complete.set() inside the
+        semaphore release path (guarded by ``if self.port_semaphore is not None``).
+        The observer is spawned directly (no WSHandler), so port_semaphore is
+        never set.  We unconditionally set the event here.
+        """
+        self.handshake_complete.set()
+
     def parse_and_store_packet(self, packet_json):
         """Intercept packet processing to inject /observe after handshake."""
         super().parse_and_store_packet(packet_json)
