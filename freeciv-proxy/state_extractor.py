@@ -240,6 +240,55 @@ class CivComRegistry:
         key = (game_id, agent_id)
         return self._game_metadata.get(key, {})
 
+    def cleanup_dead_civcoms(self, max_dead_age_seconds: float) -> int:
+        """Remove CivCom instances that have been dead beyond TTL.
+
+        Called periodically from session_manager's cleanup loop. Identifies
+        CivCom instances that are either already stopped or have been marked
+        dead longer than the TTL, then unregisters them (which calls cleanup()).
+
+        Args:
+            max_dead_age_seconds: Maximum age in seconds for dead CivCom instances
+
+        Returns:
+            Number of instances cleaned up
+        """
+        now = time.time()
+        to_remove = []
+
+        for key, civcom in list(self._civcom_instances.items()):
+            # Already stopped threads: clean up immediately
+            if civcom.stopped and not civcom.is_alive():
+                to_remove.append((key, "thread_stopped"))
+                continue
+
+            # Dead beyond TTL (attribute may not exist on older instances)
+            dead_since = getattr(civcom, '_dead_since', None)
+            if dead_since is not None:
+                age = now - dead_since
+                if age >= max_dead_age_seconds:
+                    to_remove.append((key, f"dead_{age:.0f}s"))
+
+        cleaned = 0
+        for key, reason in to_remove:
+            game_id, agent_id = key
+            try:
+                self.unregister_game(game_id, agent_id)
+                cleaned += 1
+                logger.info(f"Cleaned dead CivCom: game={game_id}, agent={agent_id}, reason={reason}")
+            except Exception as e:
+                logger.error(f"Error cleaning CivCom: game={game_id}, agent={agent_id}: {e}")
+
+        return cleaned
+
+    def get_all_instances(self) -> List[Tuple[Tuple[str, str], CivCom]]:
+        """Get snapshot of all registered (key, civcom) pairs.
+
+        Returns a list copy to allow safe iteration while the registry
+        may be modified concurrently (e.g., during cleanup).
+        """
+        return list(self._civcom_instances.items())
+
     def get_registry_stats(self) -> Dict[str, Any]:
         """Get registry statistics"""
         unique_games = set(k[0] for k in self._civcom_instances.keys())

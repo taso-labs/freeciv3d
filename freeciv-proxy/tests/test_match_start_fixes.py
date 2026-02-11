@@ -92,8 +92,9 @@ class TestTimeModuleShadowingFix(unittest.TestCase):
         # The function should retry with time.sleep between attempts
         result = self.session.pause_game(self.mock_civcom, "test_retry")
 
-        # Should have made 3 attempts (2 failures + 1 success)
-        self.assertEqual(call_count[0], 3)
+        # Should have made 4 queue calls: 2 failures + 1 timeout success + 1 autotoggle success
+        # (Each successful attempt queues 2 packets: timeout + autotoggle)
+        self.assertEqual(call_count[0], 4)
 
     def test_pause_game_time_sleep_called_on_retry(self):
         """
@@ -117,7 +118,8 @@ class TestTimeModuleShadowingFix(unittest.TestCase):
 
         self.assertTrue(result)
         self.assertTrue(self.session.is_paused)
-        self.mock_civcom.queue_to_civserver.assert_called_once()
+        # Pause now queues 2 packets (timeout + autotoggle)
+        self.assertEqual(self.mock_civcom.queue_to_civserver.call_count, 2)
 
 
 class TestMetaserverAllocationRetry(unittest.TestCase):

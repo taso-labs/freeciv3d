@@ -4278,6 +4278,8 @@ class LLMWSHandler(websocket.WebSocketHandler):
             self._send_failure_count = 0
         if not hasattr(self, '_connection_dead'):
             self._connection_dead = False
+        if not hasattr(self, '_connection_dead_since'):
+            self._connection_dead_since = None
 
         # Once marked dead, silently ignore further failures to avoid log spam
         if self._connection_dead:
@@ -4289,6 +4291,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
         # Uses configurable CONNECTION_DEAD_FAILURE_THRESHOLD (default 20)
         if self._send_failure_count >= CONNECTION_DEAD_FAILURE_THRESHOLD:
             self._connection_dead = True  # Stop tracking further failures
+            self._connection_dead_since = time.time()  # Track when connection died (for TTL cleanup)
             logger.error(
                 f"Connection dead for {self.agent_id} "
                 f"({self._send_failure_count} consecutive failures) - attempting proactive pause"
@@ -4314,6 +4317,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
         """Reset the send failure counter and dead flag after successful send."""
         self._send_failure_count = 0
         self._connection_dead = False
+        self._connection_dead_since = None
 
     def _check_and_resume_game(self):
         """Check if game should be resumed after reconnection.

@@ -394,6 +394,7 @@ class CivCom(Thread):
         # Game settings from PACKET_GAME_INFO
         self.citymindist = DEFAULT_CITYMINDIST  # Minimum distance between cities
         self.game_timeout = None  # Turn timeout for pause/resume functionality
+        self._dead_since = None  # Timestamp when marked dead (for TTL-based cleanup)
 
         # Tile data storage for terrain lookups
         self.tiles = {}  # {tile_index: {terrain, extras, ...}}
@@ -1225,6 +1226,22 @@ class CivCom(Thread):
             self.socket = None
         self.civwebserver = None
         self.stopped = True
+
+    def cleanup(self):
+        """Gracefully terminate this CivCom for TTL-based dead connection cleanup.
+
+        Safe to call from Tornado IOLoop thread. Sets stopped=True (checked by
+        run() loop) and closes TCP socket (unblocks recv() in worker thread).
+        """
+        logger.info(f"Cleaning up CivCom for {self.username} (alive={self.is_alive()})")
+        self.stopped = True
+        if self.socket is not None:
+            try:
+                self.socket.close()
+            except Exception as e:
+                logger.debug(f"Error closing socket for {self.username}: {e}")
+            self.socket = None
+        self.civwebserver = None
 
     # queue messages to be sent to client.
     def send_buffer_append(self, data):
