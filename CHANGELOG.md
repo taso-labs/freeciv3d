@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.51](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.50...freeciv3d-v0.3.51) (2026-02-11)
+
+
+### Bug Fixes
+
+* **proxy:** disable autotoggle on pause and add dead CivCom TTL cleanup ([#143](https://github.com/taso-ventures/freeciv3d/issues/143)) ([01f209b](https://github.com/taso-ventures/freeciv3d/commit/01f209b57aeb98c0637781ed737ba344191720b5))
+
 ## [0.3.50](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.49...freeciv3d-v0.3.50) (2026-02-09)
 
 
