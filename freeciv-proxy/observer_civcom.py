@@ -158,6 +158,8 @@ def spawn_observer_civcom(game_id: str, port: int) -> ObserverCivCom:
         "port": port,
     })
 
+    # CivCom.__init__ expects a civwebserver (WSHandler) for login packet and
+    # write_message. Observer has no WebSocket client, so we use a minimal stub.
     stub = ObserverStub(login_packet)
     key = f"{OBSERVER_AGENT_ID}_{game_id[:8]}"
     observer = ObserverCivCom(username, port, key, stub)

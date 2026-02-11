@@ -2451,6 +2451,8 @@ class CivCom(Thread):
 
         game_turn = getattr(self, 'game_turn', 1)
         game_phase = getattr(self, 'game_phase', 'movement')
+        # Base game metadata shared by both player-specific and global state.
+        # Player-specific fields (e.g. current_player) are added via game_extra.
         game_dict = {
             'turn': game_turn,
             'phase': game_phase,
