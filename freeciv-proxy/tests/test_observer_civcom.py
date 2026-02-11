@@ -254,7 +254,11 @@ class TestGlobalStateObserverPreference(unittest.TestCase):
     """Tests that _handle_global_state_query prefers observer CivCom."""
 
     def _run_async(self, coro):
-        return asyncio.get_event_loop().run_until_complete(coro)
+        loop = asyncio.new_event_loop()
+        try:
+            return loop.run_until_complete(coro)
+        finally:
+            loop.close()
 
     def test_uses_observer_when_alive(self):
         """When observer is alive and not stopped, use its state directly."""
