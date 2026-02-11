@@ -18,6 +18,7 @@ from tornado.ioloop import IOLoop
 from civcom import CivCom
 from state_cache import state_cache
 from state_extractor import StateExtractor, StateFormat, civcom_registry
+from observer_civcom import OBSERVER_AGENT_ID, stop_observer_civcom
 from action_validator import LLMActionValidator, ActionType, ValidationResult
 from config_loader import llm_config
 from message_validator import MessageValidator, ValidationError
@@ -1308,60 +1309,79 @@ class LLMWSHandler(websocket.WebSocketHandler):
             return
 
         try:
-            # Aggregate state from ALL CivCom instances for this game.
-            # Each CivCom only receives packets for units/cities visible to its
-            # player (fog-of-war).  Merging across all players produces the true
-            # authoritative global view.
-            full_state = self.civcom.get_full_state_global()
-
+            # Try observer CivCom first — single source of truth, no fog-of-war
+            observer = None
             if self.game_id:
-                all_civcoms = civcom_registry.get_all_for_game(self.game_id)
-                for key, other_civcom in all_civcoms.items():
-                    if other_civcom is self.civcom or other_civcom.stopped:
-                        continue
-                    try:
-                        other_state = other_civcom.get_full_state_global()
-                        # Merge units — keyed by unit id, so duplicates are harmless
-                        for uid, udata in other_state.get('units', {}).items():
-                            if uid not in full_state.get('units', {}):
-                                full_state['units'][uid] = udata
-                        # Merge cities — keyed by city id
-                        for cid, cdata in other_state.get('cities', {}).items():
-                            if cid not in full_state.get('cities', {}):
-                                full_state['cities'][cid] = cdata
-                        # Merge techs — keyed by player label
-                        for pkey, techs in other_state.get('techs', {}).items():
-                            if pkey not in full_state.get('techs', {}):
-                                full_state['techs'][pkey] = techs
-                        # Merge players — each CivCom has accurate gold/score
-                        # only for its own player (other players' gold is hidden
-                        # by fog-of-war and reported as 0).  Use this CivCom's
-                        # data for its own player_id entry.
-                        other_pid = getattr(other_civcom, 'player_id', None)
-                        if other_pid is not None:
-                            pid_key = str(other_pid)
-                            other_players = other_state.get('players', {})
-                            if pid_key in other_players:
-                                full_state.setdefault('players', {})[pid_key] = (
-                                    other_players[pid_key]
-                                )
-                            # Merge wonders — derived from player_cities which is
-                            # fog-of-war limited.  Each CivCom's own player wonders
-                            # are authoritative.
-                            pkey = f'player{other_pid}'
-                            other_wonders = other_state.get('wonders', {})
-                            if pkey in other_wonders:
-                                full_state.setdefault('wonders', {})[pkey] = (
-                                    other_wonders[pkey]
-                                )
-                        # Merge spaceship — keyed by player label, merge missing entries
-                        for skey, sdata in other_state.get('spaceship', {}).items():
-                            if skey not in full_state.get('spaceship', {}):
-                                full_state.setdefault('spaceship', {})[skey] = sdata
-                    except Exception as merge_err:
-                        logger.warning(
-                            f"Failed to merge state from civcom {key}: {merge_err}"
-                        )
+                observer = civcom_registry.get_civcom(self.game_id, OBSERVER_AGENT_ID)
+
+            if observer and not observer.stopped and observer.is_alive():
+                full_state = observer.get_full_state_global()
+                logger.debug(
+                    f"Using observer CivCom for global state (game {self.game_id})"
+                )
+            else:
+                # Fallback: aggregate state from ALL player CivCom instances.
+                # Each CivCom only receives packets for units/cities visible to
+                # its player (fog-of-war).  Merging across all players produces
+                # a complete view.
+                if observer:
+                    logger.debug(
+                        f"Observer CivCom unavailable (stopped={getattr(observer, 'stopped', '?')}, "
+                        f"alive={observer.is_alive() if observer else '?'}), falling back to aggregation"
+                    )
+                full_state = self.civcom.get_full_state_global()
+
+                if self.game_id:
+                    all_civcoms = civcom_registry.get_all_for_game(self.game_id)
+                    for key, other_civcom in all_civcoms.items():
+                        if other_civcom is self.civcom or other_civcom.stopped:
+                            continue
+                        # Skip the observer entry in aggregation loop
+                        if key[1] == OBSERVER_AGENT_ID:
+                            continue
+                        try:
+                            other_state = other_civcom.get_full_state_global()
+                            # Merge units — keyed by unit id, so duplicates are harmless
+                            for uid, udata in other_state.get('units', {}).items():
+                                if uid not in full_state.get('units', {}):
+                                    full_state['units'][uid] = udata
+                            # Merge cities — keyed by city id
+                            for cid, cdata in other_state.get('cities', {}).items():
+                                if cid not in full_state.get('cities', {}):
+                                    full_state['cities'][cid] = cdata
+                            # Merge techs — keyed by player label
+                            for pkey, techs in other_state.get('techs', {}).items():
+                                if pkey not in full_state.get('techs', {}):
+                                    full_state['techs'][pkey] = techs
+                            # Merge players — each CivCom has accurate gold/score
+                            # only for its own player (other players' gold is hidden
+                            # by fog-of-war and reported as 0).  Use this CivCom's
+                            # data for its own player_id entry.
+                            other_pid = getattr(other_civcom, 'player_id', None)
+                            if other_pid is not None:
+                                pid_key = str(other_pid)
+                                other_players = other_state.get('players', {})
+                                if pid_key in other_players:
+                                    full_state.setdefault('players', {})[pid_key] = (
+                                        other_players[pid_key]
+                                    )
+                                # Merge wonders — derived from player_cities which is
+                                # fog-of-war limited.  Each CivCom's own player wonders
+                                # are authoritative.
+                                pkey = f'player{other_pid}'
+                                other_wonders = other_state.get('wonders', {})
+                                if pkey in other_wonders:
+                                    full_state.setdefault('wonders', {})[pkey] = (
+                                        other_wonders[pkey]
+                                    )
+                            # Merge spaceship — keyed by player label, merge missing entries
+                            for skey, sdata in other_state.get('spaceship', {}).items():
+                                if skey not in full_state.get('spaceship', {}):
+                                    full_state.setdefault('spaceship', {})[skey] = sdata
+                        except Exception as merge_err:
+                            logger.warning(
+                                f"Failed to merge state from civcom {key}: {merge_err}"
+                            )
 
             logger.debug(
                 f"✓ GLOBAL_STATE_QUERY SUCCESS for agent {self.agent_id}: "
@@ -4703,6 +4723,12 @@ class LLMWSHandler(websocket.WebSocketHandler):
 
                 # Now act on the decision (outside lock is fine since decision was atomic)
                 if should_release:
+                    # Stop observer CivCom before releasing the port
+                    try:
+                        stop_observer_civcom(self.game_id)
+                    except Exception as e:
+                        logger.debug(f"Observer cleanup error (benign): {e}")
+
                     logger.info(
                         f"[PORT_RELEASE] Last player {self.agent_id} disconnected from game {self.game_id}, "
                         f"releasing port {civserver_port}"

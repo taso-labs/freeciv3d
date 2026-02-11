@@ -651,6 +651,16 @@ class GameSession:
             self.phase = GamePhase.RUNNING
             logger.info(f"Game {self.game_id}: Game is now running")
 
+            # Spawn observer CivCom for authoritative global state (no fog-of-war)
+            try:
+                from observer_civcom import spawn_observer_civcom
+                spawn_observer_civcom(self.game_id, self.civserver_port)
+            except Exception as e:
+                logger.warning(
+                    f"Game {self.game_id}: Observer spawn failed: {e}. "
+                    f"Falling back to aggregation."
+                )
+
             # Broadcast game_ready to all agents now that game has started
             # This notifies agents that the game is fully initialized and ready for state queries
             logger.info(f"Game {self.game_id}: Broadcasting game_ready signal to all {len(self.players)} players")
