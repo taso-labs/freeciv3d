@@ -20,6 +20,21 @@ logger = logging.getLogger(__name__)
 OBSERVER_AGENT_ID = "__observer__"
 
 
+class _NoOpIOLoop:
+    """Fake Tornado IOLoop that discards all scheduled callbacks.
+
+    CivCom uses ``civwebserver.io_loop.add_callback()`` and ``.call_later()``
+    to schedule WebSocket writes from the CivCom thread.  The observer has no
+    WebSocket client, so we silently drop everything.
+    """
+
+    def add_callback(self, *args, **kwargs):
+        pass
+
+    def call_later(self, *args, **kwargs):
+        pass
+
+
 class ObserverStub:
     """Minimal stand-in for the ``civwebserver`` parameter CivCom expects.
 
@@ -33,6 +48,9 @@ class ObserverStub:
         # CivCom checks these via hasattr / getattr:
         self.is_llm_agent = False
         self.buffer_enabled = False
+        # CivCom schedules writes via civwebserver.io_loop.add_callback();
+        # provide a no-op loop so the thread doesn't crash.
+        self.io_loop = _NoOpIOLoop()
 
     def write_message(self, *args, **kwargs):
         """No-op — observer discards forwarded packets."""

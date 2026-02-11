@@ -49,6 +49,14 @@ class TestObserverStub(unittest.TestCase):
         self.assertFalse(stub.is_llm_agent)
         self.assertFalse(stub.buffer_enabled)
 
+    def test_io_loop_noop(self):
+        """Stub must have io_loop with no-op add_callback/call_later (CivCom uses these)."""
+        stub = ObserverStub('{}')
+        self.assertIsNotNone(stub.io_loop)
+        # These must not raise — CivCom calls them to schedule WebSocket writes
+        stub.io_loop.add_callback(lambda: None)
+        stub.io_loop.call_later(0.1, lambda: None)
+
 
 class TestObserverCivCom(unittest.TestCase):
     """Tests for ObserverCivCom subclass — /observe injection logic."""
