@@ -47,15 +47,19 @@ class TestGameSessionPause(unittest.TestCase):
         self.mock_civcom.send_packets_to_civserver = Mock()
 
     def test_pause_game_sends_correct_packet(self):
-        """Verify pause sends /set timeout 0"""
+        """Verify pause sends /set timeout 0 and /set autotoggle disabled"""
         result = self.session.pause_game(self.mock_civcom, "test_disconnect")
 
         self.assertTrue(result)
-        # Verify the packet
-        call_args = self.mock_civcom.queue_to_civserver.call_args[0][0]
-        packet = json.loads(call_args)
-        self.assertEqual(packet["pid"], PACKET_CHAT_MSG_REQ)
-        self.assertEqual(packet["message"], "/set timeout 0")
+        # Pause now sends two packets: timeout 0 + autotoggle disabled
+        calls = self.mock_civcom.queue_to_civserver.call_args_list
+        self.assertEqual(len(calls), 2)
+        timeout_packet = json.loads(calls[0][0][0])
+        self.assertEqual(timeout_packet["pid"], PACKET_CHAT_MSG_REQ)
+        self.assertEqual(timeout_packet["message"], "/set timeout 0")
+        autotoggle_packet = json.loads(calls[1][0][0])
+        self.assertEqual(autotoggle_packet["pid"], PACKET_CHAT_MSG_REQ)
+        self.assertEqual(autotoggle_packet["message"], "/set autotoggle disabled")
 
     def test_pause_game_captures_original_timeout(self):
         """Verify original timeout is stored from civcom.game_timeout"""
@@ -82,12 +86,12 @@ class TestGameSessionPause(unittest.TestCase):
         self.assertFalse(result)
         self.assertFalse(self.session.is_paused)
 
-    def test_pause_game_uses_default_timeout_if_not_captured(self):
-        """Verify fallback to 60s when civcom.game_timeout is None"""
+    def test_pause_game_uses_zero_timeout_if_not_captured(self):
+        """Verify fallback to 0 when civcom.game_timeout is None (timeout=0 games)"""
         self.mock_civcom.game_timeout = None
         self.session.pause_game(self.mock_civcom, "test")
-        # Should use default of 60 seconds
-        self.assertEqual(self.session.original_timeout, 60)
+        # game_timeout=None means server uses timeout=0 — preserve that
+        self.assertEqual(self.session.original_timeout, 0)
 
     def test_pause_game_calls_send_packets(self):
         """Verify send_packets_to_civserver is called after queueing"""
@@ -157,14 +161,15 @@ class TestGameSessionResume(unittest.TestCase):
         # is_paused should remain True since resume failed
         self.assertTrue(self.session.is_paused)
 
-    def test_resume_game_uses_default_timeout_if_none_stored(self):
-        """Verify fallback to 60s when original_timeout is None"""
+    def test_resume_game_uses_zero_timeout_if_none_stored(self):
+        """Verify fallback to 0 when original_timeout is None (timeout=0 games)"""
         self.session.original_timeout = None
         self.session.resume_game(self.mock_civcom)
 
+        # Last queued packet should be the timeout restore
         call_args = self.mock_civcom.queue_to_civserver.call_args[0][0]
         packet = json.loads(call_args)
-        self.assertEqual(packet["message"], "/set timeout 60")
+        self.assertEqual(packet["message"], "/set timeout 0")
 
     def test_resume_game_calls_send_packets(self):
         """Verify send_packets_to_civserver is called after queueing"""
@@ -272,11 +277,11 @@ class TestPauseGameTimeoutValidation(unittest.TestCase):
         self.session.pause_game(self.mock_civcom, "test")
         self.assertEqual(self.session.original_timeout, 60)  # DEFAULT_GAME_TIMEOUT
 
-    def test_pause_rejects_zero_timeout(self):
-        """Verify zero timeout falls back to default"""
+    def test_pause_preserves_zero_timeout(self):
+        """Verify zero timeout is stored as-is (valid config for LLM games)"""
         self.mock_civcom.game_timeout = 0
         self.session.pause_game(self.mock_civcom, "test")
-        self.assertEqual(self.session.original_timeout, 60)  # DEFAULT_GAME_TIMEOUT
+        self.assertEqual(self.session.original_timeout, 0)
 
 
 class TestPauseAndSuspendPartner(unittest.TestCase):
@@ -548,7 +553,7 @@ class TestPauseResumeIntegration(unittest.TestCase):
         self.mock_civcom.stopped = False
 
     def test_full_pause_resume_cycle(self):
-        """Test complete pause -> resume cycle"""
+        """Test complete pause -> resume cycle with autotoggle"""
         # Initial state
         self.assertFalse(self.game_session.is_paused)
         self.assertIsNone(self.game_session.original_timeout)
@@ -557,45 +562,50 @@ class TestPauseResumeIntegration(unittest.TestCase):
         result = self.game_session.pause_game(self.mock_civcom, "agent_disconnected")
         self.assertTrue(result)
         self.assertTrue(self.game_session.is_paused)
+        self.assertTrue(self.game_session.autotoggle_disabled)
         self.assertEqual(self.game_session.original_timeout, 60)
 
-        # Verify pause packet
-        pause_call = self.mock_civcom.queue_to_civserver.call_args_list[0]
-        pause_packet = json.loads(pause_call[0][0])
-        self.assertEqual(pause_packet["message"], "/set timeout 0")
+        # Verify pause packets (timeout 0 + autotoggle disabled)
+        calls = self.mock_civcom.queue_to_civserver.call_args_list
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(json.loads(calls[0][0][0])["message"], "/set timeout 0")
+        self.assertEqual(json.loads(calls[1][0][0])["message"], "/set autotoggle disabled")
 
         # Resume
         result = self.game_session.resume_game(self.mock_civcom)
         self.assertTrue(result)
         self.assertFalse(self.game_session.is_paused)
+        self.assertFalse(self.game_session.autotoggle_disabled)
 
-        # Verify resume packet
-        resume_call = self.mock_civcom.queue_to_civserver.call_args_list[1]
-        resume_packet = json.loads(resume_call[0][0])
-        self.assertEqual(resume_packet["message"], "/set timeout 60")
+        # Verify resume packets (autotoggle enabled + timeout restore)
+        # Total calls: 2 (pause) + 2 (resume) = 4
+        calls = self.mock_civcom.queue_to_civserver.call_args_list
+        self.assertEqual(len(calls), 4)
+        self.assertEqual(json.loads(calls[2][0][0])["message"], "/set autotoggle enabled")
+        self.assertEqual(json.loads(calls[3][0][0])["message"], "/set timeout 60")
 
     def test_double_pause_is_idempotent(self):
         """Test that pausing twice doesn't send duplicate packets"""
-        # First pause
+        # First pause sends 2 packets (timeout + autotoggle)
         self.game_session.pause_game(self.mock_civcom, "first")
-        self.assertEqual(self.mock_civcom.queue_to_civserver.call_count, 1)
+        self.assertEqual(self.mock_civcom.queue_to_civserver.call_count, 2)
 
         # Second pause should be no-op
         result = self.game_session.pause_game(self.mock_civcom, "second")
         self.assertFalse(result)
-        self.assertEqual(self.mock_civcom.queue_to_civserver.call_count, 1)
+        self.assertEqual(self.mock_civcom.queue_to_civserver.call_count, 2)
 
     def test_double_resume_is_idempotent(self):
         """Test that resuming twice doesn't send duplicate packets"""
-        # Pause first
+        # Pause first (sends 2 packets)
         self.game_session.pause_game(self.mock_civcom, "test")
         initial_call_count = self.mock_civcom.queue_to_civserver.call_count
 
-        # First resume
+        # First resume sends 2 packets (autotoggle enabled + timeout restore)
         self.game_session.resume_game(self.mock_civcom)
         self.assertEqual(
             self.mock_civcom.queue_to_civserver.call_count,
-            initial_call_count + 1
+            initial_call_count + 2
         )
 
         # Second resume should be no-op
@@ -603,7 +613,7 @@ class TestPauseResumeIntegration(unittest.TestCase):
         self.assertFalse(result)
         self.assertEqual(
             self.mock_civcom.queue_to_civserver.call_count,
-            initial_call_count + 1
+            initial_call_count + 2
         )
 
 

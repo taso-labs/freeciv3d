@@ -121,6 +121,7 @@ class GameSession:
         self.is_paused: bool = False  # Track if game is currently paused
         self.last_resumed_at: Optional[float] = None  # Timestamp of last resume (for debugging)
         self.resume_count: int = 0  # Number of times game has been resumed (recovery tracking)
+        self.autotoggle_disabled: bool = False  # Track if autotoggle was disabled during pause
 
         # Port release flag - prevents TOCTOU race in on_close()
         # Set True atomically with should_release decision while holding _players_lock
@@ -196,7 +197,10 @@ class GameSession:
         if self.original_timeout is None:
             timeout = getattr(civcom, 'game_timeout', None)
             # Validate and sanitize timeout value
-            if timeout and isinstance(timeout, int) and 0 < timeout <= MAX_GAME_TIMEOUT:
+            # game_timeout is None when server uses timeout=0 (civcom only stores positive values)
+            if timeout is None:
+                self.original_timeout = 0  # Preserve actual server config (no turn timer)
+            elif isinstance(timeout, int) and 0 <= timeout <= MAX_GAME_TIMEOUT:
                 self.original_timeout = timeout
             else:
                 self.original_timeout = DEFAULT_GAME_TIMEOUT
@@ -208,16 +212,22 @@ class GameSession:
 
         for attempt in range(MAX_RETRIES):
             try:
+                # Send /set timeout 0 (harmless if already 0) + /set autotoggle disabled
+                # autotoggle is the real protection: it prevents disconnected players
+                # from being converted to AI, which would end turns instantly
                 pause_packet = json.dumps({"pid": PACKET_CHAT_MSG_REQ, "message": "/set timeout 0"})
+                autotoggle_packet = json.dumps({"pid": PACKET_CHAT_MSG_REQ, "message": "/set autotoggle disabled"})
                 civcom.queue_to_civserver(pause_packet)
+                civcom.queue_to_civserver(autotoggle_packet)
                 civcom.send_packets_to_civserver()
                 # State update immediately after successful send
                 self.is_paused = True
+                self.autotoggle_disabled = True
 
                 # Success logging
                 logger.info(
                     f"Game {self.game_id} PAUSED (attempt {attempt + 1}/{MAX_RETRIES}): {disconnect_reason}, "
-                    f"   Original timeout: {self.original_timeout}s\n"
+                    f"   Original timeout: {self.original_timeout}s, autotoggle disabled\n"
                     f"   Players: {list(self.players.keys())}"
                 )
                 return True
@@ -251,7 +261,10 @@ class GameSession:
             logger.error(f"Game {self.game_id}: Cannot resume - no civcom connection")
             return False
 
-        timeout = self.original_timeout or DEFAULT_GAME_TIMEOUT
+        # Restore timeout — use 0 if original was None (game configured with timeout 0)
+        # The old code used `or DEFAULT_GAME_TIMEOUT` which evaluated None to 60,
+        # unintentionally changing the game config for timeout=0 games
+        timeout = self.original_timeout if self.original_timeout is not None else 0
 
         # Validate timeout is within bounds (security: prevents command injection)
         if not isinstance(timeout, int) or timeout < 0 or timeout > MAX_GAME_TIMEOUT:
@@ -262,23 +275,33 @@ class GameSession:
         current_turn = getattr(civcom, 'turn', 'unknown')
 
         try:
+            # Re-enable autotoggle first (if we disabled it during pause)
+            reenable_autotoggle = self.autotoggle_disabled
+            if reenable_autotoggle:
+                autotoggle_packet = json.dumps({"pid": PACKET_CHAT_MSG_REQ, "message": "/set autotoggle enabled"})
+                civcom.queue_to_civserver(autotoggle_packet)
+
             resume_packet = json.dumps({"pid": PACKET_CHAT_MSG_REQ, "message": f"/set timeout {timeout}"})
             civcom.queue_to_civserver(resume_packet)
             civcom.send_packets_to_civserver()
 
+            # Update state ONLY after successful send (prevents desync on partial failure)
+            if reenable_autotoggle:
+                self.autotoggle_disabled = False
             self.is_paused = False
             self.last_resumed_at = time.time()
             self.resume_count += 1
             logger.info(
-                f"🎮 GAME_RESUME_COMMAND_SENT: game_id={self.game_id} | "
-                f"timeout_restored={timeout}s | current_turn={current_turn} | "
+                f"GAME_RESUME_COMMAND_SENT: game_id={self.game_id} | "
+                f"timeout_restored={timeout}s | autotoggle_re_enabled={reenable_autotoggle} | "
+                f"current_turn={current_turn} | "
                 f"players={list(self.players.keys())} | civcom_agent={civcom.username} | "
                 f"resume_count={self.resume_count}"
             )
             return True
         except Exception as e:
             logger.error(
-                f"❌ GAME_RESUME_FAILED: game_id={self.game_id} | error={e} | "
+                f"GAME_RESUME_FAILED: game_id={self.game_id} | error={e} | "
                 f"current_turn={current_turn} | civcom_agent={civcom.username}"
             )
             return False

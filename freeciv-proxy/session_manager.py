@@ -1224,6 +1224,27 @@ session_manager = SessionManager(
 _cleanup_callback = None
 
 
+def _sync_dead_markers(civcom_registry):
+    """Propagate dead-connection timestamps from WS handlers to CivCom instances.
+
+    CivCom threads don't directly know when the WS handler's connection died.
+    This syncs the `_connection_dead_since` timestamp from the handler to the
+    CivCom's `_dead_since` attribute, enabling TTL-based cleanup.
+    """
+    for key, civcom in civcom_registry.get_all_instances():
+        # Skip if already marked
+        if getattr(civcom, '_dead_since', None) is not None:
+            continue
+
+        handler = getattr(civcom, 'civwebserver', None)
+        if handler is None:
+            # Handler detached — mark as dead now
+            civcom._dead_since = time.time()
+        elif getattr(handler, '_connection_dead', False):
+            # Handler's connection is dead — propagate the timestamp
+            civcom._dead_since = getattr(handler, '_connection_dead_since', None) or time.time()
+
+
 def start_periodic_cleanup(interval_ms: int = 300000) -> None:
     """
     Start a periodic cleanup callback using Tornado's PeriodicCallback.
@@ -1256,6 +1277,18 @@ def start_periodic_cleanup(interval_ms: int = 300000) -> None:
                     logger.debug(f"Periodic cleanup removed {cleaned} expired sessions")
             except Exception as e:
                 logger.error(f"Periodic cleanup error: {e}")
+
+            # Dead CivCom cleanup — gentle TTL (24h default, configurable)
+            # Gives agent-clash plenty of time to reconnect before cleaning up
+            try:
+                from state_extractor import civcom_registry
+                _sync_dead_markers(civcom_registry)
+                max_age = int(os.getenv('SESSION_SUSPENSION_TIMEOUT_SECS', '86400'))
+                civcom_cleaned = civcom_registry.cleanup_dead_civcoms(max_age)
+                if civcom_cleaned > 0:
+                    logger.info(f"Periodic cleanup removed {civcom_cleaned} dead CivCom(s)")
+            except Exception as e:
+                logger.error(f"Dead CivCom cleanup error: {e}")
 
         _cleanup_callback = PeriodicCallback(do_cleanup, interval_ms)
         _cleanup_callback.start()
