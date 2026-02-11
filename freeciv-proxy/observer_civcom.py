@@ -96,12 +96,8 @@ class ObserverCivCom(CivCom):
             )
 
 
-def _cleanup_stale_observer(game_id: str) -> None:
+def _cleanup_stale_observer(game_id: str, existing: "CivCom") -> None:
     """Remove a dead/stopped observer from the registry so a new one can spawn."""
-    existing = civcom_registry.get_civcom(game_id, OBSERVER_AGENT_ID)
-    if existing is None:
-        return
-
     existing.stopped = True
     try:
         existing.close_connection()
@@ -137,7 +133,7 @@ def spawn_observer_civcom(game_id: str, port: int) -> ObserverCivCom:
             )
             return existing
         # Stale/dead observer — clean up before respawning
-        _cleanup_stale_observer(game_id)
+        _cleanup_stale_observer(game_id, existing)
 
     # Build username with _view_ substring (FreeCiv observer convention)
     # and random suffix to prevent guessability
@@ -147,6 +143,9 @@ def spawn_observer_civcom(game_id: str, port: int) -> ObserverCivCom:
     # FreeCiv usernames cannot start with a digit
     if username[0].isdigit():
         username = "o" + username
+
+    # FreeCiv MAX_LEN_NAME is 32; truncate to stay within the limit
+    username = username[:32]
 
     login_packet = json.dumps({
         "pid": PACKET_SERVER_JOIN_REQ,

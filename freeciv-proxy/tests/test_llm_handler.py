@@ -1072,7 +1072,11 @@ class TestGlobalStateQuery(unittest.TestCase):
 
     def _run_async(self, coro):
         """Helper to run async coroutines in sync test methods."""
-        return asyncio.get_event_loop().run_until_complete(coro)
+        loop = asyncio.new_event_loop()
+        try:
+            return loop.run_until_complete(coro)
+        finally:
+            loop.close()
 
     def _make_handler(self, is_llm_agent=True, civcom=None, civcom_stopped=False):
         """Create a mock LLMWSHandler with the real _handle_global_state_query bound."""
@@ -1135,23 +1139,34 @@ class TestGlobalStateQuery(unittest.TestCase):
         self.assertEqual(response['code'], 'E123')
 
     def test_successful_global_state_response(self):
-        """Should return global_state_response with full state data."""
-        from unittest.mock import Mock
+        """Should return global_state_response with full state data via observer path."""
+        from unittest.mock import Mock, patch
 
-        civcom = Mock()
-        civcom.stopped = False
-        civcom.get_full_state_global.return_value = {
+        observer_state = {
             'turn': 10,
             'phase': 'movement',
             'units': {'1': {'id': 1, 'owner': 0}},
             'cities': {'2': {'id': 2, 'owner': 0, 'name': 'Berlin'}},
             'players': {'0': {'id': 0, 'gold': 50}},
         }
-        handler = self._make_handler(is_llm_agent=True, civcom=civcom)
 
-        self._run_async(handler._handle_global_state_query({
-            'correlation_id': 'corr-123'
-        }))
+        mock_observer = Mock()
+        mock_observer.stopped = False
+        mock_observer.is_alive.return_value = True
+        mock_observer.get_full_state_global.return_value = observer_state
+
+        civcom = Mock()
+        civcom.stopped = False
+
+        handler = self._make_handler(is_llm_agent=True, civcom=civcom)
+        handler.game_id = 'test-game-01'
+
+        with patch('llm_handler.civcom_registry') as mock_registry:
+            mock_registry.get_civcom.return_value = mock_observer
+
+            self._run_async(handler._handle_global_state_query({
+                'correlation_id': 'corr-123'
+            }))
 
         handler.write_message.assert_called_once()
         response = json.loads(handler.write_message.call_args[0][0])
@@ -1161,6 +1176,9 @@ class TestGlobalStateQuery(unittest.TestCase):
         self.assertIn('1', response['data']['units'])
         self.assertIn('2', response['data']['cities'])
         self.assertIn('timestamp', response)
+        # Verify observer was used (not the handler's own civcom)
+        mock_observer.get_full_state_global.assert_called_once()
+        civcom.get_full_state_global.assert_not_called()
 
     def test_exception_returns_e121_error(self):
         """Should return E121 when get_full_state_global() raises."""
@@ -1208,7 +1226,11 @@ class TestGlobalStateAggregation(unittest.TestCase):
     """
 
     def _run_async(self, coro):
-        return asyncio.get_event_loop().run_until_complete(coro)
+        loop = asyncio.new_event_loop()
+        try:
+            return loop.run_until_complete(coro)
+        finally:
+            loop.close()
 
     def _make_handler_with_game(self, game_id, civcom, registry_civcoms=None):
         """Create handler with game_id set and civcom_registry patched."""

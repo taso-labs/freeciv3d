@@ -1279,7 +1279,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
         correlation_id = msg_data.get('correlation_id')
 
         if not self.is_llm_agent:
-            logger.warning(f"❌ Agent {self.agent_id} not authenticated for global_state_query")
+            logger.warning(f"Agent {self.agent_id} not authenticated for global_state_query")
             error_response = {
                 'type': 'error',
                 'code': 'E120',
@@ -1292,7 +1292,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
 
         if not self.civcom or self.civcom.stopped:
             logger.error(
-                f"❌ GLOBAL_STATE_QUERY FAILED for {self.agent_id}: civcom not connected"
+                f"GLOBAL_STATE_QUERY FAILED for {self.agent_id}: civcom not connected"
             )
             error_response = {
                 'type': 'error',
@@ -1384,7 +1384,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                             )
 
             logger.debug(
-                f"✓ GLOBAL_STATE_QUERY SUCCESS for agent {self.agent_id}: "
+                f"GLOBAL_STATE_QUERY SUCCESS for agent {self.agent_id}: "
                 f"turn={full_state.get('turn', 'N/A')}, "
                 f"units={len(full_state.get('units', {}))}, "
                 f"cities={len(full_state.get('cities', {}))}, "
@@ -1402,7 +1402,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
 
         except Exception as e:
             logger.exception(
-                f"❌ GLOBAL_STATE_QUERY EXCEPTION for agent {self.agent_id}: {e}"
+                f"GLOBAL_STATE_QUERY EXCEPTION for agent {self.agent_id}: {e}"
             )
             error_response = {
                 'type': 'error',

@@ -572,7 +572,14 @@ class LLMGateway:
                     })
 
             elif msg_type == "global_state_response":
-                # Global state response from proxy
+                # Global state response from proxy.
+                #
+                # NOTE: For agent WebSocket connections, AgentWebSocketHandler._listen_to_proxy
+                # (websocket_handlers.py) intercepts correlated responses first and calls
+                # request_manager.resolve_request() there.  This branch handles the
+                # LLMGateway direct-listener path as a secondary resolution.  Double-
+                # resolution is harmless — the second call is a no-op since the future
+                # is already resolved.
                 logger.debug(f"Received global state response for {game_id}")
 
                 response_data = {
