@@ -18,6 +18,7 @@ from tornado.ioloop import IOLoop
 from civcom import CivCom
 from state_cache import state_cache
 from state_extractor import StateExtractor, StateFormat, civcom_registry
+from observer_civcom import OBSERVER_AGENT_ID, stop_observer_civcom
 from action_validator import LLMActionValidator, ActionType, ValidationResult
 from config_loader import llm_config
 from message_validator import MessageValidator, ValidationError
@@ -391,6 +392,8 @@ class LLMWSHandler(websocket.WebSocketHandler):
                     self._handle_city_actions_query(msg_data)
                 elif msg_type == 'chat':
                     self._handle_chat(msg_data)
+                elif msg_type == 'global_state_query':
+                    await self._handle_global_state_query(msg_data)
                 elif self.is_llm_agent:
                     # Enhanced message forwarding with validation logging
                     # Log messages without "pid" field for debugging, but still forward them
@@ -1260,6 +1263,153 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 'details': {
                     'agent_id': self.agent_id,
                     'player_id': self.player_id,
+                    'error': str(e)
+                }
+            }
+            if correlation_id:
+                error_response['correlation_id'] = correlation_id
+            self.write_message(json.dumps(error_response))
+
+    async def _handle_global_state_query(self, msg_data: Dict[str, Any]):
+        """Handle global state query - returns full state without fog of war filtering.
+
+        Unlike state_query (which returns a single player's fog-of-war view),
+        this returns the authoritative global state from CivCom for stats/observer use.
+        """
+        correlation_id = msg_data.get('correlation_id')
+
+        if not self.is_llm_agent:
+            logger.warning(f"Agent {self.agent_id} not authenticated for global_state_query")
+            error_response = {
+                'type': 'error',
+                'code': 'E120',
+                'message': 'Not authenticated as LLM agent'
+            }
+            if correlation_id:
+                error_response['correlation_id'] = correlation_id
+            self.write_message(json.dumps(error_response))
+            return
+
+        if not self.civcom or self.civcom.stopped:
+            logger.error(
+                f"GLOBAL_STATE_QUERY FAILED for {self.agent_id}: civcom not connected"
+            )
+            error_response = {
+                'type': 'error',
+                'code': 'E123',
+                'message': 'Connection to game server lost',
+                'details': {
+                    'agent_id': self.agent_id,
+                    'suggestion': 'Reconnect to game server'
+                }
+            }
+            if correlation_id:
+                error_response['correlation_id'] = correlation_id
+            self.write_message(json.dumps(error_response))
+            return
+
+        try:
+            # Try observer CivCom first — single source of truth, no fog-of-war
+            observer = None
+            if self.game_id:
+                observer = civcom_registry.get_civcom(self.game_id, OBSERVER_AGENT_ID)
+
+            if observer and not observer.stopped and observer.is_alive():
+                full_state = observer.get_full_state_global()
+                logger.debug(
+                    f"Using observer CivCom for global state (game {self.game_id})"
+                )
+            else:
+                # Fallback: aggregate state from ALL player CivCom instances.
+                # Each CivCom only receives packets for units/cities visible to
+                # its player (fog-of-war).  Merging across all players produces
+                # a complete view.
+                if observer:
+                    logger.debug(
+                        f"Observer CivCom unavailable (stopped={getattr(observer, 'stopped', '?')}, "
+                        f"alive={observer.is_alive() if observer else '?'}), falling back to aggregation"
+                    )
+                full_state = self.civcom.get_full_state_global()
+
+                if self.game_id:
+                    all_civcoms = civcom_registry.get_all_for_game(self.game_id)
+                    for key, other_civcom in all_civcoms.items():
+                        if other_civcom is self.civcom or other_civcom.stopped:
+                            continue
+                        # Skip the observer entry in aggregation loop
+                        if key[1] == OBSERVER_AGENT_ID:
+                            continue
+                        try:
+                            other_state = other_civcom.get_full_state_global()
+                            # Merge units — keyed by unit id, so duplicates are harmless
+                            for uid, udata in other_state.get('units', {}).items():
+                                if uid not in full_state.get('units', {}):
+                                    full_state['units'][uid] = udata
+                            # Merge cities — keyed by city id
+                            for cid, cdata in other_state.get('cities', {}).items():
+                                if cid not in full_state.get('cities', {}):
+                                    full_state['cities'][cid] = cdata
+                            # Merge techs — keyed by player label
+                            for pkey, techs in other_state.get('techs', {}).items():
+                                if pkey not in full_state.get('techs', {}):
+                                    full_state['techs'][pkey] = techs
+                            # Merge players — each CivCom has accurate gold/score
+                            # only for its own player (other players' gold is hidden
+                            # by fog-of-war and reported as 0).  Use this CivCom's
+                            # data for its own player_id entry.
+                            other_pid = getattr(other_civcom, 'player_id', None)
+                            if other_pid is not None:
+                                pid_key = str(other_pid)
+                                other_players = other_state.get('players', {})
+                                if pid_key in other_players:
+                                    full_state.setdefault('players', {})[pid_key] = (
+                                        other_players[pid_key]
+                                    )
+                                # Merge wonders — derived from player_cities which is
+                                # fog-of-war limited.  Each CivCom's own player wonders
+                                # are authoritative.
+                                pkey = f'player{other_pid}'
+                                other_wonders = other_state.get('wonders', {})
+                                if pkey in other_wonders:
+                                    full_state.setdefault('wonders', {})[pkey] = (
+                                        other_wonders[pkey]
+                                    )
+                            # Merge spaceship — keyed by player label, merge missing entries
+                            for skey, sdata in other_state.get('spaceship', {}).items():
+                                if skey not in full_state.get('spaceship', {}):
+                                    full_state.setdefault('spaceship', {})[skey] = sdata
+                        except Exception as merge_err:
+                            logger.warning(
+                                f"Failed to merge state from civcom {key}: {merge_err}"
+                            )
+
+            logger.debug(
+                f"GLOBAL_STATE_QUERY SUCCESS for agent {self.agent_id}: "
+                f"turn={full_state.get('turn', 'N/A')}, "
+                f"units={len(full_state.get('units', {}))}, "
+                f"cities={len(full_state.get('cities', {}))}, "
+                f"players={len(full_state.get('players', {}))}"
+            )
+
+            response = {
+                'type': 'global_state_response',
+                'data': full_state,
+                'timestamp': time.time()
+            }
+            if correlation_id:
+                response['correlation_id'] = correlation_id
+            self.write_message(json.dumps(response))
+
+        except Exception as e:
+            logger.exception(
+                f"GLOBAL_STATE_QUERY EXCEPTION for agent {self.agent_id}: {e}"
+            )
+            error_response = {
+                'type': 'error',
+                'code': 'E121',
+                'message': f'Global state query failed: {str(e)}',
+                'details': {
+                    'agent_id': self.agent_id,
                     'error': str(e)
                 }
             }
@@ -4577,6 +4727,12 @@ class LLMWSHandler(websocket.WebSocketHandler):
 
                 # Now act on the decision (outside lock is fine since decision was atomic)
                 if should_release:
+                    # Stop observer CivCom before releasing the port
+                    try:
+                        stop_observer_civcom(self.game_id)
+                    except Exception as e:
+                        logger.debug(f"Observer cleanup error (benign): {e}")
+
                     logger.info(
                         f"[PORT_RELEASE] Last player {self.agent_id} disconnected from game {self.game_id}, "
                         f"releasing port {civserver_port}"

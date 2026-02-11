@@ -571,6 +571,28 @@ class LLMGateway:
                         "timestamp": time.time()
                     })
 
+            elif msg_type == "global_state_response":
+                # Global state response from proxy.
+                #
+                # NOTE: For agent WebSocket connections, AgentWebSocketHandler._listen_to_proxy
+                # (websocket_handlers.py) intercepts correlated responses first and calls
+                # request_manager.resolve_request() there.  This branch handles the
+                # LLMGateway direct-listener path as a secondary resolution.  Double-
+                # resolution is harmless — the second call is a no-op since the future
+                # is already resolved.
+                logger.debug(f"Received global state response for {game_id}")
+
+                response_data = {
+                    "type": "global_state_response",
+                    "success": True,
+                    "data": message.get("data", {}),
+                    "timestamp": message.get("timestamp", time.time())
+                }
+
+                correlation_id = message.get("correlation_id")
+                if correlation_id:
+                    await request_manager.resolve_request(correlation_id, response_data)
+
             elif msg_type == "action_accepted":
                 # Action successfully executed
                 logger.info(f"Action accepted for {game_id}: {message.get('action')}")
@@ -633,25 +655,6 @@ class LLMGateway:
         if retry_count >= settings.max_retry_attempts:
             logger.error(f"Max retry attempts reached for game {game_id}. Implementing circuit breaker.")
             # Could trigger alerts, disable game, etc.
-
-    async def _handle_proxy_message(self, game_id: str, message: Dict[str, Any]):
-        """Handle incoming message from FreeCiv proxy"""
-        try:
-            correlation_id = message.get("correlation_id")
-            if correlation_id:
-                # FIXED: Use RequestManager to resolve requests (prevents memory leaks)
-                success = await request_manager.resolve_request(correlation_id, message)
-                if success:
-                    logger.debug(f"Resolved pending request {correlation_id}")
-                else:
-                    logger.debug(f"No pending request found for correlation_id {correlation_id}")
-            else:
-                # Handle non-request messages (broadcasts, events, etc.)
-                logger.debug(f"Received non-correlated message from proxy: {message.get('type', 'unknown')}")
-                # Could forward to all connected agents, etc.
-
-        except Exception as e:
-            logger.error(f"Error handling proxy message: {e}")
 
     async def _send_request_and_wait(self, game_id: str, message: Dict[str, Any], timeout: float = DEFAULT_REQUEST_TIMEOUT) -> Dict[str, Any]:
         """Send request to proxy and wait for response"""
@@ -765,6 +768,57 @@ class LLMGateway:
             return {
                 "success": False,
                 "error": f"State query failed: {str(e)}"
+            }
+
+    async def get_global_game_state(self, game_id: str) -> Dict[str, Any]:
+        """Get authoritative global game state without fog of war filtering.
+
+        Used by match orchestrator for stats collection. Unlike get_game_state(),
+        this returns all units/cities from all players regardless of visibility.
+
+        Note: No server-side rate limiting — the caller (agent-clash match_service)
+        is expected to cache responses (1s TTL) to avoid excessive polling.
+        """
+        try:
+            # Check both game_sessions (REST-created games) and
+            # connection_manager (WebSocket-connected agents) for game existence.
+            # Agent-clash connects via WebSocket, so games are only registered
+            # in connection_manager — not in game_sessions.
+            game_info = await connection_manager.get_game_info(game_id)
+            if game_id not in self.game_sessions and game_info is None:
+                return {
+                    "success": False,
+                    "error": f"Game not found: {game_id}"
+                }
+
+            state_request = {
+                "type": "global_state_query",
+            }
+
+            response = await self._send_request_and_wait(game_id, state_request, timeout=15.0)
+
+            if response.get("type") == "global_state_response":
+                return {
+                    "success": True,
+                    "data": response.get("data", {}),
+                    "timestamp": response.get("timestamp")
+                }
+            elif response.get("type") == "error":
+                return {
+                    "success": False,
+                    "error": response.get("message", "Unknown error from proxy")
+                }
+            else:
+                return {
+                    "success": False,
+                    "error": response.get("error", "Unknown error from proxy")
+                }
+
+        except Exception as e:
+            logger.error(f"Error getting global game state for {game_id}: {e}")
+            return {
+                "success": False,
+                "error": f"Global state query failed: {str(e)}"
             }
 
     async def submit_action(self, game_id: str, action: Dict[str, Any]) -> Dict[str, Any]:

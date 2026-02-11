@@ -1063,5 +1063,350 @@ class TestExpectedTurnZeroFix(unittest.TestCase):
             "Negative expected_turn should be clamped to None at parse time")
 
 
+class TestGlobalStateQuery(unittest.TestCase):
+    """Tests for _handle_global_state_query handler.
+
+    Verifies authentication checks, CivCom connectivity validation,
+    successful state retrieval, and exception handling.
+    """
+
+    def _run_async(self, coro):
+        """Helper to run async coroutines in sync test methods."""
+        loop = asyncio.new_event_loop()
+        try:
+            return loop.run_until_complete(coro)
+        finally:
+            loop.close()
+
+    def _make_handler(self, is_llm_agent=True, civcom=None, civcom_stopped=False):
+        """Create a mock LLMWSHandler with the real _handle_global_state_query bound."""
+        from llm_handler import LLMWSHandler
+        from unittest.mock import Mock
+
+        handler = Mock(spec=LLMWSHandler)
+        handler.agent_id = 'test_agent'
+        handler.is_llm_agent = is_llm_agent
+        handler.game_id = None
+
+        if civcom is not None:
+            handler.civcom = civcom
+            handler.civcom.stopped = civcom_stopped
+        else:
+            handler.civcom = None
+
+        handler._handle_global_state_query = LLMWSHandler._handle_global_state_query.__get__(
+            handler, LLMWSHandler
+        )
+        return handler
+
+    def test_rejects_unauthenticated_agent(self):
+        """Non-LLM agents should receive E120 error."""
+        handler = self._make_handler(is_llm_agent=False)
+
+        self._run_async(handler._handle_global_state_query({
+            'correlation_id': 'test-corr'
+        }))
+
+        handler.write_message.assert_called_once()
+        response = json.loads(handler.write_message.call_args[0][0])
+        self.assertEqual(response['type'], 'error')
+        self.assertEqual(response['code'], 'E120')
+        self.assertEqual(response['correlation_id'], 'test-corr')
+
+    def test_rejects_when_civcom_disconnected(self):
+        """Should return E123 when civcom is None."""
+        handler = self._make_handler(is_llm_agent=True, civcom=None)
+
+        self._run_async(handler._handle_global_state_query({}))
+
+        handler.write_message.assert_called_once()
+        response = json.loads(handler.write_message.call_args[0][0])
+        self.assertEqual(response['type'], 'error')
+        self.assertEqual(response['code'], 'E123')
+
+    def test_rejects_when_civcom_stopped(self):
+        """Should return E123 when civcom.stopped is True."""
+        from unittest.mock import Mock
+        civcom = Mock()
+        civcom.stopped = True
+        handler = self._make_handler(is_llm_agent=True, civcom=civcom, civcom_stopped=True)
+
+        self._run_async(handler._handle_global_state_query({}))
+
+        handler.write_message.assert_called_once()
+        response = json.loads(handler.write_message.call_args[0][0])
+        self.assertEqual(response['type'], 'error')
+        self.assertEqual(response['code'], 'E123')
+
+    def test_successful_global_state_response(self):
+        """Should return global_state_response with full state data via observer path."""
+        from unittest.mock import Mock, patch
+
+        observer_state = {
+            'turn': 10,
+            'phase': 'movement',
+            'units': {'1': {'id': 1, 'owner': 0}},
+            'cities': {'2': {'id': 2, 'owner': 0, 'name': 'Berlin'}},
+            'players': {'0': {'id': 0, 'gold': 50}},
+        }
+
+        mock_observer = Mock()
+        mock_observer.stopped = False
+        mock_observer.is_alive.return_value = True
+        mock_observer.get_full_state_global.return_value = observer_state
+
+        civcom = Mock()
+        civcom.stopped = False
+
+        handler = self._make_handler(is_llm_agent=True, civcom=civcom)
+        handler.game_id = 'test-game-01'
+
+        with patch('llm_handler.civcom_registry') as mock_registry:
+            mock_registry.get_civcom.return_value = mock_observer
+
+            self._run_async(handler._handle_global_state_query({
+                'correlation_id': 'corr-123'
+            }))
+
+        handler.write_message.assert_called_once()
+        response = json.loads(handler.write_message.call_args[0][0])
+        self.assertEqual(response['type'], 'global_state_response')
+        self.assertEqual(response['correlation_id'], 'corr-123')
+        self.assertEqual(response['data']['turn'], 10)
+        self.assertIn('1', response['data']['units'])
+        self.assertIn('2', response['data']['cities'])
+        self.assertIn('timestamp', response)
+        # Verify observer was used (not the handler's own civcom)
+        mock_observer.get_full_state_global.assert_called_once()
+        civcom.get_full_state_global.assert_not_called()
+
+    def test_exception_returns_e121_error(self):
+        """Should return E121 when get_full_state_global() raises."""
+        from unittest.mock import Mock
+
+        civcom = Mock()
+        civcom.stopped = False
+        civcom.get_full_state_global.side_effect = RuntimeError("CivCom internal error")
+        handler = self._make_handler(is_llm_agent=True, civcom=civcom)
+
+        self._run_async(handler._handle_global_state_query({
+            'correlation_id': 'corr-err'
+        }))
+
+        handler.write_message.assert_called_once()
+        response = json.loads(handler.write_message.call_args[0][0])
+        self.assertEqual(response['type'], 'error')
+        self.assertEqual(response['code'], 'E121')
+        self.assertEqual(response['correlation_id'], 'corr-err')
+        self.assertIn('CivCom internal error', response['message'])
+
+    def test_no_correlation_id_omitted_from_response(self):
+        """When no correlation_id provided, response should not include it."""
+        from unittest.mock import Mock
+
+        civcom = Mock()
+        civcom.stopped = False
+        civcom.get_full_state_global.return_value = {
+            'turn': 1, 'phase': 'movement',
+            'units': {}, 'cities': {}, 'players': {},
+        }
+        handler = self._make_handler(is_llm_agent=True, civcom=civcom)
+
+        self._run_async(handler._handle_global_state_query({}))
+
+        response = json.loads(handler.write_message.call_args[0][0])
+        self.assertNotIn('correlation_id', response)
+
+
+class TestGlobalStateAggregation(unittest.TestCase):
+    """Tests for multi-CivCom aggregation in _handle_global_state_query.
+
+    Verifies that global state merges units/cities/techs from ALL CivCom
+    instances registered for a game, not just the handler's own CivCom.
+    """
+
+    def _run_async(self, coro):
+        loop = asyncio.new_event_loop()
+        try:
+            return loop.run_until_complete(coro)
+        finally:
+            loop.close()
+
+    def _make_handler_with_game(self, game_id, civcom, registry_civcoms=None):
+        """Create handler with game_id set and civcom_registry patched."""
+        from llm_handler import LLMWSHandler
+        from unittest.mock import Mock, patch
+
+        handler = Mock(spec=LLMWSHandler)
+        handler.agent_id = 'agent_p1'
+        handler.is_llm_agent = True
+        handler.game_id = game_id
+        handler.civcom = civcom
+        handler.civcom.stopped = False
+
+        handler._handle_global_state_query = LLMWSHandler._handle_global_state_query.__get__(
+            handler, LLMWSHandler
+        )
+        self._registry_civcoms = registry_civcoms or {}
+        return handler
+
+    def test_merges_units_from_both_players(self):
+        """Units from both CivCom instances should appear in the response."""
+        from unittest.mock import Mock, patch
+
+        civcom_p1 = Mock()
+        civcom_p1.stopped = False
+        civcom_p1.player_id = 1
+        civcom_p1.get_full_state_global.return_value = {
+            'turn': 5, 'phase': 'movement',
+            'units': {'101': {'id': 101, 'owner': 1, 'type': 'warriors'}},
+            'cities': {'201': {'id': 201, 'owner': 1, 'name': 'CityP1'}},
+            'players': {
+                '0': {'id': 0, 'gold': 0, 'name': 'Player0'},
+                '1': {'id': 1, 'gold': 50, 'name': 'Player1'},
+            },
+            'techs': {'player1': ['Alphabet']},
+            'wonders': {'player1': ['Pyramids']},
+            'spaceship': {'player1': {'state': 0, 'structurals': 0}},
+        }
+
+        civcom_p0 = Mock()
+        civcom_p0.stopped = False
+        civcom_p0.player_id = 0
+        civcom_p0.get_full_state_global.return_value = {
+            'turn': 5, 'phase': 'movement',
+            'units': {'100': {'id': 100, 'owner': 0, 'type': 'settlers'}},
+            'cities': {'200': {'id': 200, 'owner': 0, 'name': 'CityP0'}},
+            'players': {
+                '0': {'id': 0, 'gold': 30, 'name': 'Player0'},
+                '1': {'id': 1, 'gold': 0, 'name': 'Player1'},
+            },
+            'techs': {'player0': ['Bronze Working']},
+            'wonders': {'player0': ['Apollo Program']},
+            'spaceship': {'player0': {'state': 1, 'structurals': 3}},
+        }
+
+        registry_return = {
+            ('test-game', 'agent_p1'): civcom_p1,
+            ('test-game', 'agent_p0'): civcom_p0,
+        }
+
+        handler = self._make_handler_with_game('test-game', civcom_p1, registry_return)
+
+        with patch('llm_handler.civcom_registry') as mock_registry:
+            mock_registry.get_all_for_game.return_value = registry_return
+            self._run_async(handler._handle_global_state_query({
+                'correlation_id': 'merge-test'
+            }))
+
+        response = json.loads(handler.write_message.call_args[0][0])
+        self.assertEqual(response['type'], 'global_state_response')
+        units = response['data']['units']
+        cities = response['data']['cities']
+        techs = response['data']['techs']
+
+        # Both players' units should be present
+        self.assertIn('100', units, "Player 0 units missing from merged state")
+        self.assertIn('101', units, "Player 1 units missing from merged state")
+        self.assertEqual(units['100']['owner'], 0)
+        self.assertEqual(units['101']['owner'], 1)
+
+        # Both players' cities should be present
+        self.assertIn('200', cities, "Player 0 cities missing from merged state")
+        self.assertIn('201', cities, "Player 1 cities missing from merged state")
+
+        # Both players' techs should be present
+        self.assertIn('player0', techs, "Player 0 techs missing from merged state")
+        self.assertIn('player1', techs, "Player 1 techs missing from merged state")
+
+        # Player gold should use each CivCom's authoritative data for its own player
+        players = response['data']['players']
+        self.assertEqual(players['0']['gold'], 30,
+                         "Player 0 gold should come from player 0's CivCom (authoritative)")
+        self.assertEqual(players['1']['gold'], 50,
+                         "Player 1 gold should come from player 1's CivCom (authoritative)")
+
+        # Wonders should use each CivCom's authoritative data for its own player
+        wonders = response['data']['wonders']
+        self.assertIn('player0', wonders, "Player 0 wonders missing")
+        self.assertIn('player1', wonders, "Player 1 wonders missing")
+        self.assertIn('Apollo Program', wonders['player0'])
+        self.assertIn('Pyramids', wonders['player1'])
+
+        # Spaceship data should be merged from both CivComs
+        spaceship = response['data']['spaceship']
+        self.assertIn('player0', spaceship, "Player 0 spaceship missing")
+        self.assertIn('player1', spaceship, "Player 1 spaceship missing")
+        self.assertEqual(spaceship['player0']['state'], 1)
+        self.assertEqual(spaceship['player1']['state'], 0)
+
+    def test_skips_stopped_civcom(self):
+        """Stopped CivCom instances should be excluded from aggregation."""
+        from unittest.mock import Mock, patch
+
+        civcom_p1 = Mock()
+        civcom_p1.stopped = False
+        civcom_p1.get_full_state_global.return_value = {
+            'turn': 3, 'phase': 'movement',
+            'units': {'101': {'id': 101, 'owner': 1}},
+            'cities': {}, 'players': {}, 'techs': {},
+        }
+
+        civcom_p0 = Mock()
+        civcom_p0.stopped = True  # This one is stopped
+
+        registry_return = {
+            ('test-game', 'agent_p1'): civcom_p1,
+            ('test-game', 'agent_p0'): civcom_p0,
+        }
+
+        handler = self._make_handler_with_game('test-game', civcom_p1, registry_return)
+
+        with patch('llm_handler.civcom_registry') as mock_registry:
+            mock_registry.get_all_for_game.return_value = registry_return
+            self._run_async(handler._handle_global_state_query({}))
+
+        response = json.loads(handler.write_message.call_args[0][0])
+        units = response['data']['units']
+        # Only player 1's units should be present (player 0's civcom was stopped)
+        self.assertEqual(len(units), 1)
+        self.assertIn('101', units)
+        # Stopped civcom should not have get_full_state_global called
+        civcom_p0.get_full_state_global.assert_not_called()
+
+    def test_merge_failure_does_not_break_response(self):
+        """If one CivCom raises during merge, the response should still include the primary state."""
+        from unittest.mock import Mock, patch
+
+        civcom_p1 = Mock()
+        civcom_p1.stopped = False
+        civcom_p1.get_full_state_global.return_value = {
+            'turn': 7, 'phase': 'movement',
+            'units': {'101': {'id': 101, 'owner': 1}},
+            'cities': {'201': {'id': 201, 'owner': 1}},
+            'players': {}, 'techs': {},
+        }
+
+        civcom_p0 = Mock()
+        civcom_p0.stopped = False
+        civcom_p0.get_full_state_global.side_effect = RuntimeError("CivCom crashed")
+
+        registry_return = {
+            ('test-game', 'agent_p1'): civcom_p1,
+            ('test-game', 'agent_p0'): civcom_p0,
+        }
+
+        handler = self._make_handler_with_game('test-game', civcom_p1, registry_return)
+
+        with patch('llm_handler.civcom_registry') as mock_registry:
+            mock_registry.get_all_for_game.return_value = registry_return
+            self._run_async(handler._handle_global_state_query({}))
+
+        response = json.loads(handler.write_message.call_args[0][0])
+        # Should still succeed with primary civcom's data
+        self.assertEqual(response['type'], 'global_state_response')
+        self.assertIn('101', response['data']['units'])
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)

@@ -216,8 +216,10 @@ class TestConnectionStateManager:
             connection = await manager.get_connection("game1")
             assert connection == mock_ws2
 
-            # Old connection should have been closed
-            mock_ws1.close.assert_called_once()
+            # Old connection should NOT be closed by add_connection —
+            # the owning handler (LLMWebSocketHandler) will close it
+            # during its own cleanup, preserving in-flight REST responses.
+            mock_ws1.close.assert_not_called()
 
         finally:
             await manager.stop()

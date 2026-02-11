@@ -16,6 +16,8 @@ import websockets
 
 try:
     from .connection_manager import connection_manager
+    from .connection_state_manager import connection_state_manager
+    from .request_manager import request_manager
     from .config import settings
     from .utils.origin_validator import validate_websocket_origin, get_websocket_origin_info, create_origin_rejection_response
     from .utils.rate_limiter import comprehensive_rate_limiter
@@ -28,6 +30,8 @@ try:
     from .tracing import extract_trace_context, inject_trace_context, create_child_span
 except ImportError:
     from connection_manager import connection_manager
+    from connection_state_manager import connection_state_manager
+    from request_manager import request_manager
     from config import settings
     from utils.origin_validator import validate_websocket_origin, get_websocket_origin_info, create_origin_rejection_response
     from utils.rate_limiter import comprehensive_rate_limiter
@@ -431,6 +435,23 @@ class AgentWebSocketHandler:
 
                         msg_type = msg_data.get("type")
 
+                        # Resolve correlation_id for REST-originated requests
+                        # (e.g. global_state_response from GET /api/game/{id}/global-state).
+                        # These are routed through this agent's proxy connection by
+                        # LLMGateway._send_request_and_wait() and must be resolved via
+                        # request_manager so the REST handler gets the response.
+                        correlation_id = msg_data.get("correlation_id")
+                        if correlation_id and msg_type in ("global_state_response", "error"):
+                            resolved = await request_manager.resolve_request(
+                                correlation_id, msg_data
+                            )
+                            if resolved:
+                                logger.debug(
+                                    f"Resolved REST correlation {correlation_id} "
+                                    f"for agent {self.agent_id}"
+                                )
+                                continue  # Don't forward to agent
+
                         # Filter out welcome message - agent doesn't expect it
                         if msg_type == "welcome":
                             logger.debug(f"🚫 Filtered welcome message for agent {self.agent_id}")
@@ -452,6 +473,20 @@ class AgentWebSocketHandler:
                                     game_id,
                                     civserver_port
                                 )
+
+                            # Register the proxy connection so the REST global-state
+                            # endpoint can route requests through it.  Only the first
+                            # agent per game needs to register (second overwrites with
+                            # an equally valid connection).
+                            if game_id and self.proxy_connection:
+                                registered = await connection_state_manager.add_connection(
+                                    game_id, self.proxy_connection
+                                )
+                                if registered:
+                                    logger.info(
+                                        f"Registered proxy connection for game {game_id} "
+                                        f"(agent {self.agent_id}) in connection_state_manager"
+                                    )
 
                             logger.info(
                                 f"🔑 Transforming auth_success for agent {self.agent_id}:\n"
@@ -856,6 +891,10 @@ class AgentWebSocketHandler:
             # Preserve optional fields
             if "correlation_id" in message:
                 transformed["correlation_id"] = message["correlation_id"]
+        elif msg_type == "global_state_query":
+            # Pass through with type, correlation_id, and trace_context
+            allowed_fields = {"type", "correlation_id", "trace_context"}
+            transformed = {k: v for k, v in transformed.items() if k in allowed_fields}
         elif msg_type == "conn_pong":
             # Agent is responding to a conn_ping we may have sent earlier
             # However, CivCom already handles civserver keep-alive internally (PACKET_CONN_PING/PONG)

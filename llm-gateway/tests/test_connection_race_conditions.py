@@ -173,8 +173,9 @@ class TestConnectionRaceConditions:
         assert conn is not None
         assert hasattr(conn, 'replacement_id')
 
-        # Original connection should be closed
-        assert original_ws.close_called
+        # Original connection should NOT be closed by add_connection —
+        # the owning handler will close it during its own cleanup.
+        assert not original_ws.close_called
 
     @pytest.mark.asyncio
     async def test_global_connection_limit_race(self, reset_global_tracker):

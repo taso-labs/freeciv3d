@@ -182,9 +182,20 @@ class ConnectionStateManager:
                 return False
 
             try:
-                # Close existing connection if any
+                # Replace existing entry WITHOUT closing the old WebSocket.
+                # The owning handler (LLMWebSocketHandler._listen_to_proxy)
+                # may still need to receive in-flight REST responses
+                # (e.g. global_state_response with correlation_id).  The
+                # handler will close the WebSocket during its own cleanup
+                # when the agent disconnects.
                 if game_id in self._connections:
-                    await self._close_connection_unsafe(game_id)
+                    self._connections.pop(game_id)
+                    # Release the global slot of the replaced entry
+                    # (the new slot was already reserved above).
+                    await global_connection_tracker.remove_connection()
+                    self._stats["active_connections"] = max(
+                        0, self._stats["active_connections"] - 1
+                    )
 
                 # Add new connection
                 connection_info = ConnectionInfo(

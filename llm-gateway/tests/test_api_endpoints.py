@@ -215,5 +215,135 @@ class TestBasicFunctionality:
         assert data["data"]["code"] == "E011"
 
 
+class TestGlobalStateEndpoint:
+    """Test global state REST endpoint"""
+
+    def test_global_state_success(self):
+        """Test successful global state retrieval"""
+        client = TestClient(app)
+
+        with patch("api_endpoints.gateway") as mock_gw:
+            mock_gw.get_global_game_state = AsyncMock(return_value={
+                "success": True,
+                "data": {
+                    "turn": 5,
+                    "phase": "movement",
+                    "units": {"10": {"id": 10, "owner": 0, "type": "Warriors"}},
+                    "cities": {"1": {"id": 1, "owner": 0, "name": "Berlin"}},
+                    "players": {"0": {"id": 0, "gold": 100}},
+                },
+                "timestamp": 1700000000.0,
+            })
+
+            response = client.get("/api/game/game-123/global-state")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["success"] is True
+        assert data["data"]["turn"] == 5
+        assert "10" in data["data"]["units"]
+        assert "1" in data["data"]["cities"]
+        mock_gw.get_global_game_state.assert_called_once_with("game-123")
+
+    def test_global_state_game_not_found(self):
+        """Test global state when game doesn't exist"""
+        client = TestClient(app)
+
+        with patch("api_endpoints.gateway") as mock_gw:
+            mock_gw.get_global_game_state = AsyncMock(return_value={
+                "success": False,
+                "error": "Game not found: nonexistent",
+            })
+
+            response = client.get("/api/game/nonexistent/global-state")
+
+        assert response.status_code == 404
+
+    def test_global_state_server_error(self):
+        """Test global state when gateway returns non-404 error"""
+        client = TestClient(app)
+
+        with patch("api_endpoints.gateway") as mock_gw:
+            mock_gw.get_global_game_state = AsyncMock(return_value={
+                "success": False,
+                "error": "CivCom connection lost",
+            })
+
+            response = client.get("/api/game/game-123/global-state")
+
+        assert response.status_code == 500
+
+    def test_global_state_gateway_not_initialized(self):
+        """Test global state when gateway is None"""
+        client = TestClient(app)
+
+        with patch("api_endpoints.gateway", None):
+            response = client.get("/api/game/game-123/global-state")
+
+        assert response.status_code == 500
+
+
+class TestGlobalStateResponseHandler:
+    """Test _handle_freeciv_message processing of global_state_response messages"""
+
+    def _create_gateway(self):
+        """Create a minimal LLMGateway instance with streaming disabled."""
+        with patch("main.settings") as mock_settings, \
+             patch("main.create_stream_manager", return_value=None):
+            mock_settings.streaming_enabled = False
+            from main import LLMGateway
+            return LLMGateway()
+
+    @pytest.mark.asyncio
+    async def test_global_state_response_resolves_correlation_id(self):
+        """Verify that a global_state_response with correlation_id resolves the pending request"""
+        gw = self._create_gateway()
+
+        message = {
+            "type": "global_state_response",
+            "correlation_id": "corr-abc-123",
+            "data": {
+                "turn": 10,
+                "players": {"0": {"id": 0, "gold": 250}},
+                "units": {"5": {"id": 5, "owner": 0}},
+                "cities": {"2": {"id": 2, "owner": 0, "name": "TestCity"}},
+            },
+            "timestamp": 1700000000.0,
+        }
+
+        with patch("main.request_manager") as mock_rm:
+            mock_rm.resolve_request = AsyncMock(return_value=True)
+
+            await gw._handle_freeciv_message("game-test-1", message)
+
+            mock_rm.resolve_request.assert_called_once_with(
+                "corr-abc-123",
+                {
+                    "type": "global_state_response",
+                    "success": True,
+                    "data": message["data"],
+                    "timestamp": 1700000000.0,
+                },
+            )
+
+    @pytest.mark.asyncio
+    async def test_global_state_response_without_correlation_id(self):
+        """Verify that a global_state_response without correlation_id does not call resolve_request"""
+        gw = self._create_gateway()
+
+        message = {
+            "type": "global_state_response",
+            "data": {"turn": 3},
+            "timestamp": 1700000001.0,
+        }
+
+        with patch("main.request_manager") as mock_rm:
+            mock_rm.resolve_request = AsyncMock()
+
+            await gw._handle_freeciv_message("game-test-2", message)
+
+            mock_rm.resolve_request.assert_not_called()
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

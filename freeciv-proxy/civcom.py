@@ -2449,22 +2449,35 @@ class CivCom(Thread):
         scored_actions.sort(key=lambda x: x[0], reverse=True)
         return [action for score, action in scored_actions[:max_actions]]
 
-    def get_full_state(self, player_id):
-        """Get complete game state - returns dict format for units/cities/players."""
+    def _build_state_dict(self, units, cities, game_extra=None):
+        """Shared helper that assembles the full state dict.
+
+        Args:
+            units: Pre-built units dict (filtered or unfiltered).
+            cities: Pre-built cities dict (filtered or unfiltered).
+            game_extra: Optional extra keys merged into the ``game`` sub-dict
+                        (e.g. ``{'current_player': pid}``).
+
+        Returns:
+            Complete state dict with turn, phase, units, cities, players,
+            techs, wonders, spaceship, map, and game metadata.
+        """
         map_info = self._get_valid_map_info()
         all_players_raw = getattr(self, 'all_players', [])
         players_dict = self._normalize_to_dict(all_players_raw)
-        player_units_dict = self._filter_by_owner(self.player_units, player_id)
-        player_cities_dict = self._filter_by_owner(self.player_cities, player_id)
 
         game_turn = getattr(self, 'game_turn', 1)
         game_phase = getattr(self, 'game_phase', 'movement')
+        # Base game metadata shared by both player-specific and global state.
+        # Player-specific fields (e.g. current_player) are added via game_extra.
         game_dict = {
             'turn': game_turn,
             'phase': game_phase,
             'is_over': getattr(self, 'game_is_over', False),
-            'current_player': player_id
+            'winners': getattr(self, 'winners', [])
         }
+        if game_extra:
+            game_dict.update(game_extra)
 
         techs_dict = self._build_techs_dict()
         wonders_dict = self._build_wonders_dict(all_players_raw)
@@ -2473,10 +2486,8 @@ class CivCom(Thread):
         return {
             'turn': game_turn,
             'phase': game_phase,
-            'player_id': player_id,
-            'units': player_units_dict,
-            'cities': player_cities_dict,
-            'visible_tiles': getattr(self, 'visible_tiles', []),
+            'units': units,
+            'cities': cities,
             'players': players_dict,
             'techs': techs_dict,
             'wonders': wonders_dict,
@@ -2484,6 +2495,45 @@ class CivCom(Thread):
             'map': map_info,
             'game': game_dict
         }
+
+    def get_full_state(self, player_id):
+        """Get complete game state - returns dict format for units/cities/players."""
+        player_units_dict = self._filter_by_owner(self.player_units, player_id)
+        player_cities_dict = self._filter_by_owner(self.player_cities, player_id)
+
+        state = self._build_state_dict(
+            units=player_units_dict,
+            cities=player_cities_dict,
+            game_extra={'current_player': player_id},
+        )
+        state['player_id'] = player_id
+        state['visible_tiles'] = getattr(self, 'visible_tiles', [])
+        return state
+
+    def get_full_state_global(self) -> dict:
+        """Get game state from THIS CivCom's perspective without owner filtering.
+
+        Returns all units/cities this connection has received packets for.
+        Note: each CivCom only receives packets for entities visible to its
+        player (fog-of-war), so the result may NOT include the other player's
+        assets.  Callers that need a true global view should merge results
+        from all CivCom instances for the game (see _handle_global_state_query).
+
+        Returns:
+            State dict with units/cities known to this CivCom instance.
+        """
+        # Global view: include ALL units without filtering by owner
+        all_units = self._normalize_to_dict(self.player_units)
+        other_units = getattr(self, 'other_units', {})
+        if other_units:
+            all_units.update(self._normalize_to_dict(other_units))
+
+        # player_cities contains cities this CivCom has received packets for.
+        # Due to fog-of-war, this may only include the controlling player's cities
+        # plus any enemy cities within visibility range.
+        all_cities = self._normalize_to_dict(self.player_cities)
+
+        return self._build_state_dict(units=all_units, cities=all_cities)
 
     def _get_valid_map_info(self):
         """Return map_info with valid dimensions or a default."""
