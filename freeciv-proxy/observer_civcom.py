@@ -9,6 +9,7 @@ The existing per-player CivCom aggregation is kept as a fallback.
 
 import json
 import logging
+import os
 
 from civcom import CivCom
 from packet_constants import PACKET_CHAT_MSG_REQ, PACKET_SERVER_JOIN_REQ
@@ -67,18 +68,53 @@ class ObserverCivCom(CivCom):
             )
 
 
+def _cleanup_stale_observer(game_id: str) -> None:
+    """Remove a dead/stopped observer from the registry so a new one can spawn."""
+    existing = civcom_registry.get_civcom(game_id, OBSERVER_AGENT_ID)
+    if existing is None:
+        return
+
+    existing.stopped = True
+    try:
+        existing.close_connection()
+    except Exception:
+        pass
+    try:
+        civcom_registry.unregister_game(game_id, OBSERVER_AGENT_ID)
+    except Exception:
+        pass
+    logger.info(f"Game {game_id}: Cleaned up stale observer before respawn")
+
+
 def spawn_observer_civcom(game_id: str, port: int) -> ObserverCivCom:
     """Spawn an observer CivCom and register it in the global registry.
+
+    Only one observer per game is allowed.  If a live observer already exists,
+    this is a no-op.  If a stale (stopped/dead) observer is in the registry,
+    it is cleaned up and replaced.
 
     Args:
         game_id: The game identifier.
         port: The civserver TCP port.
 
     Returns:
-        The started ObserverCivCom instance.
+        The started ObserverCivCom instance (or existing live one).
     """
+    # Single-observer-per-game guard
+    existing = civcom_registry.get_civcom(game_id, OBSERVER_AGENT_ID)
+    if existing is not None:
+        if not existing.stopped and existing.is_alive():
+            logger.info(
+                f"Game {game_id}: Observer already running, skipping spawn"
+            )
+            return existing
+        # Stale/dead observer — clean up before respawning
+        _cleanup_stale_observer(game_id)
+
     # Build username with _view_ substring (FreeCiv observer convention)
-    username = f"obs_{game_id[:8]}_view_"
+    # and random suffix to prevent guessability
+    random_suffix = os.urandom(3).hex()  # 6 hex chars
+    username = f"obs_{game_id[:8]}_view_{random_suffix}"
 
     # FreeCiv usernames cannot start with a digit
     if username[0].isdigit():

@@ -112,6 +112,7 @@ class TestSpawnAndStop(unittest.TestCase):
     @patch('observer_civcom.civcom_registry')
     def test_spawn_registers_in_registry(self, mock_registry, MockObserverCivCom):
         """spawn_observer_civcom should register the observer with OBSERVER_AGENT_ID."""
+        mock_registry.get_civcom.return_value = None  # no existing observer
         mock_instance = Mock()
         MockObserverCivCom.return_value = mock_instance
 
@@ -128,7 +129,8 @@ class TestSpawnAndStop(unittest.TestCase):
     @patch('observer_civcom.ObserverCivCom')
     @patch('observer_civcom.civcom_registry')
     def test_spawn_creates_correct_login_packet(self, mock_registry, MockObserverCivCom):
-        """Login packet should use PACKET_SERVER_JOIN_REQ and observer username."""
+        """Login packet should use PACKET_SERVER_JOIN_REQ and observer username with random suffix."""
+        mock_registry.get_civcom.return_value = None  # no existing observer
         calls = []
         def capture_init(username, port, key, stub):
             calls.append({'username': username, 'port': port, 'stub': stub})
@@ -138,14 +140,92 @@ class TestSpawnAndStop(unittest.TestCase):
         spawn_observer_civcom('abcd1234-rest', 6002)
 
         self.assertEqual(len(calls), 1)
-        self.assertEqual(calls[0]['username'], 'obs_abcd1234_view_')
+        # Username should have pattern: obs_{game_id[:8]}_view_{6 hex chars}
+        username = calls[0]['username']
+        self.assertTrue(username.startswith('obs_abcd1234_view_'))
+        # Random suffix: 6 hex chars after the last underscore
+        suffix = username.split('_view_')[1]
+        self.assertEqual(len(suffix), 6)
         self.assertEqual(calls[0]['port'], 6002)
 
         # Verify login packet on stub
         stub = calls[0]['stub']
         packet = json.loads(stub.loginpacket)
         self.assertEqual(packet['pid'], PACKET_SERVER_JOIN_REQ)
-        self.assertEqual(packet['username'], 'obs_abcd1234_view_')
+        self.assertTrue(packet['username'].startswith('obs_abcd1234_view_'))
+
+    @patch('observer_civcom.ObserverCivCom')
+    @patch('observer_civcom.civcom_registry')
+    def test_spawn_skips_when_live_observer_exists(self, mock_registry, MockObserverCivCom):
+        """If a live observer already exists, return it without spawning a new one."""
+        existing = Mock()
+        existing.stopped = False
+        existing.is_alive.return_value = True
+        mock_registry.get_civcom.return_value = existing
+
+        result = spawn_observer_civcom('game-xyz', 6001)
+
+        self.assertEqual(result, existing)
+        MockObserverCivCom.assert_not_called()
+        mock_registry.register_game.assert_not_called()
+
+    @patch('observer_civcom.ObserverCivCom')
+    @patch('observer_civcom.civcom_registry')
+    def test_spawn_replaces_stale_observer(self, mock_registry, MockObserverCivCom):
+        """If existing observer is dead, clean it up and spawn a new one."""
+        stale = Mock()
+        stale.stopped = True
+        mock_registry.get_civcom.return_value = stale
+
+        new_instance = Mock()
+        MockObserverCivCom.return_value = new_instance
+
+        result = spawn_observer_civcom('game-xyz', 6001)
+
+        # Stale observer should have been unregistered
+        mock_registry.unregister_game.assert_called_with('game-xyz', OBSERVER_AGENT_ID)
+        # New observer should be registered and started
+        mock_registry.register_game.assert_called_with('game-xyz', OBSERVER_AGENT_ID, new_instance)
+        new_instance.start.assert_called_once()
+        self.assertEqual(result, new_instance)
+
+    @patch('observer_civcom.ObserverCivCom')
+    @patch('observer_civcom.civcom_registry')
+    def test_spawn_replaces_dead_thread_observer(self, mock_registry, MockObserverCivCom):
+        """If existing observer thread died (is_alive=False), replace it."""
+        dead = Mock()
+        dead.stopped = False
+        dead.is_alive.return_value = False
+        mock_registry.get_civcom.return_value = dead
+
+        new_instance = Mock()
+        MockObserverCivCom.return_value = new_instance
+
+        result = spawn_observer_civcom('game-xyz', 6001)
+
+        # Dead observer should have been cleaned up
+        self.assertTrue(dead.stopped)
+        mock_registry.unregister_game.assert_called_with('game-xyz', OBSERVER_AGENT_ID)
+        # New one spawned
+        new_instance.start.assert_called_once()
+        self.assertEqual(result, new_instance)
+
+    @patch('observer_civcom.os.urandom')
+    @patch('observer_civcom.ObserverCivCom')
+    @patch('observer_civcom.civcom_registry')
+    def test_username_has_random_suffix(self, mock_registry, MockObserverCivCom, mock_urandom):
+        """Username should include a random suffix for unguessability."""
+        mock_registry.get_civcom.return_value = None
+        mock_urandom.return_value = b'\xab\xcd\xef'  # hex = 'abcdef'
+        calls = []
+        def capture_init(username, port, key, stub):
+            calls.append({'username': username})
+            return Mock()
+        MockObserverCivCom.side_effect = capture_init
+
+        spawn_observer_civcom('game1234-rest', 6001)
+
+        self.assertEqual(calls[0]['username'], 'obs_game1234_view_abcdef')
 
     @patch('observer_civcom.civcom_registry')
     def test_stop_sets_stopped_and_unregisters(self, mock_registry):
