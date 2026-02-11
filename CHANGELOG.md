@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.52](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.51...freeciv3d-v0.3.52) (2026-02-11)
+
+
+### Features
+
+* **gateway:** authoritative global state via observer CivCom + REST endpoint ([#142](https://github.com/taso-ventures/freeciv3d/issues/142)) ([5bb51cf](https://github.com/taso-ventures/freeciv3d/commit/5bb51cf9a67ed25b02d19dafa1c5c72d27904d3c))
+
 ## [0.3.51](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.50...freeciv3d-v0.3.51) (2026-02-11)
 
 
