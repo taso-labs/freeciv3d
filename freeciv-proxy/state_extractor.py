@@ -2631,14 +2631,16 @@ class ForceEndTurnHandler(web.RequestHandler):
             else:
                 cc = civcom_registry.get_civcom(game_id, agent_id)
                 if cc is None or cc.stopped:
+                    logger.warning(f"ForceEndTurn: no active CivCom for agent={agent_id}, game={game_id}")
                     self.set_status(404)
-                    self.write({"error": f"No active CivCom for agent '{agent_id}' in game {game_id}"})
+                    self.write({"error": "No active CivCom for the specified agent in this game"})
                     return
                 targets = {agent_id: cc}
 
             if not targets:
+                logger.warning(f"ForceEndTurn: no active CivCom instances for game={game_id}")
                 self.set_status(404)
-                self.write({"error": f"No active CivCom instances found for game {game_id}"})
+                self.write({"error": "No active CivCom instances found for this game"})
                 return
 
             # Send PACKET_PLAYER_PHASE_DONE for each target
