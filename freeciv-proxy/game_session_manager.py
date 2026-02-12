@@ -11,6 +11,7 @@ import importlib.util
 import json
 import logging
 import os
+import re
 import threading
 import time
 import aiohttp
@@ -358,15 +359,29 @@ class GameSession:
 
         # Dispersion - how far apart each player's starting units are scattered (0-10)
         if 'dispersion' in config:
-            commands.append(f"/set dispersion {config['dispersion']}")
+            value = config['dispersion']
+            if isinstance(value, int) and 0 <= value <= 10:
+                commands.append(f"/set dispersion {value}")
+            else:
+                logger.warning(f"Game {self.game_id}: Invalid dispersion value {value}, ignoring")
 
-        # Minimum city distance (1-9)
+        # Minimum city distance (1-11, FreeCiv GAME_MIN/MAX_CITYMINDIST)
         if 'citymindist' in config:
-            commands.append(f"/set citymindist {config['citymindist']}")
+            value = config['citymindist']
+            if isinstance(value, int) and 1 <= value <= 11:
+                commands.append(f"/set citymindist {value}")
+            else:
+                logger.warning(f"Game {self.game_id}: Invalid citymindist value {value}, ignoring")
 
         # Starting units string (e.g. "cccwwwx")
+        # Validate against FreeCiv-allowed characters: c=colonist, w=worker, x=explorer,
+        # k=king, s=spy, f=ferry, d=defender. Max length 20 (MAX_LEN_STARTUNIT - 1).
         if 'startunits' in config:
-            commands.append(f"/set startunits {config['startunits']}")
+            value = str(config['startunits'])
+            if re.match(r'^[cwxksfd]{1,20}$', value):
+                commands.append(f"/set startunits {value}")
+            else:
+                logger.warning(f"Game {self.game_id}: Invalid startunits value '{value}', ignoring")
 
         # Tiny isles
         if 'tinyisles' in config:
