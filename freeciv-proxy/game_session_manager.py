@@ -356,6 +356,18 @@ class GameSession:
         if 'startpos' in config:
             commands.append(f"/set startpos {config['startpos']}")
 
+        # Dispersion - how far apart each player's starting units are scattered (0-10)
+        if 'dispersion' in config:
+            commands.append(f"/set dispersion {config['dispersion']}")
+
+        # Minimum city distance (1-9)
+        if 'citymindist' in config:
+            commands.append(f"/set citymindist {config['citymindist']}")
+
+        # Starting units string (e.g. "cccwwwx")
+        if 'startunits' in config:
+            commands.append(f"/set startunits {config['startunits']}")
+
         # Tiny isles
         if 'tinyisles' in config:
             value = "TRUE" if config['tinyisles'] else "FALSE"
