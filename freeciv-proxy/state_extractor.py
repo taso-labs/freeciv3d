@@ -52,6 +52,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from state_cache import StateCache, CacheEntry
 from civcom import CivCom
+from packet_constants import PACKET_PLAYER_PHASE_DONE
 
 # Required modules for production use
 try:
@@ -2560,3 +2561,119 @@ class LegalActionsHandler(web.RequestHandler):
             else:
                 self.set_status(500)
                 self.write({"error": "Internal server error"})
+
+
+class ForceEndTurnHandler(web.RequestHandler):
+    """Tornado HTTP handler for POST /api/game/{game_id}/force_end_turn
+
+    Sends PACKET_PLAYER_PHASE_DONE on behalf of agent(s) whose WebSocket
+    may be dead.  This is the REST fallback used by the orchestrator when
+    the normal WebSocket-based force_end_turn cannot reach the agent.
+    """
+
+    # Max length for agent_id from request body (matches game_id limit)
+    _MAX_AGENT_ID_LEN = 50
+
+    async def post(self, game_id: str):
+        """Force end turn for one or all agents in a game.
+
+        Rate limiting is intentionally omitted: this endpoint is called only by
+        the orchestrator during timeout recovery, and the orchestrator already
+        gates invocations.
+        """
+        try:
+            # Validate and sanitize game_id (matches sibling handlers)
+            try:
+                game_id = InputSanitizer.sanitize_game_id(game_id)
+            except Exception:
+                self.set_status(400)
+                self.write({"error": "Invalid game_id format"})
+                return
+
+            # Authenticate request
+            authenticated, auth_player_id, auth_game_id, auth_error = authenticate_request(self, 'actions_read')
+            if not authenticated:
+                self.set_status(401)
+                self.write({"error": "Authentication required"})
+                return
+
+            # Parse JSON body
+            try:
+                body = json.loads(self.request.body) if self.request.body else {}
+            except (json.JSONDecodeError, ValueError):
+                self.set_status(400)
+                self.write({"error": "Invalid JSON body"})
+                return
+
+            agent_id = body.get("agent_id")
+            if not agent_id or not isinstance(agent_id, str):
+                self.set_status(400)
+                self.write({"error": "agent_id is required (string or \"all\")"})
+                return
+
+            # Sanitize agent_id: alphanumeric, underscores, hyphens, bounded length
+            if len(agent_id) > self._MAX_AGENT_ID_LEN:
+                self.set_status(400)
+                self.write({"error": "agent_id too long"})
+                return
+            if agent_id != "all" and not all(c.isalnum() or c in '_-' for c in agent_id):
+                self.set_status(400)
+                self.write({"error": "agent_id contains invalid characters"})
+                return
+
+            # Collect target CivCom instances
+            if agent_id == "all":
+                all_civcoms = civcom_registry.get_all_for_game(game_id)
+                targets = {
+                    key[1]: cc for key, cc in all_civcoms.items()
+                    if not cc.stopped and key[1] != "__observer__"
+                }
+            else:
+                cc = civcom_registry.get_civcom(game_id, agent_id)
+                if cc is None or cc.stopped:
+                    self.set_status(404)
+                    self.write({"error": f"No active CivCom for agent '{agent_id}' in game {game_id}"})
+                    return
+                targets = {agent_id: cc}
+
+            if not targets:
+                self.set_status(404)
+                self.write({"error": f"No active CivCom instances found for game {game_id}"})
+                return
+
+            # Send PACKET_PLAYER_PHASE_DONE for each target
+            # NOTE: queue_to_civserver/send_packets_to_civserver are not thread-safe
+            # (CivCom is a Thread). This is a pre-existing pattern shared with the
+            # WebSocket handler path in llm_handler.py.
+            results = {}
+            for aid, cc in targets.items():
+                try:
+                    turn = getattr(cc, 'game_turn', 1)
+                    packet = json.dumps({"pid": PACKET_PLAYER_PHASE_DONE, "turn": turn})
+                    cc.queue_to_civserver(packet)
+                    cc.send_packets_to_civserver()
+
+                    # Mark turn as ended (same as llm_handler end_turn logic)
+                    cc.turn_started = False
+                    cc.turn_advance_event.clear()
+
+                    results[aid] = {"success": True, "turn": turn}
+                    logger.info(
+                        f"ForceEndTurn: sent PACKET_PLAYER_PHASE_DONE for agent={aid}, "
+                        f"game={game_id}, turn={turn}"
+                    )
+                except Exception as e:
+                    results[aid] = {"success": False, "error": str(e)}
+                    logger.error(f"ForceEndTurn: failed for agent={aid}, game={game_id}: {e}")
+
+            self.set_header("Content-Type", "application/json")
+            self.write({"game_id": game_id, "results": results})
+
+        except (ConnectionError, OSError, TimeoutError) as e:
+            logger.error(f"Connection error in ForceEndTurnHandler: {str(e)}")
+            self.set_status(503)
+            self.write({"error": "Service temporarily unavailable", "retry": True})
+        except Exception as e:
+            logger.error(f"Error in ForceEndTurnHandler: {e}")
+            self.set_status(500)
+            self.write({"error": "Internal server error"})

@@ -12,6 +12,7 @@ import traceback
 from typing import Dict, Any, List, Literal, Optional
 from urllib.parse import quote
 import uuid
+import httpx
 from fastapi import APIRouter, HTTPException, Query, Depends, Header, Request
 from pydantic import BaseModel, Field, ValidationError
 
@@ -113,7 +114,7 @@ class GameConfig(BaseModel):
     wetness: int = Field(default=30, ge=0, le=100, description="Amount of rivers/swamps (0-100)")
     max_players: int = Field(default=4, ge=2, le=8, description="Maximum players")
     ai_level: str = Field(default="easy", description="AI difficulty level")
-    turn_timeout: Optional[int] = Field(default=120, ge=30, le=3600, description="Turn timeout in seconds")
+    turn_timeout: Optional[int] = Field(default=300, ge=30, le=3600, description="Turn timeout in seconds")
     max_turns: int = Field(default=200, ge=10, le=5000, description="Maximum turns before game ends (winner determined by score)")
 
     class Config:
@@ -129,7 +130,7 @@ class GameConfig(BaseModel):
                 "wetness": 30,
                 "max_players": 4,
                 "ai_level": "easy",
-                "turn_timeout": 120,
+                "turn_timeout": 300,
                 "max_turns": 200
             }
         }
@@ -977,6 +978,58 @@ async def stop_stream(
         raise
     except Exception as e:
         logger.error(f"Error stopping stream for {game_id}: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+# Force end turn endpoint (REST fallback when WebSocket is dead)
+class ForceEndTurnRequest(BaseModel):
+    """Request body for force ending a turn"""
+    agent_id: str = Field(description="Agent ID to force end turn for, or \"all\" for all agents")
+
+
+@router.post("/game/{game_id}/force-end-turn")
+async def force_end_turn(
+    game_id: str,
+    request_body: ForceEndTurnRequest,
+    auth: Dict[str, Any] = Depends(verify_api_key)
+) -> Dict[str, Any]:
+    """Force end turn for agent(s) via REST fallback.
+
+    Forwards to the freeciv-proxy's ForceEndTurnHandler which sends
+    PACKET_PLAYER_PHASE_DONE directly via the CivCom TCP socket.
+    Use when the agent's WebSocket is dead and cannot send end_turn normally.
+    """
+    try:
+        proxy_url = (
+            f"http://{settings.freeciv_proxy_host}:{settings.freeciv_proxy_port}"
+            f"/api/game/{game_id}/force_end_turn"
+        )
+
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(
+                proxy_url,
+                json={"agent_id": request_body.agent_id},
+            )
+
+        if resp.status_code != 200:
+            try:
+                error_data = resp.json()
+            except Exception:
+                error_data = {"error": resp.text}
+            raise HTTPException(status_code=resp.status_code, detail=error_data)
+
+        return resp.json()
+
+    except HTTPException:
+        raise
+    except httpx.TimeoutException:
+        logger.error(f"Timeout forwarding force_end_turn to proxy for game {game_id}")
+        raise HTTPException(status_code=504, detail="Proxy request timed out")
+    except httpx.ConnectError:
+        logger.error(f"Cannot connect to proxy for force_end_turn: game {game_id}")
+        raise HTTPException(status_code=502, detail="Cannot reach freeciv-proxy")
+    except Exception as e:
+        logger.error(f"Error in force_end_turn for {game_id}: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
 
 

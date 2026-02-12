@@ -611,6 +611,16 @@ class LLMWSHandler(websocket.WebSocketHandler):
                     self.civcom = existing_civcom
                     self.civcom.civwebserver = self  # Reconnect CivCom to new WebSocket handler
                     self.state_extractor.civcom = self.civcom  # Update StateExtractor reference
+
+                    # Clear stale outbound packets from previous session
+                    stale_count = len(self.civcom.civserver_messages)
+                    if stale_count > 0:
+                        logger.warning(
+                            f"Clearing {stale_count} stale civserver_messages "
+                            f"for {self.agent_id} on reconnect"
+                        )
+                        self.civcom.civserver_messages = []
+
                     logger.info(
                         f"♻️ REUSING existing CivCom for {self.agent_id} on reconnection:\n"
                         f"   Units preserved: {len(getattr(self.civcom, 'player_units', {}))}\n"
