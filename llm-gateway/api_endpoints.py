@@ -991,6 +991,7 @@ class ForceEndTurnRequest(BaseModel):
 async def force_end_turn(
     game_id: str,
     request_body: ForceEndTurnRequest,
+    request: Request,
     auth: Dict[str, Any] = Depends(verify_api_key)
 ) -> Dict[str, Any]:
     """Force end turn for agent(s) via REST fallback.
@@ -1005,10 +1006,17 @@ async def force_end_turn(
             f"/api/game/{game_id}/force_end_turn"
         )
 
+        # Forward the caller's Authorization header so the proxy can authenticate
+        proxy_headers = {}
+        auth_header = request.headers.get("authorization")
+        if auth_header:
+            proxy_headers["Authorization"] = auth_header
+
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.post(
                 proxy_url,
                 json={"agent_id": request_body.agent_id},
+                headers=proxy_headers,
             )
 
         if resp.status_code != 200:
