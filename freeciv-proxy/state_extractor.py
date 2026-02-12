@@ -2669,7 +2669,7 @@ class ForceEndTurnHandler(web.RequestHandler):
                     logger.error(f"ForceEndTurn: failed for agent={aid}, game={game_id}: {e}")
 
             self.set_header("Content-Type", "application/json")
-            self.write({"game_id": game_id, "results": results})
+            self.write({"results": results})
 
         except (ConnectionError, OSError, TimeoutError) as e:
             logger.error(f"Connection error in ForceEndTurnHandler: {str(e)}")

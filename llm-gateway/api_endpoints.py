@@ -1018,7 +1018,10 @@ async def force_end_turn(
                 error_data = {"error": resp.text}
             raise HTTPException(status_code=resp.status_code, detail=error_data)
 
-        return resp.json()
+        result = resp.json()
+        # Re-add game_id from the validated path parameter (not echoed by proxy)
+        result["game_id"] = game_id
+        return result
 
     except HTTPException:
         raise
