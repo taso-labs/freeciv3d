@@ -245,6 +245,16 @@ class InputSanitizer:
                 sanitized['dest_x'] = int(action['dest_x'])
             if 'dest_y' in action:
                 sanitized['dest_y'] = int(action['dest_y'])
+            # Flat target coordinates (produced by _normalize_agent_clash_action)
+            if 'target_x' in action:
+                sanitized['target_x'] = int(action['target_x'])
+            if 'target_y' in action:
+                sanitized['target_y'] = int(action['target_y'])
+            # Combat target identifiers
+            if 'target_unit_id' in action:
+                sanitized['target_unit_id'] = cls.sanitize_unit_id(action['target_unit_id'])
+            if 'target_city_id' in action:
+                sanitized['target_city_id'] = int(action['target_city_id'])
 
         # Copy other safe fields
         safe_fields = ['timestamp', 'priority']
