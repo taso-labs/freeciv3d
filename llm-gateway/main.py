@@ -976,6 +976,28 @@ class LLMGateway:
         except Exception as e:
             logger.error(f"Error notifying spectators of game end in {game_id}: {e}")
 
+    async def _notify_agents_game_end(self, game_id: str, result: Dict[str, Any]):
+        """Notify all agents in a game that it has ended.
+
+        Best-effort: failures don't block cleanup. Some agent WebSockets
+        may already be dead, so we log and continue.
+        """
+        try:
+            connected_players = await connection_manager.get_players_for_game(game_id)
+            for player in connected_players:
+                agent_id = player["agent_id"]
+                try:
+                    await connection_manager.send_to_agent(agent_id, {
+                        "type": "game_ended",
+                        "game_id": game_id,
+                        "result": result,
+                        "timestamp": time.time()
+                    })
+                except Exception as e:
+                    logger.debug(f"Could not notify agent {agent_id} of game end: {e}")
+        except Exception as e:
+            logger.error(f"Error notifying agents of game end in {game_id}: {e}")
+
     async def end_game(self, game_id: str, result: Dict[str, Any] = None):
         """End a game session and clean up resources"""
         try:
@@ -983,9 +1005,10 @@ class LLMGateway:
                 logger.warning(f"Attempted to end non-existent game: {game_id}")
                 return
 
-            # Notify spectators before cleanup
+            # Notify spectators and agents before cleanup
             end_result = result or {"reason": "Game ended", "winner": None}
             await self.notify_spectators_game_end(game_id, end_result)
+            await self._notify_agents_game_end(game_id, end_result)
 
             # Stop streaming (graceful degradation on failure)
             # Streaming may have been started via WebSocket auth_success handler

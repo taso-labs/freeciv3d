@@ -52,6 +52,10 @@ from concurrent.futures import ThreadPoolExecutor
 
 from state_cache import StateCache, CacheEntry
 from civcom import CivCom
+from packet_constants import PACKET_PLAYER_PHASE_DONE
+# NOTE: observer_civcom and game_session_manager are imported inside
+# TerminateGameHandler methods to avoid circular imports
+# (observer_civcom imports civcom_registry from this module)
 
 # Required modules for production use
 try:
@@ -2560,3 +2564,301 @@ class LegalActionsHandler(web.RequestHandler):
             else:
                 self.set_status(500)
                 self.write({"error": "Internal server error"})
+
+
+class ForceEndTurnHandler(web.RequestHandler):
+    """Tornado HTTP handler for POST /api/game/{game_id}/force_end_turn
+
+    Sends PACKET_PLAYER_PHASE_DONE on behalf of agent(s) whose WebSocket
+    may be dead.  This is the REST fallback used by the orchestrator when
+    the normal WebSocket-based force_end_turn cannot reach the agent.
+    """
+
+    # Max length for agent_id from request body (matches game_id limit)
+    _MAX_AGENT_ID_LEN = 50
+
+    async def post(self, game_id: str):
+        """Force end turn for one or all agents in a game.
+
+        Rate limiting is intentionally omitted: this endpoint is called only by
+        the orchestrator during timeout recovery, and the orchestrator already
+        gates invocations.
+        """
+        try:
+            # Validate and sanitize game_id (matches sibling handlers)
+            try:
+                game_id = InputSanitizer.sanitize_game_id(game_id)
+            except Exception:
+                self.set_status(400)
+                self.write({"error": "Invalid game_id format"})
+                return
+
+            # Authenticate request
+            authenticated, auth_player_id, auth_game_id, auth_error = authenticate_request(self, 'actions_read')
+            if not authenticated:
+                self.set_status(401)
+                self.write({"error": "Authentication required"})
+                return
+
+            # Parse JSON body
+            try:
+                body = json.loads(self.request.body) if self.request.body else {}
+            except (json.JSONDecodeError, ValueError):
+                self.set_status(400)
+                self.write({"error": "Invalid JSON body"})
+                return
+
+            agent_id = body.get("agent_id")
+            if not agent_id or not isinstance(agent_id, str):
+                self.set_status(400)
+                self.write({"error": "agent_id is required (string or \"all\")"})
+                return
+
+            # Sanitize agent_id: alphanumeric, underscores, hyphens, bounded length
+            if len(agent_id) > self._MAX_AGENT_ID_LEN:
+                self.set_status(400)
+                self.write({"error": "agent_id too long"})
+                return
+            if agent_id != "all" and not all(c.isalnum() or c in '_-' for c in agent_id):
+                self.set_status(400)
+                self.write({"error": "agent_id contains invalid characters"})
+                return
+
+            # Collect target CivCom instances
+            if agent_id == "all":
+                all_civcoms = civcom_registry.get_all_for_game(game_id)
+                targets = {
+                    key[1]: cc for key, cc in all_civcoms.items()
+                    if not cc.stopped and key[1] != "__observer__"
+                }
+            else:
+                cc = civcom_registry.get_civcom(game_id, agent_id)
+                if cc is None or cc.stopped:
+                    logger.warning(f"ForceEndTurn: no active CivCom for agent={agent_id}, game={game_id}")
+                    self.set_status(404)
+                    self.write({"error": "No active CivCom for the specified agent in this game"})
+                    return
+                targets = {agent_id: cc}
+
+            if not targets:
+                logger.warning(f"ForceEndTurn: no active CivCom instances for game={game_id}")
+                self.set_status(404)
+                self.write({"error": "No active CivCom instances found for this game"})
+                return
+
+            # Send PACKET_PLAYER_PHASE_DONE for each target
+            # NOTE: queue_to_civserver/send_packets_to_civserver are not thread-safe
+            # (CivCom is a Thread). This is a pre-existing pattern shared with the
+            # WebSocket handler path in llm_handler.py.
+            results = {}
+            for aid, cc in targets.items():
+                try:
+                    turn = getattr(cc, 'game_turn', 1)
+                    packet = json.dumps({"pid": PACKET_PLAYER_PHASE_DONE, "turn": turn})
+                    cc.queue_to_civserver(packet)
+                    cc.send_packets_to_civserver()
+
+                    # Mark turn as ended (same as llm_handler end_turn logic)
+                    cc.turn_started = False
+                    cc.turn_advance_event.clear()
+
+                    results[aid] = {"success": True, "turn": turn}
+                    logger.info(
+                        f"ForceEndTurn: sent PACKET_PLAYER_PHASE_DONE for agent={aid}, "
+                        f"game={game_id}, turn={turn}"
+                    )
+                except Exception as e:
+                    results[aid] = {"success": False, "error": str(e)}
+                    logger.error(f"ForceEndTurn: failed for agent={aid}, game={game_id}: {e}")
+
+            self.set_header("Content-Type", "application/json")
+            self.write({"results": results})
+
+        except (ConnectionError, OSError, TimeoutError) as e:
+            logger.error(f"Connection error in ForceEndTurnHandler: {str(e)}")
+            self.set_status(503)
+            self.write({"error": "Service temporarily unavailable", "retry": True})
+        except Exception as e:
+            logger.error(f"Error in ForceEndTurnHandler: {e}")
+            self.set_status(500)
+            self.write({"error": "Internal server error"})
+
+
+class TerminateGameHandler(web.RequestHandler):
+    """Tornado HTTP handler for POST /api/game/{game_id}/terminate
+
+    Terminates a game session on the proxy side. Supports two modes:
+
+    - **hard** (default): Full teardown. Closes all CivCom TCP connections,
+      unregisters from CivComRegistry, stops the observer, and releases the
+      civserver port. Used when a match is truly over.
+
+    - **soft**: Pauses the game and detaches WebSocket handlers, but keeps
+      CivCom TCP connections and civserver alive. Allows fresh agents to
+      reconnect to the same game state via the existing reconnection path
+      in llm_handler.py.
+    """
+
+    # Allowed mode values
+    _VALID_MODES = ("hard", "soft")
+
+    async def post(self, game_id: str):
+        """Terminate or pause a game session.
+
+        Request body (JSON):
+            mode: "hard" (default) or "soft"
+        """
+        try:
+            # Validate and sanitize game_id
+            try:
+                game_id = InputSanitizer.sanitize_game_id(game_id)
+            except Exception:
+                self.set_status(400)
+                self.write({"error": "Invalid game_id format"})
+                return
+
+            # Authenticate request
+            authenticated, auth_player_id, auth_game_id, auth_error = authenticate_request(self, 'actions_read')
+            if not authenticated:
+                self.set_status(401)
+                self.write({"error": "Authentication required"})
+                return
+
+            # Parse JSON body
+            try:
+                body = json.loads(self.request.body) if self.request.body else {}
+            except (json.JSONDecodeError, ValueError):
+                self.set_status(400)
+                self.write({"error": "Invalid JSON body"})
+                return
+
+            mode = body.get("mode", "hard")
+            if mode not in self._VALID_MODES:
+                self.set_status(400)
+                self.write({"error": "Invalid mode: must be 'hard' or 'soft'"})
+                return
+
+            self.set_header("Content-Type", "application/json")
+
+            if mode == "hard":
+                await self._hard_terminate(game_id)
+            else:
+                await self._soft_terminate(game_id)
+
+        except (ConnectionError, OSError, TimeoutError) as e:
+            logger.error(f"Connection error in TerminateGameHandler: {str(e)}")
+            self.set_status(503)
+            self.write({"error": "Service temporarily unavailable", "retry": True})
+        except Exception as e:
+            logger.error(f"Error in TerminateGameHandler: {e}")
+            self.set_status(500)
+            self.write({"error": "Internal server error"})
+
+    async def _hard_terminate(self, game_id: str):
+        """Full teardown: close connections, unregister, release port."""
+        # Deferred imports to avoid circular dependency
+        # (observer_civcom imports civcom_registry from this module)
+        from observer_civcom import stop_observer_civcom
+        from game_session_manager import game_session_manager
+
+        all_civcoms = civcom_registry.get_all_for_game(game_id)
+        agents_closed = 0
+
+        # Close each CivCom and unregister from registry
+        for (gid, agent_id), cc in list(all_civcoms.items()):
+            if agent_id == "__observer__":
+                continue  # Observer handled separately below
+            try:
+                cc.stopped = True
+                cc.close_connection()
+            except Exception as e:
+                logger.warning(f"Terminate: error closing CivCom for agent={agent_id}, game={game_id}: {e}")
+            try:
+                civcom_registry.unregister_game(game_id, agent_id)
+            except Exception as e:
+                logger.warning(f"Terminate: error unregistering agent={agent_id}, game={game_id}: {e}")
+            agents_closed += 1
+
+        # Stop the observer CivCom
+        try:
+            stop_observer_civcom(game_id)
+        except Exception as e:
+            logger.warning(f"Terminate: error stopping observer for game={game_id}: {e}")
+
+        # Release the civserver port BEFORE deleting session
+        # (release_civserver_port references the session for _port_releasing flag)
+        port = None
+        game_session = game_session_manager.sessions.get(game_id)
+        if game_session:
+            port = game_session.civserver_port
+            try:
+                await game_session_manager.release_civserver_port(game_id, port)
+            except Exception as e:
+                logger.error(f"Terminate: failed to release port for game={game_id}: {e}")
+
+        # Clean up session AFTER port release
+        if game_id in game_session_manager.sessions:
+            del game_session_manager.sessions[game_id]
+
+        logger.info(
+            f"Game {game_id} HARD TERMINATED: {agents_closed} agents closed, "
+            f"port={'released' if port else 'none'}"
+        )
+
+        self.write({
+            "terminated": True,
+            "mode": "hard",
+            "agents_closed": agents_closed,
+            "port_released": port,
+        })
+
+    async def _soft_terminate(self, game_id: str):
+        """Pause game, detach handlers, keep CivCom alive for reconnect."""
+        # Deferred imports to avoid circular dependency
+        from game_session_manager import game_session_manager, GamePhase
+
+        all_civcoms = civcom_registry.get_all_for_game(game_id)
+        agents_paused = 0
+
+        game_session = game_session_manager.sessions.get(game_id)
+
+        # Use the first available CivCom to send the pause command
+        pause_civcom = None
+        for (gid, agent_id), cc in all_civcoms.items():
+            if agent_id != "__observer__" and not cc.stopped:
+                pause_civcom = cc
+                break
+
+        # Pause the game (sets timeout=0, disables autotoggle)
+        if game_session and pause_civcom:
+            game_session.pause_game(pause_civcom, disconnect_reason="soft_stop")
+
+        # Detach WebSocket handlers from CivCom instances
+        # The CivCom TCP connections stay alive for reconnect
+        for (gid, agent_id), cc in all_civcoms.items():
+            if agent_id == "__observer__":
+                continue
+            try:
+                cc.civwebserver = None  # Detach WebSocket handler
+                agents_paused += 1
+            except Exception as e:
+                logger.warning(f"Terminate: error detaching handler for agent={agent_id}, game={game_id}: {e}")
+
+        # Set game phase to allow reconnection
+        port = None
+        if game_session:
+            game_session.phase = GamePhase.WAITING_FOR_PLAYERS
+            port = game_session.civserver_port
+
+        logger.info(
+            f"Game {game_id} SOFT STOPPED: {agents_paused} agents paused, "
+            f"port={port} (kept allocated), reconnect ready"
+        )
+
+        self.write({
+            "terminated": False,
+            "mode": "soft",
+            "agents_paused": agents_paused,
+            "port": port,
+            "reconnect_ready": True,
+        })

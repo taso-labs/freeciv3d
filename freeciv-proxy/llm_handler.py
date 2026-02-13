@@ -611,6 +611,16 @@ class LLMWSHandler(websocket.WebSocketHandler):
                     self.civcom = existing_civcom
                     self.civcom.civwebserver = self  # Reconnect CivCom to new WebSocket handler
                     self.state_extractor.civcom = self.civcom  # Update StateExtractor reference
+
+                    # Clear stale outbound packets from previous session
+                    stale_count = len(self.civcom.civserver_messages)
+                    if stale_count > 0:
+                        logger.warning(
+                            f"Clearing {stale_count} stale civserver_messages "
+                            f"for {self.agent_id} on reconnect"
+                        )
+                        self.civcom.civserver_messages = []
+
                     logger.info(
                         f"♻️ REUSING existing CivCom for {self.agent_id} on reconnection:\n"
                         f"   Units preserved: {len(getattr(self.civcom, 'player_units', {}))}\n"
@@ -4372,7 +4382,13 @@ class LLMWSHandler(websocket.WebSocketHandler):
             logger.error(f"Error in _pause_and_suspend_partner for {self.agent_id}: {e}")
 
     def _suspend_partners(self):
-        """Suspend partner sessions without pausing (pause already done separately)."""
+        """Suspend partner sessions without pausing (pause already done separately).
+
+        WARNING: Closing the partner's WebSocket (line 4417) triggers their on_close(),
+        which runs the full disconnect flow including port release logic. If the
+        partner's session suspension fails for any reason, on_close() may release
+        the civserver port — see ⚠️ KNOWN RISK comment in on_close() port release block.
+        """
         try:
             game_session = game_session_manager.sessions.get(self.game_id)
             if not game_session:
@@ -4686,6 +4702,30 @@ class LLMWSHandler(websocket.WebSocketHandler):
 
             # Release the allocated civserver port back to the pool
             # This prevents zombie sessions where ports stay unavailable after gateway failures
+            #
+            # ⚠️  KNOWN RISK: PORT RELEASE DURING PARTNER CASCADE
+            # This block runs when session_suspended=False OR civcom is already stopped.
+            # In the partner cascade scenario:
+            #   1. Agent A disconnects → pauses game → _suspend_partners() closes Agent B's WS
+            #   2. Agent B's on_close() fires → Agent B tries suspend_session()
+            #   3. If Agent B's session suspension fails (already terminated, expired, etc.),
+            #      we fall into this else branch and may release the port
+            #   4. Once released, the civserver port returns to the pool and publite2 may
+            #      reclaim it — making reconnection impossible even if CivCom TCP connections
+            #      are still alive
+            #
+            # This is SUSPECTED to cause intermittent reconnection failures in practice.
+            # The CivCom preservation (line 4674) only protects when session_suspended=True,
+            # but the port release here doesn't recheck that condition — it only checks
+            # remaining_players == 0.
+            #
+            # Potential fix: skip port release if game_session.is_paused (game was paused
+            # for reconnection). This would keep the port allocated during the 24h
+            # SESSION_SUSPENSION_TIMEOUT_SECS window. The stale session cleanup in
+            # GameSessionManager would eventually release it if no one reconnects.
+            #
+            # See also: TerminateGameHandler in state_extractor.py for explicit
+            # hard/soft stop via REST (does not have this race condition).
             civserver_port = None
             if self.session_info and hasattr(self.session_info, 'civserver_port'):
                 civserver_port = self.session_info.civserver_port
@@ -4716,6 +4756,11 @@ class LLMWSHandler(websocket.WebSocketHandler):
                         remaining_players = len(game_session.players)
 
                         # Make the decision while still holding the lock
+                        # NOTE: This does NOT check game_session.is_paused. If the game
+                        # was paused for reconnection (e.g., partner cascade at lines
+                        # 4631-4662), the port will still be released when the last
+                        # player's on_close() reaches here. See ⚠️ KNOWN RISK comment
+                        # above for details on the suspected reconnection failure mode.
                         if remaining_players == 0:
                             should_release = True
                             # CRITICAL: Set port_releasing flag while still holding lock
