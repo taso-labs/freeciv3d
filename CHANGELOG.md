@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.3.53](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.52...freeciv3d-v0.3.53) (2026-02-13)
+
+
+### Features
+
+* **proxy,gateway:** REST fallback for force_end_turn + turn desync fixes ([#146](https://github.com/taso-ventures/freeciv3d/issues/146)) ([c8a2a19](https://github.com/taso-ventures/freeciv3d/commit/c8a2a19695894f23b4096e78c4f9d988c400aceb))
+* **proxy:** support tiny maps, fix E235 sanitizer bug, harden input validation ([#149](https://github.com/taso-ventures/freeciv3d/issues/149)) ([788b793](https://github.com/taso-ventures/freeciv3d/commit/788b793f7ad2e699ba982399810cbef3d36d6637))
+
+
+### Bug Fixes
+
+* upgrade puppeteer to resolve tar-fs and ws security vulnerabilities ([#147](https://github.com/taso-ventures/freeciv3d/issues/147)) ([fd18e6d](https://github.com/taso-ventures/freeciv3d/commit/fd18e6d29d4986f8606e550453de7355cf51cbb8))
+
 ## [0.3.52](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.51...freeciv3d-v0.3.52) (2026-02-11)
 
 
