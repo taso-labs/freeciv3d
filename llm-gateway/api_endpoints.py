@@ -187,6 +187,10 @@ class StopGameRequest(BaseModel):
         description="Optional human-readable message",
         example="Match stopped by administrator"
     )
+    mode: Literal["hard", "soft"] = Field(
+        default="hard",
+        description="Termination mode: 'hard' = full teardown, 'soft' = pause for reconnect"
+    )
 
 
 class PlayerFinalStats(BaseModel):
@@ -581,10 +585,60 @@ async def _capture_final_state(
     }
 
 
+async def _call_proxy_terminate(game_id: str, mode: str, request: Request) -> Optional[Dict[str, Any]]:
+    """Call the proxy's TerminateGameHandler to clean up CivCom connections.
+
+    Best-effort: returns the proxy response on success, None on failure.
+    Follows the same pattern as the force_end_turn proxy call.
+
+    Args:
+        game_id: Game to terminate
+        mode: "hard" or "soft"
+        request: Original HTTP request (for auth header forwarding)
+    """
+    try:
+        proxy_url = (
+            f"http://{settings.freeciv_proxy_host}:{settings.freeciv_proxy_port}"
+            f"/api/game/{quote(game_id, safe='')}/terminate"
+        )
+
+        proxy_headers = {}
+        auth_header = request.headers.get("authorization")
+        if auth_header:
+            proxy_headers["Authorization"] = auth_header
+
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(
+                proxy_url,
+                json={"mode": mode},
+                headers=proxy_headers,
+            )
+
+        if resp.status_code == 200:
+            return resp.json()
+        else:
+            logger.warning(
+                f"Proxy terminate returned {resp.status_code} for game {game_id}: "
+                f"{resp.text[:200]}"
+            )
+            return None
+
+    except httpx.TimeoutException:
+        logger.warning(f"Timeout calling proxy terminate for game {game_id}")
+        return None
+    except httpx.ConnectError:
+        logger.warning(f"Cannot connect to proxy for terminate: game {game_id}")
+        return None
+    except Exception as e:
+        logger.warning(f"Error calling proxy terminate for game {game_id}: {e}")
+        return None
+
+
 @router.post("/games/{game_id}/stop")
 async def stop_game(
     game_id: str,
     request_body: StopGameRequest,
+    request: Request,
     auth: Dict[str, Any] = Depends(verify_api_key)
 ) -> Dict[str, Any]:
     """
@@ -592,6 +646,12 @@ async def stop_game(
 
     Called by AgentClash gateway when an admin stops a match.
     Captures final game statistics before cleanup.
+
+    Modes:
+    - hard (default): Full teardown. Captures final state, notifies agents/spectators,
+      cleans up gateway, tells proxy to close CivCom connections and release port.
+    - soft: Pauses the game at proxy level. Keeps CivCom connections and civserver
+      alive so fresh agents can reconnect to the same game state.
 
     Error codes:
     - E010: Game not found
@@ -623,23 +683,53 @@ async def stop_game(
                 }
             }
 
-        # Capture final state BEFORE cleanup
-        final_state = await _capture_final_state(gw, game_id, session, request_body)
+        if request_body.mode == "soft":
+            # Soft stop: notify agents, then pause game at proxy level
+            # Notify agents BEFORE proxy detaches their WebSocket handlers
+            await gw._notify_agents_game_end(game_id, {
+                "reason": request_body.reason,
+                "message": request_body.message,
+                "mode": "soft",
+                "reconnect_ready": True,
+            })
 
-        # End the game (notifies spectators, cleans up sessions/agents/connections)
-        await gw.end_game(game_id, {
-            "reason": request_body.reason,
-            "message": request_body.message,
-            "final_state": final_state
-        })
+            terminate_result = await _call_proxy_terminate(game_id, "soft", request)
 
-        logger.info(f"Game {game_id} stopped via API: reason={request_body.reason}")
+            logger.info(f"Game {game_id} soft-stopped via API: reason={request_body.reason}")
 
-        return {
-            "type": "game_ended",
-            "game_id": game_id,
-            "data": final_state
-        }
+            return {
+                "type": "game_paused",
+                "game_id": game_id,
+                "data": {
+                    "mode": "soft",
+                    "reason": request_body.reason,
+                    "message": request_body.message,
+                    "proxy_result": terminate_result,
+                }
+            }
+        else:
+            # Hard stop: full teardown
+            # 1. Capture final state BEFORE cleanup
+            final_state = await _capture_final_state(gw, game_id, session, request_body)
+
+            # 2. Tell proxy to close CivCom connections and release port FIRST
+            #    (must happen before end_game() tears down proxy connection state)
+            terminate_result = await _call_proxy_terminate(game_id, "hard", request)
+
+            # 3. End the game (notifies agents + spectators, cleans up gateway state)
+            await gw.end_game(game_id, {
+                "reason": request_body.reason,
+                "message": request_body.message,
+                "final_state": final_state
+            })
+
+            logger.info(f"Game {game_id} hard-stopped via API: reason={request_body.reason}")
+
+            return {
+                "type": "game_ended",
+                "game_id": game_id,
+                "data": {**final_state, "proxy_result": terminate_result}
+            }
 
     except HTTPException:
         raise
