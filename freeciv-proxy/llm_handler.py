@@ -4756,8 +4756,8 @@ class LLMWSHandler(websocket.WebSocketHandler):
                         logger.debug(f"Observer cleanup error (benign): {e}")
 
                     logger.info(
-                        f"[PORT_RELEASE] Last player {self.agent_id} disconnected from game {self.game_id}, "
-                        f"releasing port {civserver_port}"
+                        f"PORT_RELEASE_START game_id={self.game_id} agent_id={self.agent_id} "
+                        f"port={civserver_port} reason=last_player_disconnected"
                     )
                     # Schedule async port release via IOLoop
                     try:
@@ -4772,9 +4772,8 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 elif game_session:
                     if remaining_players == 0 and game_session.is_paused:
                         logger.info(
-                            f"[PORT_RELEASE] Skip release for game {self.game_id}: "
-                            f"last player {self.agent_id} disconnected but game is paused "
-                            f"for reconnection window (port {civserver_port} remains allocated)"
+                            f"PORT_RELEASE_SKIPPED game_id={self.game_id} agent_id={self.agent_id} "
+                            f"port={civserver_port} reason=game_paused_for_reconnect"
                         )
                     else:
                         logger.info(

@@ -1282,15 +1282,21 @@ def start_periodic_cleanup(interval_ms: int = 300000) -> None:
             # Paused game-session cleanup — release ports that exceeded reconnect window.
             try:
                 from game_session_manager import game_session_manager
+                from tornado.ioloop import IOLoop
 
                 async def _cleanup_stale_paused_sessions():
-                    cleaned_paused = await game_session_manager.cleanup_stale_paused_sessions()
-                    if cleaned_paused > 0:
-                        logger.info(
-                            f"Periodic cleanup released {cleaned_paused} stale paused game session(s)"
-                        )
+                    try:
+                        cleaned_paused = await game_session_manager.cleanup_stale_paused_sessions()
+                        if cleaned_paused > 0:
+                            logger.info(
+                                f"Periodic cleanup released {cleaned_paused} stale paused game session(s)"
+                            )
+                    except Exception as e:
+                        logger.error(f"Stale paused-session cleanup failed: {e}")
 
-                asyncio.create_task(_cleanup_stale_paused_sessions())
+                IOLoop.current().add_callback(
+                    lambda: asyncio.ensure_future(_cleanup_stale_paused_sessions())
+                )
             except Exception as e:
                 logger.error(f"Stale paused-session cleanup scheduling error: {e}")
 

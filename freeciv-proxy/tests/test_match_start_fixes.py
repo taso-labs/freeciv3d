@@ -435,6 +435,28 @@ class TestStalePausedSessionCleanup(unittest.TestCase):
 
         asyncio.run(run_test())
 
+    def test_failed_release_retains_session_and_resets_flag(self):
+        async def run_test():
+            game_id = "failed-release-game"
+            session = GameSession(game_id=game_id, civserver_port=6008, min_players=2)
+            session.is_paused = True
+            session.paused_at = time.time() - 120  # Expired
+            self.manager.sessions[game_id] = session
+
+            self.manager.release_civserver_port = AsyncMock(return_value=False)
+
+            cleaned = await self.manager.cleanup_stale_paused_sessions(suspension_timeout_secs=60)
+
+            self.assertEqual(cleaned, 0)
+            self.manager.release_civserver_port.assert_awaited_once_with(game_id, 6008)
+            # Session must be retained for retry on next sweep
+            self.assertIn(game_id, self.manager.sessions)
+            # _port_releasing flag must be reset so next sweep can retry
+            self.assertFalse(session._port_releasing)
+            self.assertIsNone(session._port_releasing_since)
+
+        asyncio.run(run_test())
+
 
 class TestModuleImports(unittest.TestCase):
     """

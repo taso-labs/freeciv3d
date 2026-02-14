@@ -1182,6 +1182,8 @@ class GameSessionManager:
             )
             return 0
 
+        # Safe: no await between locked() check and async-with acquisition,
+        # so both execute in the same event-loop tick (cooperative scheduling).
         if self._paused_cleanup_lock.locked():
             logger.debug("Stale paused-session cleanup already running, skipping overlapping run")
             return 0
@@ -1190,6 +1192,9 @@ class GameSessionManager:
         now = time.time()
         candidates = []
 
+        # Collect candidates under lock to prevent overlapping sweeps from
+        # selecting the same sessions. The _port_releasing flag provides
+        # per-session mutual exclusion for the actual release calls.
         async with self._paused_cleanup_lock:
             for game_id, session in list(self.sessions.items()):
                 if not session.is_paused:
@@ -1229,38 +1234,40 @@ class GameSessionManager:
                     session._port_releasing_since = now
                     candidates.append((game_id, session.civserver_port, paused_for))
 
-            for game_id, port, paused_for in candidates:
-                try:
-                    released = await self.release_civserver_port(game_id, port)
-                except Exception as e:
-                    logger.error(
-                        f"Game {game_id}: stale paused-session sweep failed releasing port {port}: {e}"
-                    )
-                    released = False
+        # Release outside lock — _port_releasing guards per-session safety,
+        # so we don't need to hold the sweep lock during slow HTTP calls.
+        for game_id, port, paused_for in candidates:
+            try:
+                released = await self.release_civserver_port(game_id, port)
+            except Exception as e:
+                logger.error(
+                    f"Game {game_id}: stale paused-session sweep failed releasing port {port}: {e}"
+                )
+                released = False
 
-                session = self.sessions.get(game_id)
-                if not session:
-                    continue
+            target_session = self.sessions.get(game_id)
+            if not target_session:
+                continue
 
-                if released:
-                    if session._port_releasing:
-                        session.reset_port_releasing_flag(
-                            "stale paused-session cleanup complete"
-                        )
-                    self.sessions.pop(game_id, None)
-                    cleaned_count += 1
-                    logger.info(
-                        f"Game {game_id}: cleaned stale paused session after {paused_for:.0f}s "
-                        f"(released port {port})"
+            if released:
+                if target_session._port_releasing:
+                    target_session.reset_port_releasing_flag(
+                        "stale paused-session cleanup complete"
                     )
-                else:
-                    if session._port_releasing:
-                        session.reset_port_releasing_flag(
-                            "stale paused-session cleanup release failed; will retry on next sweep"
-                        )
-                    logger.warning(
-                        f"Game {game_id}: stale paused session not cleaned (port {port} release failed)"
+                self.sessions.pop(game_id, None)
+                cleaned_count += 1
+                logger.info(
+                    f"Game {game_id}: cleaned stale paused session after {paused_for:.0f}s "
+                    f"(released port {port})"
+                )
+            else:
+                if target_session._port_releasing:
+                    target_session.reset_port_releasing_flag(
+                        "stale paused-session cleanup release failed; will retry on next sweep"
                     )
+                logger.warning(
+                    f"Game {game_id}: stale paused session not cleaned (port {port} release failed)"
+                )
 
         return cleaned_count
 
