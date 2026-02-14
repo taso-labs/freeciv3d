@@ -120,6 +120,7 @@ class GameSession:
         # Pause/resume state for coordinated disconnection handling
         self.original_timeout: Optional[int] = None  # Store original timeout for resume
         self.is_paused: bool = False  # Track if game is currently paused
+        self.paused_at: Optional[float] = None  # Timestamp when pause mode started
         self.last_resumed_at: Optional[float] = None  # Timestamp of last resume (for debugging)
         self.resume_count: int = 0  # Number of times game has been resumed (recovery tracking)
         self.autotoggle_disabled: bool = False  # Track if autotoggle was disabled during pause
@@ -223,6 +224,7 @@ class GameSession:
                 civcom.send_packets_to_civserver()
                 # State update immediately after successful send
                 self.is_paused = True
+                self.paused_at = time.time()
                 self.autotoggle_disabled = True
 
                 # Success logging
@@ -290,6 +292,7 @@ class GameSession:
             if reenable_autotoggle:
                 self.autotoggle_disabled = False
             self.is_paused = False
+            self.paused_at = None
             self.last_resumed_at = time.time()
             self.resume_count += 1
             logger.info(
@@ -780,6 +783,7 @@ class GameSessionManager:
         # Created lazily on first use since __init__ isn't async
         self._http_session: Optional[aiohttp.ClientSession] = None
         self._session_lock = asyncio.Lock()  # Lock for lazy session creation
+        self._paused_cleanup_lock = asyncio.Lock()  # Prevent overlapping stale paused sweeps
 
     async def _get_http_session(self) -> aiohttp.ClientSession:
         """Get or create the reusable HTTP session.
@@ -993,6 +997,11 @@ class GameSessionManager:
         max_retries = 3
         base_delay = 0.5  # 500ms base delay
 
+        def _reset_port_releasing(reason: str) -> None:
+            game_session = self.sessions.get(game_id)
+            if game_session:
+                game_session.reset_port_releasing_flag(reason)
+
         for attempt in range(max_retries):
             try:
                 # Reuse HTTP session to avoid TCP handshake overhead per request
@@ -1019,14 +1028,12 @@ class GameSessionManager:
                                 cleanup_fn = _get_cleanup_port_semaphore()
                                 if cleanup_fn:
                                     cleanup_fn(port)
-                                # Issue #1 Fix: Reset _port_releasing flag on successful release
-                                game_session = self.sessions.get(game_id)
-                                if game_session:
-                                    game_session.reset_port_releasing_flag("Port release complete")
+                                _reset_port_releasing("Port release complete")
                                 return True
                             else:
                                 logger.warning(f"Metaserver release returned non-success: {data}")
                                 # Non-success response is not retryable
+                                _reset_port_releasing("Port release failed: metaserver returned non-success")
                                 return False
                         elif response.status == 404:
                             # 404 means port not found in allocation table
@@ -1050,6 +1057,7 @@ class GameSessionManager:
                             cleanup_fn = _get_cleanup_port_semaphore()
                             if cleanup_fn:
                                 cleanup_fn(port)
+                            _reset_port_releasing("Port release treated as complete (404 already released)")
                             return True
                         else:
                             # Server error - retry with backoff
@@ -1065,6 +1073,9 @@ class GameSessionManager:
                                 logger.error(
                                     f"Metaserver release failed with status {response.status} "
                                     f"after {max_retries} attempts"
+                                )
+                                _reset_port_releasing(
+                                    f"Port release FAILED after retries (status={response.status})"
                                 )
                                 return False
 
@@ -1082,16 +1093,11 @@ class GameSessionManager:
                         f"Error releasing port {port} for game {game_id} "
                         f"after {max_retries} attempts: {e}"
                     )
-                    # Issue #1 Fix: Reset _port_releasing flag on failed release
-                    game_session = self.sessions.get(game_id)
-                    if game_session:
-                        game_session.reset_port_releasing_flag("Port release FAILED after retries")
+                    _reset_port_releasing("Port release FAILED after retries")
                     return False
 
         # Issue #1 Fix: Reset _port_releasing flag if we exit without explicit return
-        game_session = self.sessions.get(game_id)
-        if game_session:
-            game_session.reset_port_releasing_flag("Port release exited unexpectedly")
+        _reset_port_releasing("Port release exited unexpectedly")
         return False  # Should not reach here, but for safety
 
     def remove_session(self, game_id: str, release_port: bool = True) -> None:
@@ -1127,6 +1133,143 @@ class GameSessionManager:
     def get_all_sessions(self) -> Dict[str, GameSession]:
         """Get all active sessions"""
         return self.sessions.copy()
+
+    def _session_has_active_reconnect_locked(self, session: GameSession) -> bool:
+        """Return True if any player in this paused session has an active WebSocket."""
+        for player_info in session.players.values():
+            handler = getattr(player_info, "handler", None)
+            if not handler:
+                continue
+
+            ws_conn = getattr(handler, "ws_connection", None)
+            if not ws_conn:
+                continue
+
+            is_closing_fn = getattr(ws_conn, "is_closing", None)
+            if callable(is_closing_fn):
+                try:
+                    if not is_closing_fn():
+                        return True
+                except Exception as e:
+                    # Defensive: if we can't inspect state, treat as active and skip forced cleanup.
+                    logger.debug(
+                        f"Game {session.game_id}: failed to inspect ws_connection state during stale pause sweep: {e}"
+                    )
+                    return True
+            else:
+                # Unknown connection type with no closing signal - assume active.
+                return True
+
+        return False
+
+    async def cleanup_stale_paused_sessions(self, suspension_timeout_secs: Optional[int] = None) -> int:
+        """Release ports for paused sessions that exceeded suspension timeout.
+
+        A session is eligible when:
+        - `is_paused` is True
+        - paused duration exceeds `SESSION_SUSPENSION_TIMEOUT_SECS`
+        - no active reconnect WebSocket is currently attached
+
+        Returns:
+            Number of stale paused sessions successfully cleaned up.
+        """
+        if suspension_timeout_secs is None:
+            suspension_timeout_secs = int(os.getenv('SESSION_SUSPENSION_TIMEOUT_SECS', '86400'))
+
+        if suspension_timeout_secs <= 0:
+            logger.warning(
+                f"Skipping stale paused-session cleanup: invalid timeout {suspension_timeout_secs}s"
+            )
+            return 0
+
+        # Safe: no await between locked() check and async-with acquisition,
+        # so both execute in the same event-loop tick (cooperative scheduling).
+        if self._paused_cleanup_lock.locked():
+            logger.debug("Stale paused-session cleanup already running, skipping overlapping run")
+            return 0
+
+        cleaned_count = 0
+        now = time.time()
+        candidates = []
+
+        # Collect candidates under lock to prevent overlapping sweeps from
+        # selecting the same sessions. The _port_releasing flag provides
+        # per-session mutual exclusion for the actual release calls.
+        async with self._paused_cleanup_lock:
+            for game_id, session in list(self.sessions.items()):
+                if not session.is_paused:
+                    continue
+
+                paused_since = session.paused_at if session.paused_at is not None else session.created_at
+                paused_for = now - paused_since
+                if paused_for < suspension_timeout_secs:
+                    continue
+
+                with session._players_lock:
+                    if self._session_has_active_reconnect_locked(session):
+                        logger.info(
+                            f"Game {game_id}: stale paused-session sweep skipped - active reconnect detected"
+                        )
+                        continue
+
+                    if session._port_releasing:
+                        elapsed = None
+                        if session._port_releasing_since:
+                            elapsed = now - session._port_releasing_since
+                        if elapsed is not None and elapsed <= PORT_RELEASE_TIMEOUT_SECONDS:
+                            logger.info(
+                                f"Game {game_id}: stale paused-session sweep skipped - "
+                                f"port release already in progress ({elapsed:.1f}s)"
+                            )
+                            continue
+
+                        stale_msg = (
+                            f"stale paused-session sweep auto-reset _port_releasing after {elapsed:.1f}s"
+                            if elapsed is not None
+                            else "stale paused-session sweep auto-reset _port_releasing with missing timestamp"
+                        )
+                        session.reset_port_releasing_flag(stale_msg)
+
+                    session._port_releasing = True
+                    session._port_releasing_since = now
+                    candidates.append((game_id, session.civserver_port, paused_for))
+
+        # Release outside lock — _port_releasing guards per-session safety,
+        # so we don't need to hold the sweep lock during slow HTTP calls.
+        for game_id, port, paused_for in candidates:
+            try:
+                released = await self.release_civserver_port(game_id, port)
+            except Exception as e:
+                logger.error(
+                    f"Game {game_id}: stale paused-session sweep failed releasing port {port}: {e}"
+                )
+                released = False
+
+            target_session = self.sessions.get(game_id)
+            if not target_session:
+                continue
+
+            if released:
+                if target_session._port_releasing:
+                    target_session.reset_port_releasing_flag(
+                        "stale paused-session cleanup complete"
+                    )
+                self.sessions.pop(game_id, None)
+                cleaned_count += 1
+                logger.info(
+                    f"Game {game_id}: cleaned stale paused session after {paused_for:.0f}s "
+                    f"(released port {port})"
+                )
+            else:
+                if target_session._port_releasing:
+                    target_session.reset_port_releasing_flag(
+                        "stale paused-session cleanup release failed; will retry on next sweep"
+                    )
+                logger.warning(
+                    f"Game {game_id}: stale paused session not cleaned (port {port} release failed)"
+                )
+
+        return cleaned_count
 
     def cleanup_old_sessions(self, max_age: float = 3600.0) -> None:
         """Remove sessions older than max_age seconds"""

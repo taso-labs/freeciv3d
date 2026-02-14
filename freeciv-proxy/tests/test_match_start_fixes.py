@@ -29,7 +29,7 @@ os.environ['CACHE_HMAC_SECRET'] = '8dc50280f151af309d728c951584576f205688dc82d7d
 os.environ['LLM_API_TOKENS'] = 'test-token-123'
 
 from game_session_manager import (
-    GameSession, GameSessionManager, GamePhase,
+    GameSession, GameSessionManager, GamePhase, PlayerInfo,
     METASERVER_MAX_RETRIES, METASERVER_BASE_DELAY
 )
 from packet_constants import PACKET_CHAT_MSG_REQ
@@ -378,6 +378,82 @@ class TestLocalSessionCache(unittest.TestCase):
                 self.assertEqual(call_count[0], 2)
                 self.assertEqual(port1, 6001)
                 self.assertEqual(port2, 6002)
+
+        asyncio.run(run_test())
+
+
+class TestStalePausedSessionCleanup(unittest.TestCase):
+    """Tests for stale paused-session cleanup and forced port release."""
+
+    def setUp(self):
+        self.manager = GameSessionManager(metaserver_url="http://localhost:8080")
+
+    def test_expired_paused_session_releases_port_and_clears_flags(self):
+        async def run_test():
+            game_id = "stale-paused-game"
+            session = GameSession(game_id=game_id, civserver_port=6006, min_players=2)
+            session.is_paused = True
+            session.paused_at = time.time() - 120  # Expired
+            session._port_releasing = True
+            session._port_releasing_since = time.time() - 120
+            self.manager.sessions[game_id] = session
+
+            self.manager.release_civserver_port = AsyncMock(return_value=True)
+
+            cleaned = await self.manager.cleanup_stale_paused_sessions(suspension_timeout_secs=60)
+
+            self.assertEqual(cleaned, 1)
+            self.manager.release_civserver_port.assert_awaited_once_with(game_id, 6006)
+            self.assertNotIn(game_id, self.manager.sessions)
+            self.assertFalse(session._port_releasing)
+            self.assertIsNone(session._port_releasing_since)
+
+        asyncio.run(run_test())
+
+    def test_expired_paused_session_with_active_reconnect_is_skipped(self):
+        async def run_test():
+            game_id = "active-reconnect-game"
+            session = GameSession(game_id=game_id, civserver_port=6007, min_players=2)
+            session.is_paused = True
+            session.paused_at = time.time() - 120  # Expired
+
+            active_handler = Mock()
+            active_handler.ws_connection = Mock()
+            active_handler.ws_connection.is_closing.return_value = False
+            session.players = {
+                "agent-1": PlayerInfo(agent_id="agent-1", player_id=0, handler=active_handler)
+            }
+            self.manager.sessions[game_id] = session
+
+            self.manager.release_civserver_port = AsyncMock(return_value=True)
+
+            cleaned = await self.manager.cleanup_stale_paused_sessions(suspension_timeout_secs=60)
+
+            self.assertEqual(cleaned, 0)
+            self.manager.release_civserver_port.assert_not_called()
+            self.assertIn(game_id, self.manager.sessions)
+
+        asyncio.run(run_test())
+
+    def test_failed_release_retains_session_and_resets_flag(self):
+        async def run_test():
+            game_id = "failed-release-game"
+            session = GameSession(game_id=game_id, civserver_port=6008, min_players=2)
+            session.is_paused = True
+            session.paused_at = time.time() - 120  # Expired
+            self.manager.sessions[game_id] = session
+
+            self.manager.release_civserver_port = AsyncMock(return_value=False)
+
+            cleaned = await self.manager.cleanup_stale_paused_sessions(suspension_timeout_secs=60)
+
+            self.assertEqual(cleaned, 0)
+            self.manager.release_civserver_port.assert_awaited_once_with(game_id, 6008)
+            # Session must be retained for retry on next sweep
+            self.assertIn(game_id, self.manager.sessions)
+            # _port_releasing flag must be reset so next sweep can retry
+            self.assertFalse(session._port_releasing)
+            self.assertIsNone(session._port_releasing_since)
 
         asyncio.run(run_test())
 

@@ -4703,29 +4703,9 @@ class LLMWSHandler(websocket.WebSocketHandler):
             # Release the allocated civserver port back to the pool
             # This prevents zombie sessions where ports stay unavailable after gateway failures
             #
-            # ⚠️  KNOWN RISK: PORT RELEASE DURING PARTNER CASCADE
-            # This block runs when session_suspended=False OR civcom is already stopped.
-            # In the partner cascade scenario:
-            #   1. Agent A disconnects → pauses game → _suspend_partners() closes Agent B's WS
-            #   2. Agent B's on_close() fires → Agent B tries suspend_session()
-            #   3. If Agent B's session suspension fails (already terminated, expired, etc.),
-            #      we fall into this else branch and may release the port
-            #   4. Once released, the civserver port returns to the pool and publite2 may
-            #      reclaim it — making reconnection impossible even if CivCom TCP connections
-            #      are still alive
-            #
-            # This is SUSPECTED to cause intermittent reconnection failures in practice.
-            # The CivCom preservation (line 4674) only protects when session_suspended=True,
-            # but the port release here doesn't recheck that condition — it only checks
-            # remaining_players == 0.
-            #
-            # Potential fix: skip port release if game_session.is_paused (game was paused
-            # for reconnection). This would keep the port allocated during the 24h
-            # SESSION_SUSPENSION_TIMEOUT_SECS window. The stale session cleanup in
-            # GameSessionManager would eventually release it if no one reconnects.
-            #
-            # See also: TerminateGameHandler in state_extractor.py for explicit
-            # hard/soft stop via REST (does not have this race condition).
+            # Port release must account for paused reconnect windows.
+            # If the game is paused for coordinated reconnect, the civserver port
+            # must remain allocated until resume or stale-session cleanup timeout.
             civserver_port = None
             if self.session_info and hasattr(self.session_info, 'civserver_port'):
                 civserver_port = self.session_info.civserver_port
@@ -4756,12 +4736,9 @@ class LLMWSHandler(websocket.WebSocketHandler):
                         remaining_players = len(game_session.players)
 
                         # Make the decision while still holding the lock
-                        # NOTE: This does NOT check game_session.is_paused. If the game
-                        # was paused for reconnection (e.g., partner cascade at lines
-                        # 4631-4662), the port will still be released when the last
-                        # player's on_close() reaches here. See ⚠️ KNOWN RISK comment
-                        # above for details on the suspected reconnection failure mode.
-                        if remaining_players == 0:
+                        # If paused for reconnect, skip release and let stale cleanup
+                        # enforce SESSION_SUSPENSION_TIMEOUT_SECS.
+                        if remaining_players == 0 and not game_session.is_paused:
                             should_release = True
                             # CRITICAL: Set port_releasing flag while still holding lock
                             # This prevents add_player() from accepting new connections
@@ -4779,8 +4756,8 @@ class LLMWSHandler(websocket.WebSocketHandler):
                         logger.debug(f"Observer cleanup error (benign): {e}")
 
                     logger.info(
-                        f"[PORT_RELEASE] Last player {self.agent_id} disconnected from game {self.game_id}, "
-                        f"releasing port {civserver_port}"
+                        f"PORT_RELEASE_START game_id={self.game_id} agent_id={self.agent_id} "
+                        f"port={civserver_port} reason=last_player_disconnected"
                     )
                     # Schedule async port release via IOLoop
                     try:
@@ -4793,10 +4770,16 @@ class LLMWSHandler(websocket.WebSocketHandler):
                     except Exception as e:
                         logger.error(f"Failed to schedule port release: {e}")
                 elif game_session:
-                    logger.info(
-                        f"Player {self.agent_id} disconnected from game {self.game_id}, "
-                        f"but {remaining_players} players remain - port {civserver_port} stays allocated"
-                    )
+                    if remaining_players == 0 and game_session.is_paused:
+                        logger.info(
+                            f"PORT_RELEASE_SKIPPED game_id={self.game_id} agent_id={self.agent_id} "
+                            f"port={civserver_port} reason=game_paused_for_reconnect"
+                        )
+                    else:
+                        logger.info(
+                            f"Player {self.agent_id} disconnected from game {self.game_id}, "
+                            f"but {remaining_players} players remain - port {civserver_port} stays allocated"
+                        )
 
         self.civcom = None
 

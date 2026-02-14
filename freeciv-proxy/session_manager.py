@@ -12,6 +12,7 @@ Supports two backends:
 The SessionManager wrapper tries MySQL first and falls back to in-memory.
 """
 
+import asyncio
 import time
 import uuid
 import hmac
@@ -1277,6 +1278,27 @@ def start_periodic_cleanup(interval_ms: int = 300000) -> None:
                     logger.debug(f"Periodic cleanup removed {cleaned} expired sessions")
             except Exception as e:
                 logger.error(f"Periodic cleanup error: {e}")
+
+            # Paused game-session cleanup — release ports that exceeded reconnect window.
+            try:
+                from game_session_manager import game_session_manager
+                from tornado.ioloop import IOLoop
+
+                async def _cleanup_stale_paused_sessions():
+                    try:
+                        cleaned_paused = await game_session_manager.cleanup_stale_paused_sessions()
+                        if cleaned_paused > 0:
+                            logger.info(
+                                f"Periodic cleanup released {cleaned_paused} stale paused game session(s)"
+                            )
+                    except Exception as e:
+                        logger.error(f"Stale paused-session cleanup failed: {e}")
+
+                IOLoop.current().add_callback(
+                    lambda: asyncio.ensure_future(_cleanup_stale_paused_sessions())
+                )
+            except Exception as e:
+                logger.error(f"Stale paused-session cleanup scheduling error: {e}")
 
             # Dead CivCom cleanup — gentle TTL (24h default, configurable)
             # Gives agent-clash plenty of time to reconnect before cleaning up
