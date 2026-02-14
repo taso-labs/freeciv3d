@@ -2763,6 +2763,9 @@ class TerminateGameHandler(web.RequestHandler):
 
         all_civcoms = civcom_registry.get_all_for_game(game_id)
         agents_closed = 0
+        logger.info(
+            f"TERMINATE_REQUEST mode=hard game_id={game_id} civcoms_found={len(all_civcoms)}"
+        )
 
         # Close each CivCom and unregister from registry
         for (gid, agent_id), cc in list(all_civcoms.items()):
@@ -2788,21 +2791,24 @@ class TerminateGameHandler(web.RequestHandler):
         # Release the civserver port BEFORE deleting session
         # (release_civserver_port references the session for _port_releasing flag)
         port = None
+        port_release_succeeded = False
         game_session = game_session_manager.sessions.get(game_id)
         if game_session:
             port = game_session.civserver_port
             try:
-                await game_session_manager.release_civserver_port(game_id, port)
+                port_release_succeeded = await game_session_manager.release_civserver_port(game_id, port)
             except Exception as e:
                 logger.error(f"Terminate: failed to release port for game={game_id}: {e}")
+        else:
+            logger.warning(f"TERMINATE_RESULT mode=hard game_id={game_id} no_game_session_found")
 
         # Clean up session AFTER port release
         if game_id in game_session_manager.sessions:
             del game_session_manager.sessions[game_id]
 
         logger.info(
-            f"Game {game_id} HARD TERMINATED: {agents_closed} agents closed, "
-            f"port={'released' if port else 'none'}"
+            f"TERMINATE_RESULT mode=hard game_id={game_id} agents_closed={agents_closed} "
+            f"port={port if port else 'none'} port_release_succeeded={port_release_succeeded}"
         )
 
         self.write({
@@ -2819,6 +2825,10 @@ class TerminateGameHandler(web.RequestHandler):
 
         all_civcoms = civcom_registry.get_all_for_game(game_id)
         agents_paused = 0
+        pause_sent = False
+        logger.info(
+            f"TERMINATE_REQUEST mode=soft game_id={game_id} civcoms_found={len(all_civcoms)}"
+        )
 
         game_session = game_session_manager.sessions.get(game_id)
 
@@ -2831,7 +2841,11 @@ class TerminateGameHandler(web.RequestHandler):
 
         # Pause the game (sets timeout=0, disables autotoggle)
         if game_session and pause_civcom:
-            game_session.pause_game(pause_civcom, disconnect_reason="soft_stop")
+            pause_sent = game_session.pause_game(pause_civcom, disconnect_reason="soft_stop")
+        elif not game_session:
+            logger.warning(f"TERMINATE_RESULT mode=soft game_id={game_id} no_game_session_found")
+        else:
+            logger.warning(f"TERMINATE_RESULT mode=soft game_id={game_id} no_live_civcom_for_pause")
 
         # Detach WebSocket handlers from CivCom instances
         # The CivCom TCP connections stay alive for reconnect
@@ -2851,8 +2865,8 @@ class TerminateGameHandler(web.RequestHandler):
             port = game_session.civserver_port
 
         logger.info(
-            f"Game {game_id} SOFT STOPPED: {agents_paused} agents paused, "
-            f"port={port} (kept allocated), reconnect ready"
+            f"TERMINATE_RESULT mode=soft game_id={game_id} agents_paused={agents_paused} "
+            f"pause_sent={pause_sent} port={port} reconnect_ready=True"
         )
 
         self.write({

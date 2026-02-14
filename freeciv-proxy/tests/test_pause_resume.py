@@ -533,6 +533,93 @@ class TestCheckAndResumeGame(unittest.TestCase):
         self.game_session.resume_game.assert_not_called()
 
 
+class TestOnClosePortReleaseGuard(unittest.TestCase):
+    """Unit tests for on_close() paused-port-release guard."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        from llm_handler import LLMWSHandler
+
+        self.mock_app = Mock()
+        self.mock_app.ui_methods = {}
+        self.mock_app.ui_modules = {}
+        self.mock_request = Mock()
+
+        self.handler = LLMWSHandler(self.mock_app, self.mock_request)
+        self.handler.agent_id = "agent-1"
+        self.handler.player_id = 0
+        self.handler.game_id = "test-game-123"
+        self.handler.session_id = "session-1"
+        self.handler.session_info = Mock()
+        self.handler.session_info.civserver_port = 6001
+        self.handler.civcom = Mock()
+        self.handler.civcom.stopped = False
+        self.handler.civcom.close_connection = Mock()
+        # Keep test focused on port release decision, not partner pause mechanics.
+        self.handler._pause_and_suspend_partner = Mock()
+
+    def _build_game_session(self, is_paused: bool) -> GameSession:
+        game_session = GameSession(
+            game_id="test-game-123",
+            civserver_port=6001,
+            min_players=2
+        )
+        game_session.game_started = False
+        game_session.is_paused = is_paused
+        game_session.players = {
+            "agent-1": PlayerInfo(
+                agent_id="agent-1",
+                player_id=0,
+                handler=self.handler
+            )
+        }
+        return game_session
+
+    def test_on_close_skips_release_when_last_player_and_game_paused(self):
+        """Last player disconnect should NOT release port while game is paused."""
+        game_session = self._build_game_session(is_paused=True)
+
+        with patch("llm_handler.game_session_manager") as mock_game_mgr, \
+             patch("llm_handler.session_manager") as mock_session_mgr, \
+             patch("llm_handler.stop_observer_civcom") as mock_stop_observer, \
+             patch("tornado.ioloop.IOLoop.current") as mock_ioloop_current:
+
+            mock_game_mgr.sessions = {"test-game-123": game_session}
+            mock_session_mgr.suspend_session.return_value = False  # Force cleanup branch
+            mock_ioloop = Mock()
+            mock_ioloop_current.return_value = mock_ioloop
+
+            self.handler.on_close()
+
+            mock_ioloop.add_callback.assert_not_called()
+            mock_stop_observer.assert_not_called()
+            self.assertFalse(game_session._port_releasing)
+            self.assertIsNone(game_session._port_releasing_since)
+            self.assertEqual(len(game_session.players), 0)
+
+    def test_on_close_releases_port_when_last_player_and_not_paused(self):
+        """Last player disconnect should release port when game is not paused."""
+        game_session = self._build_game_session(is_paused=False)
+
+        with patch("llm_handler.game_session_manager") as mock_game_mgr, \
+             patch("llm_handler.session_manager") as mock_session_mgr, \
+             patch("llm_handler.stop_observer_civcom") as mock_stop_observer, \
+             patch("tornado.ioloop.IOLoop.current") as mock_ioloop_current:
+
+            mock_game_mgr.sessions = {"test-game-123": game_session}
+            mock_session_mgr.suspend_session.return_value = False  # Force cleanup branch
+            mock_ioloop = Mock()
+            mock_ioloop_current.return_value = mock_ioloop
+
+            self.handler.on_close()
+
+            mock_stop_observer.assert_called_once_with("test-game-123")
+            mock_ioloop.add_callback.assert_called_once()
+            self.assertTrue(game_session._port_releasing)
+            self.assertIsNotNone(game_session._port_releasing_since)
+            self.assertEqual(len(game_session.players), 0)
+
+
 class TestPauseResumeIntegration(unittest.TestCase):
     """Integration tests for the full pause/resume flow"""
 

@@ -21,6 +21,8 @@ from main import app
 
 # Set environment to disable API key requirement for testing
 os.environ["GATEWAY_REQUIRE_API_KEY"] = "false"
+import api_endpoints
+api_endpoints.settings.require_api_key = False
 
 
 class TestBasicFunctionality:
@@ -213,6 +215,70 @@ class TestBasicFunctionality:
         data = response.json()
         assert data["type"] == "error"
         assert data["data"]["code"] == "E011"
+
+    def test_stop_game_unauthorized_when_api_key_required(self):
+        """Stop API should return 401 when auth is required and header is missing."""
+        client = TestClient(app)
+
+        with patch("api_endpoints.settings") as mock_settings:
+            mock_settings.require_api_key = True
+
+            response = client.post(
+                "/api/games/game-123/stop",
+                json={"reason": "admin_stop"}
+            )
+
+        assert response.status_code == 401
+        assert response.json()["detail"] == "Authorization header required"
+
+    def test_stop_game_authorized_calls_proxy_terminate(self):
+        """Authorized stop should return 200 and invoke proxy terminate path."""
+        client = TestClient(app)
+
+        stop_request = {
+            "reason": "admin_stop",
+            "message": "Match stopped by administrator"
+        }
+
+        with patch("api_endpoints.get_gateway") as mock_get_gateway, \
+             patch("api_endpoints.connection_manager.get_players_for_game") as mock_get_players, \
+             patch("api_endpoints._call_proxy_terminate", new_callable=AsyncMock) as mock_terminate, \
+             patch("api_endpoints.settings") as mock_settings:
+
+            mock_settings.require_api_key = True
+
+            mock_gw = MagicMock()
+            mock_gw.game_sessions = {
+                "game-123": {
+                    "status": "active",
+                    "created_at": 1704067200.0,
+                    "current_turn": 42,
+                    "last_state": {
+                        "cities": {"1": {"id": 1, "owner": 0}},
+                        "units": {"10": {"id": 10, "owner": 0}},
+                        "players": {"0": {"id": 0, "gold": 500}}
+                    }
+                }
+            }
+            mock_gw.end_game = AsyncMock()
+            mock_get_gateway.return_value = mock_gw
+
+            mock_get_players.return_value = [{"player_id": 0, "agent_id": "llm_gemini"}]
+            mock_terminate.return_value = {"terminated": True, "mode": "hard"}
+
+            response = client.post(
+                "/api/games/game-123/stop",
+                json=stop_request,
+                headers={"Authorization": "Bearer valid-test-token-12345"}
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["type"] == "game_ended"
+        assert data["game_id"] == "game-123"
+        mock_terminate.assert_awaited_once()
+        assert mock_terminate.await_args.args[0] == "game-123"
+        assert mock_terminate.await_args.args[1] == "hard"
 
 
 class TestGlobalStateEndpoint:

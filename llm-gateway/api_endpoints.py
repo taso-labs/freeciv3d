@@ -601,6 +601,7 @@ async def _call_proxy_terminate(game_id: str, mode: str, request: Request) -> Op
             f"http://{settings.freeciv_proxy_host}:{settings.freeciv_proxy_port}"
             f"/api/game/{quote(game_id, safe='')}/terminate"
         )
+        logger.info(f"STOP_PROXY_TERMINATE_REQUEST game_id={game_id} mode={mode} url={proxy_url}")
 
         proxy_headers = {}
         auth_header = request.headers.get("authorization")
@@ -615,22 +616,33 @@ async def _call_proxy_terminate(game_id: str, mode: str, request: Request) -> Op
             )
 
         if resp.status_code == 200:
-            return resp.json()
+            payload = resp.json()
+            logger.info(
+                f"STOP_PROXY_TERMINATE_RESULT game_id={game_id} mode={mode} "
+                f"status={resp.status_code} success=True"
+            )
+            return payload
         else:
             logger.warning(
-                f"Proxy terminate returned {resp.status_code} for game {game_id}: "
-                f"{resp.text[:200]}"
+                f"STOP_PROXY_TERMINATE_RESULT game_id={game_id} mode={mode} "
+                f"status={resp.status_code} success=False body={resp.text[:200]}"
             )
             return None
 
     except httpx.TimeoutException:
-        logger.warning(f"Timeout calling proxy terminate for game {game_id}")
+        logger.warning(f"STOP_PROXY_TERMINATE_RESULT game_id={game_id} mode={mode} timeout=True")
         return None
     except httpx.ConnectError:
-        logger.warning(f"Cannot connect to proxy for terminate: game {game_id}")
+        logger.warning(
+            f"STOP_PROXY_TERMINATE_RESULT game_id={game_id} mode={mode} "
+            f"connect_error=True"
+        )
         return None
     except Exception as e:
-        logger.warning(f"Error calling proxy terminate for game {game_id}: {e}")
+        logger.warning(
+            f"STOP_PROXY_TERMINATE_RESULT game_id={game_id} mode={mode} "
+            f"error={e}"
+        )
         return None
 
 
@@ -660,9 +672,14 @@ async def stop_game(
     """
     try:
         gw = get_gateway()
+        logger.info(
+            f"STOP_REQUEST_RECEIVED game_id={game_id} mode={request_body.mode} "
+            f"reason={request_body.reason}"
+        )
 
         # Check if game exists
         if game_id not in gw.game_sessions:
+            logger.warning(f"STOP_REQUEST_REJECTED game_id={game_id} reason=not_found")
             return {
                 "type": "error",
                 "data": {
@@ -675,6 +692,7 @@ async def stop_game(
 
         # Check if game is already ended
         if session.get("status") == "ended":
+            logger.warning(f"STOP_REQUEST_REJECTED game_id={game_id} reason=already_ended")
             return {
                 "type": "error",
                 "data": {
@@ -694,8 +712,12 @@ async def stop_game(
             })
 
             terminate_result = await _call_proxy_terminate(game_id, "soft", request)
+            proxy_cleanup_ok = terminate_result is not None
 
-            logger.info(f"Game {game_id} soft-stopped via API: reason={request_body.reason}")
+            logger.info(
+                f"STOP_REQUEST_COMPLETED game_id={game_id} mode=soft "
+                f"proxy_cleanup_ok={proxy_cleanup_ok} reason={request_body.reason}"
+            )
 
             return {
                 "type": "game_paused",
@@ -715,6 +737,7 @@ async def stop_game(
             # 2. Tell proxy to close CivCom connections and release port FIRST
             #    (must happen before end_game() tears down proxy connection state)
             terminate_result = await _call_proxy_terminate(game_id, "hard", request)
+            proxy_cleanup_ok = terminate_result is not None
 
             # 3. End the game (notifies agents + spectators, cleans up gateway state)
             await gw.end_game(game_id, {
@@ -723,7 +746,10 @@ async def stop_game(
                 "final_state": final_state
             })
 
-            logger.info(f"Game {game_id} hard-stopped via API: reason={request_body.reason}")
+            logger.info(
+                f"STOP_REQUEST_COMPLETED game_id={game_id} mode=hard "
+                f"proxy_cleanup_ok={proxy_cleanup_ok} reason={request_body.reason}"
+            )
 
             return {
                 "type": "game_ended",
@@ -734,7 +760,9 @@ async def stop_game(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error stopping game {game_id}: {e}")
+        logger.error(
+            f"STOP_REQUEST_FAILED game_id={game_id} mode={request_body.mode} error={e}"
+        )
         return {
             "type": "error",
             "data": {
@@ -1219,5 +1247,4 @@ def check_rate_limit(agent_id: str) -> Dict[str, Any]:
     """Check rate limit for agent (extend with proper implementation)"""
     # Placeholder implementation
     return {"allowed": True}
-
 
