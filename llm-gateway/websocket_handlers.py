@@ -494,6 +494,14 @@ class AgentWebSocketHandler:
                                 f"   Status: {msg_data.get('status', 'N/A')}"
                             )
 
+                            # Ensure game_sessions entry exists so REST endpoints
+                            # (stop_game, get_game_info, list_games, get_spectator_url)
+                            # can find WS-originated games.
+                            if gateway and game_id and self.player_id is not None and civserver_port is not None:
+                                await gateway.ensure_game_session(
+                                    game_id, civserver_port, self.agent_id, self.player_id
+                                )
+
                             # Start streaming on-demand when agent authenticates
                             # This triggers LocalStreamManager (local) or StreamManager (k8s) to
                             # create streaming containers with observer URLs for this game
