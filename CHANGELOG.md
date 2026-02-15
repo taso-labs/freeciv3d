@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.54](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.53...freeciv3d-v0.3.54) (2026-02-15)
+
+
+### Bug Fixes
+
+* **ci:** remove automatic release trigger from production deploy ([#150](https://github.com/taso-ventures/freeciv3d/issues/150)) ([2355d6f](https://github.com/taso-ventures/freeciv3d/commit/2355d6fb74ec7212fc8b88bfe74a587221843ff2))
+* **gateway:** stop_game works for WS-originated games ([#153](https://github.com/taso-ventures/freeciv3d/issues/153)) ([39d58d4](https://github.com/taso-ventures/freeciv3d/commit/39d58d4eda96d38148e3cb96a92472005e971668))
+
 ## [0.3.53](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.52...freeciv3d-v0.3.53) (2026-02-13)
 
 
