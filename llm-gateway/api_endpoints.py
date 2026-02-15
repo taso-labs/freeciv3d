@@ -694,18 +694,29 @@ async def stop_game(
 
             # Create a minimal session so downstream code (end_game,
             # _capture_final_state) works without changes.
+            # Use get_players_for_game() for the full player list (not just
+            # the single player returned by get_game_info).
+            all_players = await connection_manager.get_players_for_game(game_id)
+            players_dict = {
+                str(p["player_id"]): {
+                    "agent_id": p["agent_id"],
+                    "player_id": p["player_id"],
+                }
+                for p in all_players
+            } if all_players else {
+                str(game_info["player_id"]): {
+                    "agent_id": game_info["agent_id"],
+                    "player_id": game_info["player_id"],
+                }
+            }
+
             async with gw._sessions_lock:
                 if game_id not in gw.game_sessions:
                     gw.game_sessions[game_id] = {
                         "config": {},
                         "created_at": game_info.get("connected_at", time.time()),
                         "status": "active",
-                        "players": {
-                            str(game_info["player_id"]): {
-                                "agent_id": game_info["agent_id"],
-                                "player_id": game_info["player_id"],
-                            }
-                        },
+                        "players": players_dict,
                         "port": game_info.get("civserver_port"),
                         "source": "websocket_fallback",
                     }

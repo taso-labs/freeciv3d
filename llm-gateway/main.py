@@ -233,22 +233,12 @@ class LLMGateway:
         get_game_info, list_games, and get_spectator_url — all of which look
         up games via ``self.game_sessions``.
 
-        Thread-safe: uses ``_sessions_lock`` with double-checked locking so
-        the fast path (session already exists) avoids lock acquisition.
+        Concurrency-safe: always acquires ``_sessions_lock`` for writes.
+        asyncio.Lock has negligible cost when uncontested.
         """
-        # Fast path — no lock needed when session already exists
-        if game_id in self.game_sessions:
-            # Upsert player entry (second agent authenticating for same game)
-            session = self.game_sessions[game_id]
-            session.setdefault("players", {})[str(player_id)] = {
-                "agent_id": agent_id,
-                "player_id": player_id,
-            }
-            return
-
         async with self._sessions_lock:
-            # Double-check after acquiring lock
             if game_id in self.game_sessions:
+                # Upsert player entry (second agent authenticating for same game)
                 session = self.game_sessions[game_id]
                 session.setdefault("players", {})[str(player_id)] = {
                     "agent_id": agent_id,
