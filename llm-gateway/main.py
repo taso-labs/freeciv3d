@@ -223,6 +223,57 @@ class LLMGateway:
         # The proxy's LLM handler manages game state, authentication, and actions
         # game_sessions is kept for health monitoring and basic session tracking
 
+    async def ensure_game_session(
+        self, game_id: str, port: int, agent_id: str, player_id: int
+    ) -> None:
+        """Idempotently ensure a game_sessions entry exists for a game.
+
+        Called from the WebSocket auth_success handler so that WS-originated
+        games (agent-clash flow) are visible to REST endpoints like stop_game,
+        get_game_info, list_games, and get_spectator_url — all of which look
+        up games via ``self.game_sessions``.
+
+        Thread-safe: uses ``_sessions_lock`` with double-checked locking so
+        the fast path (session already exists) avoids lock acquisition.
+        """
+        # Fast path — no lock needed when session already exists
+        if game_id in self.game_sessions:
+            # Upsert player entry (second agent authenticating for same game)
+            session = self.game_sessions[game_id]
+            session.setdefault("players", {})[str(player_id)] = {
+                "agent_id": agent_id,
+                "player_id": player_id,
+            }
+            return
+
+        async with self._sessions_lock:
+            # Double-check after acquiring lock
+            if game_id in self.game_sessions:
+                session = self.game_sessions[game_id]
+                session.setdefault("players", {})[str(player_id)] = {
+                    "agent_id": agent_id,
+                    "player_id": player_id,
+                }
+                return
+
+            self.game_sessions[game_id] = {
+                "config": {},
+                "created_at": time.time(),
+                "status": "active",
+                "players": {
+                    str(player_id): {
+                        "agent_id": agent_id,
+                        "player_id": player_id,
+                    }
+                },
+                "port": port,
+                "source": "websocket",
+            }
+            logger.info(
+                f"Created game_sessions entry for WS-originated game {game_id} "
+                f"(port={port}, agent={agent_id}, player={player_id})"
+            )
+
     async def start(self):
         """Start the gateway"""
         self._running = True

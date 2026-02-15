@@ -677,16 +677,42 @@ async def stop_game(
             f"reason={request_body.reason}"
         )
 
-        # Check if game exists
+        # Check if game exists — try game_sessions first, then fall back to
+        # connection_manager for WS-originated games that may not have been
+        # registered in game_sessions (safety-net for edge cases).
         if game_id not in gw.game_sessions:
-            logger.warning(f"STOP_REQUEST_REJECTED game_id={game_id} reason=not_found")
-            return {
-                "type": "error",
-                "data": {
-                    "code": ERROR_CODE_GAME_NOT_FOUND,
-                    "message": f"Game not found: {game_id}"
+            game_info = await connection_manager.get_game_info(game_id)
+            if game_info is None:
+                logger.warning(f"STOP_REQUEST_REJECTED game_id={game_id} reason=not_found")
+                return {
+                    "type": "error",
+                    "data": {
+                        "code": ERROR_CODE_GAME_NOT_FOUND,
+                        "message": f"Game not found: {game_id}"
+                    }
                 }
-            }
+
+            # Create a minimal session so downstream code (end_game,
+            # _capture_final_state) works without changes.
+            async with gw._sessions_lock:
+                if game_id not in gw.game_sessions:
+                    gw.game_sessions[game_id] = {
+                        "config": {},
+                        "created_at": game_info.get("connected_at", time.time()),
+                        "status": "active",
+                        "players": {
+                            str(game_info["player_id"]): {
+                                "agent_id": game_info["agent_id"],
+                                "player_id": game_info["player_id"],
+                            }
+                        },
+                        "port": game_info.get("civserver_port"),
+                        "source": "websocket_fallback",
+                    }
+                    logger.info(
+                        f"STOP_FALLBACK_SESSION_CREATED game_id={game_id} "
+                        f"port={game_info.get('civserver_port')}"
+                    )
 
         session = gw.game_sessions[game_id]
 

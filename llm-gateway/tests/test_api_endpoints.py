@@ -5,6 +5,7 @@
 Simple tests for LLM API Gateway REST API endpoints
 """
 
+import asyncio
 import pytest
 import json
 from unittest.mock import Mock, AsyncMock, patch, MagicMock
@@ -171,16 +172,18 @@ class TestBasicFunctionality:
         assert data["data"]["players"][0]["units"] == 2
 
     def test_stop_game_not_found(self):
-        """Test stop game when game doesn't exist"""
+        """Test stop game when game doesn't exist in both game_sessions and connection_manager"""
         client = TestClient(app)
 
         with patch("api_endpoints.get_gateway") as mock_get_gateway, \
+             patch("api_endpoints.connection_manager") as mock_conn_mgr, \
              patch("api_endpoints.settings") as mock_settings:
 
             mock_settings.require_api_key = False
             mock_gw = MagicMock()
             mock_gw.game_sessions = {}  # No games
             mock_get_gateway.return_value = mock_gw
+            mock_conn_mgr.get_game_info = AsyncMock(return_value=None)
 
             response = client.post(
                 "/api/games/nonexistent/stop",
@@ -279,6 +282,108 @@ class TestBasicFunctionality:
         mock_terminate.assert_awaited_once()
         assert mock_terminate.await_args.args[0] == "game-123"
         assert mock_terminate.await_args.args[1] == "hard"
+
+
+    def test_stop_game_ws_originated(self):
+        """Test that a WS-originated game (source=websocket) can be stopped successfully"""
+        client = TestClient(app)
+
+        stop_request = {
+            "reason": "admin_stop",
+            "message": "Match stopped by administrator"
+        }
+
+        with patch("api_endpoints.get_gateway") as mock_get_gateway, \
+             patch("api_endpoints.connection_manager.get_players_for_game") as mock_get_players, \
+             patch("api_endpoints._call_proxy_terminate", new_callable=AsyncMock) as mock_terminate, \
+             patch("api_endpoints.settings") as mock_settings:
+
+            mock_settings.require_api_key = False
+
+            mock_gw = MagicMock()
+            mock_gw.game_sessions = {
+                "game-ws-001": {
+                    "config": {},
+                    "created_at": 1704067200.0,
+                    "status": "active",
+                    "players": {
+                        "0": {"agent_id": "agent_alpha", "player_id": 0},
+                        "1": {"agent_id": "agent_beta", "player_id": 1},
+                    },
+                    "port": 6003,
+                    "source": "websocket",
+                }
+            }
+            mock_gw.end_game = AsyncMock()
+            mock_get_gateway.return_value = mock_gw
+
+            mock_get_players.return_value = [
+                {"player_id": 0, "agent_id": "agent_alpha"},
+                {"player_id": 1, "agent_id": "agent_beta"},
+            ]
+            mock_terminate.return_value = {"terminated": True, "mode": "hard"}
+
+            response = client.post("/api/games/game-ws-001/stop", json=stop_request)
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["type"] == "game_ended"
+        assert data["game_id"] == "game-ws-001"
+        assert data["data"]["success"] is True
+        assert len(data["data"]["players"]) == 2
+        mock_terminate.assert_awaited_once()
+        mock_gw.end_game.assert_awaited_once()
+
+    def test_stop_game_fallback_to_connection_manager(self):
+        """Test stop game falls back to connection_manager when game not in game_sessions"""
+        client = TestClient(app)
+
+        stop_request = {
+            "reason": "admin_stop",
+            "message": "Stopping WS-only game"
+        }
+
+        with patch("api_endpoints.get_gateway") as mock_get_gateway, \
+             patch("api_endpoints.connection_manager") as mock_conn_mgr, \
+             patch("api_endpoints._call_proxy_terminate", new_callable=AsyncMock) as mock_terminate, \
+             patch("api_endpoints.settings") as mock_settings:
+
+            mock_settings.require_api_key = False
+
+            mock_gw = MagicMock()
+            mock_gw.game_sessions = {}  # Empty — game not registered via REST
+            mock_gw._sessions_lock = asyncio.Lock()
+            mock_gw.end_game = AsyncMock()
+            mock_get_gateway.return_value = mock_gw
+
+            # connection_manager finds the game via agent connections
+            mock_conn_mgr.get_game_info = AsyncMock(return_value={
+                "civserver_port": 6005,
+                "player_id": 0,
+                "agent_id": "agent_fallback",
+                "session_id": "sess-abc",
+                "connected_at": 1704067200.0,
+            })
+            mock_conn_mgr.get_players_for_game = AsyncMock(return_value=[
+                {"player_id": 0, "agent_id": "agent_fallback"},
+            ])
+            mock_terminate.return_value = {"terminated": True, "mode": "hard"}
+
+            response = client.post("/api/games/game-fallback/stop", json=stop_request)
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["type"] == "game_ended"
+        assert data["game_id"] == "game-fallback"
+        assert data["data"]["success"] is True
+
+        # Verify the fallback created a session entry
+        assert "game-fallback" in mock_gw.game_sessions
+        created_session = mock_gw.game_sessions["game-fallback"]
+        assert created_session["source"] == "websocket_fallback"
+        assert created_session["port"] == 6005
+
+        mock_gw.end_game.assert_awaited_once()
 
 
 class TestGlobalStateEndpoint:
