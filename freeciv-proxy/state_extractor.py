@@ -44,6 +44,7 @@ import os
 import atexit
 import signal
 import sys
+import threading
 from enum import Enum
 from typing import Dict, Any, List, Optional, Union, Tuple
 from tornado import web
@@ -111,11 +112,15 @@ class CivComRegistry:
     Provides clean interface for registering and retrieving game connections
 
     FIXED: Now uses composite key (game_id, agent_id) to support multiple players per game
+
+    Thread-safety: All mutations are protected by _lock. The registry may be
+    accessed from Tornado IOLoop coroutines and CivCom worker threads.
     """
 
     def __init__(self):
         self._civcom_instances: Dict[Tuple[str, str], CivCom] = {}
         self._game_metadata: Dict[Tuple[str, str], Dict[str, Any]] = {}
+        self._lock = threading.Lock()
 
     def register_game(self, game_id: str, agent_id: str | CivCom = None, civcom: Optional[CivCom] = None, metadata: Optional[Dict[str, Any]] = None):
         """Register a CivCom instance for a game.
@@ -146,11 +151,12 @@ class CivComRegistry:
             raise ValueError("civcom instance cannot be None")
 
         key = (game_id, agent_id)
-        if key in self._civcom_instances:
-            logger.warning(f"Replacing CivCom for agent {agent_id} in game {game_id}")
+        with self._lock:
+            if key in self._civcom_instances:
+                logger.warning(f"Replacing CivCom for agent {agent_id} in game {game_id}")
 
-        self._civcom_instances[key] = civcom
-        self._game_metadata[key] = metadata or {}
+            self._civcom_instances[key] = civcom
+            self._game_metadata[key] = metadata or {}
 
         logger.info(f"Registered CivCom for agent {agent_id} in game {game_id}")
 
@@ -162,22 +168,23 @@ class CivComRegistry:
             agent_id: Unique agent/player identifier
         """
         key = (game_id, agent_id)
-        if key in self._civcom_instances:
-            try:
-                # Try to cleanup the civcom instance if it has cleanup methods
-                civcom = self._civcom_instances[key]
-                if hasattr(civcom, 'cleanup'):
-                    civcom.cleanup()
-                elif hasattr(civcom, 'close'):
-                    civcom.close()
-            except Exception as e:
-                logger.warning(f"Error cleaning up CivCom for agent {agent_id} in game {game_id}: {e}")
+        with self._lock:
+            if key in self._civcom_instances:
+                try:
+                    # Try to cleanup the civcom instance if it has cleanup methods
+                    civcom = self._civcom_instances[key]
+                    if hasattr(civcom, 'cleanup'):
+                        civcom.cleanup()
+                    elif hasattr(civcom, 'close'):
+                        civcom.close()
+                except Exception as e:
+                    logger.warning(f"Error cleaning up CivCom for agent {agent_id} in game {game_id}: {e}")
 
-            del self._civcom_instances[key]
-            if key in self._game_metadata:
-                del self._game_metadata[key]
+                del self._civcom_instances[key]
+                if key in self._game_metadata:
+                    del self._game_metadata[key]
 
-            logger.info(f"Unregistered CivCom for agent {agent_id} in game {game_id}")
+                logger.info(f"Unregistered CivCom for agent {agent_id} in game {game_id}")
 
     def get_civcom(self, game_id: str, agent_id: str) -> Optional[CivCom]:
         """Get CivCom instance for a specific game and agent
@@ -193,7 +200,8 @@ class CivComRegistry:
             return None
 
         key = (game_id, agent_id)
-        return self._civcom_instances.get(key)
+        with self._lock:
+            return self._civcom_instances.get(key)
 
     def get_all_for_game(self, game_id: str) -> Dict[Tuple[str, str], CivCom]:
         """Get all CivCom instances for a specific game

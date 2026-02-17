@@ -680,12 +680,14 @@ class LLMWSHandler(websocket.WebSocketHandler):
                     # it rejects the new join. We force-close the old connection and retry once.
                     if is_reconnecting and self.civcom:
                         # Wait for handshake to complete (PACKET_SERVER_JOIN_REPLY)
-                        hs_start = time.monotonic()
-                        while not self.civcom.handshake_complete.is_set():
-                            if (time.monotonic() - hs_start) >= STALE_CONN_HANDSHAKE_WAIT_SEC:
-                                logger.warning(f"Handshake timeout for {self.agent_id} after {STALE_CONN_HANDSHAKE_WAIT_SEC}s")
-                                break
-                            await asyncio.sleep(STALE_CONN_HANDSHAKE_POLL_SEC)
+                        # Uses asyncio.to_thread to bridge threading.Event → async without polling
+                        try:
+                            await asyncio.wait_for(
+                                asyncio.to_thread(self.civcom.handshake_complete.wait),
+                                timeout=STALE_CONN_HANDSHAKE_WAIT_SEC
+                            )
+                        except asyncio.TimeoutError:
+                            logger.warning(f"Handshake timeout for {self.agent_id} after {STALE_CONN_HANDSHAKE_WAIT_SEC}s")
 
                         if self.civcom.join_rejected and 'already connected' in (self.civcom.join_rejection_reason or ''):
                             logger.warning(
@@ -707,16 +709,20 @@ class LLMWSHandler(websocket.WebSocketHandler):
                             # 3. Wait for civserver to process the disconnect
                             await asyncio.sleep(STALE_CONN_DISCONNECT_WAIT_SEC)
 
-                            # 4. Retry the connection once
+                            # 4. Retry: _connect_to_civserver creates a NEW CivCom instance
+                            #    with fresh state (join_rejected=False, new handshake_complete Event),
+                            #    so the wait below is against the retry CivCom, not the failed one.
                             logger.info(f"   Retrying civserver connection for {self.agent_id}...")
                             self._connect_to_civserver(civserver_port, game_id)
 
                             # Wait for retry handshake
-                            hs_start = time.monotonic()
-                            while not self.civcom.handshake_complete.is_set():
-                                if (time.monotonic() - hs_start) >= STALE_CONN_HANDSHAKE_WAIT_SEC:
-                                    break
-                                await asyncio.sleep(STALE_CONN_HANDSHAKE_POLL_SEC)
+                            try:
+                                await asyncio.wait_for(
+                                    asyncio.to_thread(self.civcom.handshake_complete.wait),
+                                    timeout=STALE_CONN_HANDSHAKE_WAIT_SEC
+                                )
+                            except asyncio.TimeoutError:
+                                logger.warning(f"Retry handshake timeout for {self.agent_id}")
 
                             if self.civcom.join_rejected:
                                 logger.error(
@@ -724,6 +730,9 @@ class LLMWSHandler(websocket.WebSocketHandler):
                                     f"{self.civcom.join_rejection_reason}\n"
                                     f"   Civserver still rejecting connection after stale cleanup"
                                 )
+                                # Clean up the failed retry CivCom to prevent resource leaks
+                                self.civcom.cleanup()
+                                civcom_registry.unregister_game(game_id, self.agent_id)
                                 error_response = {
                                     'type': 'error',
                                     'code': 'E_STALE_CONNECTION',

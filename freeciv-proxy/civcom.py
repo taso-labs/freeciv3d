@@ -1237,9 +1237,12 @@ class CivCom(Thread):
 
         Safe to call from Tornado IOLoop thread. Sets stopped=True (checked by
         run() loop) and closes TCP socket (unblocks recv() in worker thread).
+        Also resets join_rejected state to avoid stale flags on reuse.
         """
         logger.info(f"Cleaning up CivCom for {self.username} (alive={self.is_alive()})")
         self.stopped = True
+        self.join_rejected = False
+        self.join_rejection_reason = None
         if self.socket is not None:
             try:
                 self.socket.close()
