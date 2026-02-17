@@ -208,10 +208,14 @@ class TestCivComCleanupIdempotent(unittest.TestCase):
         })
         civcom.parse_and_store_packet(rejection_packet)
 
-        # cleanup should work even after rejection
+        # Verify rejection was detected before cleanup
+        self.assertTrue(civcom.join_rejected)
+
+        # cleanup should work even after rejection and reset the rejection flag
         civcom.cleanup()
         self.assertTrue(civcom.stopped)
-        self.assertTrue(civcom.join_rejected)
+        self.assertFalse(civcom.join_rejected)  # cleanup() resets rejection state
+        self.assertIsNone(civcom.join_rejection_reason)
 
 
 class TestCivComRegistryCleanup(unittest.TestCase):
