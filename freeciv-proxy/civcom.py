@@ -396,6 +396,11 @@ class CivCom(Thread):
         self.game_timeout = None  # Turn timeout for pause/resume functionality
         self._dead_since = None  # Timestamp when marked dead (for TTL-based cleanup)
 
+        # Join rejection tracking — set when civserver replies you_can_join=False
+        # Used by llm_handler to detect "already connected" and retry after cleanup
+        self.join_rejected = False
+        self.join_rejection_reason = None  # e.g. "'username' already connected."
+
         # Tile data storage for terrain lookups
         self.tiles = {}  # {tile_index: {terrain, extras, ...}}
 
@@ -1464,11 +1469,18 @@ class CivCom(Thread):
                     # Handshake complete - release the semaphore to allow next connection
                     # This is the SUCCESS path - civserver accepted our connection
                     self._release_handshake_semaphore()
+                    # Always signal handshake complete (even without semaphore)
+                    self.handshake_complete.set()
                 else:
                     message = packet.get('message', 'Unknown rejection reason')
                     logger.error(f"Server rejected join request for {self.username}: {message}")
+                    # Expose rejection to handler so it can detect "already connected" and retry
+                    self.join_rejected = True
+                    self.join_rejection_reason = message
                     # Handshake failed - release semaphore to allow next connection to try
                     self._release_handshake_semaphore()
+                    # Always signal handshake complete (even without semaphore)
+                    self.handshake_complete.set()
 
             # Map info packet (contains xsize, ysize)
             elif packet_type == PACKET_MAP_INFO:
