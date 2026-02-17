@@ -443,9 +443,11 @@ function find_first_explored_tile()
 }
 
 /****************************************************************************
-  Center view on followed player's main population center.
-  Priority: 1) Capital city, 2) Largest city by size, 3) Units (turn 1 fallback)
-           4) Any explored tile (prevents black screen)
+  Center view on followed player's territory with dynamic zoom.
+  Uses territory-aware centering (cities + units) with auto-zoom based on
+  empire spread. This ensures the view scales appropriately from turn 1
+  through turn 200+ as the player's territory expands.
+  Priority: 1) Territory centroid with auto-zoom, 2) Any explored tile
 ****************************************************************************/
 function observer_center_on_followed_player()
 {
@@ -457,68 +459,31 @@ function observer_center_on_followed_player()
     return;
   }
 
-  var target_city = null;
-
-  // Priority 1: Capital city
-  target_city = player_capital(player);
-
-  // Priority 2: Largest city by population size
-  if (!target_city) {
-    var max_size = 0;
-    for (var city_id in cities) {
-      var pcity = cities[city_id];
-      if (city_owner_player_id(pcity) === observer_follow_player) {
-        if (pcity['size'] > max_size) {
-          max_size = pcity['size'];
-          target_city = pcity;
-        }
-      }
-    }
-  }
-
-  // Center on target city if found
-  if (target_city) {
-    var ptile = city_tile(target_city);
-    if (ptile) {
-      center_tile_mapcanvas(ptile);
-      freelog(LOG_DEBUG, '[Observer] Centered on ' + (target_city['name'] || 'Unknown') +
-              ' size: ' + (target_city['size'] || 0));
-      // Notify parent on first successful center
-      if (!observer_centered_notified) {
-        observer_centered_notified = true;
-        observer_parent_notified = true;
-        notify_parent_iframe('observer_centered', {
-          center_type: 'city',
-          city_name: target_city['name'],
-          location: { x: ptile['x'], y: ptile['y'] }
-        });
-      }
-    }
-    // Reset unit spread tracker when centering on city (fresh calc next time we fall back to units)
-    observer_last_unit_spread = null;
-    return;
-  }
-
-  // Priority 3: Fall back to units when no cities exist (e.g., turn 1)
-  if (center_on_player_units_with_zoom(observer_follow_player)) {
+  // Priority 1: Territory-aware centering (cities + units with dynamic zoom)
+  // Centers on territory centroid and auto-zooms based on empire spread
+  var territory_data = center_on_player_territory_with_zoom(observer_follow_player);
+  if (territory_data) {
     // Notify parent on first successful center
     if (!observer_centered_notified) {
       observer_centered_notified = true;
       observer_parent_notified = true;
       notify_parent_iframe('observer_centered', {
-        center_type: 'units',
-        player_id: observer_follow_player
+        center_type: 'territory',
+        city_count: territory_data.city_count,
+        unit_count: territory_data.unit_count,
+        spread: territory_data.spread,
+        location: { x: territory_data.centroid.x, y: territory_data.centroid.y }
       });
     }
     return;
   }
 
-  // Priority 4: Fall back to any explored tile (prevents black screen)
+  // Priority 2: Fall back to any explored tile (prevents black screen)
   var explored_tile = find_first_explored_tile();
   if (explored_tile) {
     center_tile_mapcanvas(explored_tile);
     freelog(LOG_DEBUG, '[Observer] Centered on explored tile at (' +
-            explored_tile['x'] + ',' + explored_tile['y'] + ') - no cities/units for player ' + observer_follow_player);
+            explored_tile['x'] + ',' + explored_tile['y'] + ') - no territory for player ' + observer_follow_player);
     // Notify parent on first successful center (even if fallback)
     if (!observer_centered_notified) {
       observer_centered_notified = true;
@@ -531,17 +496,15 @@ function observer_center_on_followed_player()
     return;
   }
 
-  // No cities, units, or explored tiles found - notify parent once but keep trying to center
-  // Use separate flag so we don't spam parent but can still center when tiles load
+  // No territory or explored tiles found - notify parent once but keep trying
   if (!observer_parent_notified) {
     observer_parent_notified = true;
-    console.warn('[Observer] No cities, units, or explored tiles found for player ' + observer_follow_player + ' - will retry');
+    console.warn('[Observer] No territory or explored tiles found for player ' + observer_follow_player + ' - will retry');
     notify_parent_iframe('observer_centered', {
       center_type: 'none',
       reason: 'no_visible_tiles',
       player_id: observer_follow_player
     });
-    // NOTE: observer_centered_notified stays false so we keep trying to center
   }
 }
 
@@ -549,44 +512,136 @@ function observer_center_on_followed_player()
 var observer_last_unit_spread = null;
 var SPREAD_CHANGE_THRESHOLD = 5;  // Only recalc zoom if spread changes by >5 tiles
 
+// Track last territory effective radius for follow mode auto-zoom hysteresis
+var observer_last_territory_radius = null;
+var TERRITORY_RADIUS_CHANGE_THRESHOLD = 2;  // Radius change threshold (tiles) before recalculating zoom
+
+/****************************************************************************
+  Unwrap a coordinate relative to a reference point on a wrapping axis.
+  If the distance exceeds half the map size, adjusts to the closer wrap.
+  @returns the unwrapped coordinate value
+****************************************************************************/
+function unwrap_coordinate(val, ref, wraps, map_size)
+{
+  if (!wraps || map_size <= 0) return val;
+  var delta = val - ref;
+  var half = Math.floor(map_size / 2);
+  if (delta > half) return val - map_size;
+  if (delta < -half) return val + map_size;
+  return val;
+}
+
+/****************************************************************************
+  Compute wrap-aware spread and centroid from an array of {x, y, weight}
+  positions. On wrapping maps, detects when positions span the date line
+  and adjusts coordinates so spread and centroid are correct.
+
+  For each wrapping axis, if the naive extent (max - min) exceeds half
+  the map dimension, positions are "unwrapped" relative to the first
+  position so that they cluster together instead of spanning the full map.
+
+  @param {Array<{x: number, y: number, weight: number}>} positions
+  @returns {{ centroid_x, centroid_y, spread, effective_radius, total_weight }} or null
+****************************************************************************/
+function compute_wrapped_spread_and_centroid(positions)
+{
+  if (!positions || positions.length === 0) return null;
+
+  var wrap_x = (typeof wrap_has_flag === 'function' && typeof WRAP_X !== 'undefined') ? wrap_has_flag(WRAP_X) : false;
+  var wrap_y = (typeof wrap_has_flag === 'function' && typeof WRAP_Y !== 'undefined') ? wrap_has_flag(WRAP_Y) : false;
+  var map_w = (typeof map !== 'undefined' && map && map['xsize']) ? map['xsize'] : 0;
+  var map_h = (typeof map !== 'undefined' && map && map['ysize']) ? map['ysize'] : 0;
+
+  // Reference point for unwrapping: first position
+  var ref_x = positions[0].x;
+  var ref_y = positions[0].y;
+
+  var sum_x = 0, sum_y = 0, total_weight = 0;
+  var min_x = Infinity, max_x = -Infinity;
+  var min_y = Infinity, max_y = -Infinity;
+
+  for (var i = 0; i < positions.length; i++) {
+    var px = unwrap_coordinate(positions[i].x, ref_x, wrap_x, map_w);
+    var py = unwrap_coordinate(positions[i].y, ref_y, wrap_y, map_h);
+    var w = positions[i].weight || 1;
+
+    sum_x += px * w;
+    sum_y += py * w;
+    total_weight += w;
+    min_x = Math.min(min_x, px);
+    max_x = Math.max(max_x, px);
+    min_y = Math.min(min_y, py);
+    max_y = Math.max(max_y, py);
+  }
+
+  var centroid_raw_x = sum_x / total_weight;
+  var centroid_raw_y = sum_y / total_weight;
+  var centroid_x = Math.floor(centroid_raw_x);
+  var centroid_y = Math.floor(centroid_raw_y);
+
+  // Re-wrap centroid back into valid map coordinates
+  if (wrap_x && map_w > 0) centroid_x = ((centroid_x % map_w) + map_w) % map_w;
+  if (wrap_y && map_h > 0) centroid_y = ((centroid_y % map_h) + map_h) % map_h;
+
+  var spread = Math.max(max_x - min_x, max_y - min_y);
+
+  // Compute percentile-based effective radius for outlier-robust zoom.
+  // Uses Chebyshev distance (max of |dx|,|dy|) from raw centroid, expanded
+  // by weight so cities (weight 3) are harder to exclude as outliers.
+  var distances = [];
+  for (var i = 0; i < positions.length; i++) {
+    var px = unwrap_coordinate(positions[i].x, ref_x, wrap_x, map_w);
+    var py = unwrap_coordinate(positions[i].y, ref_y, wrap_y, map_h);
+    var w = positions[i].weight || 1;
+
+    var dist = Math.max(Math.abs(px - centroid_raw_x), Math.abs(py - centroid_raw_y));
+    for (var j = 0; j < w; j++) {
+      distances.push(dist);
+    }
+  }
+
+  distances.sort(function(a, b) { return a - b; });
+  var coverage = (typeof TERRITORY_COVERAGE_RATIO !== 'undefined') ? TERRITORY_COVERAGE_RATIO : 0.85;
+  var percentile_index = Math.min(Math.floor(distances.length * coverage), distances.length - 1);
+  var effective_radius = distances[percentile_index];
+
+  return {
+    centroid_x: centroid_x,
+    centroid_y: centroid_y,
+    spread: spread,
+    effective_radius: effective_radius,
+    total_weight: total_weight
+  };
+}
+
 /****************************************************************************
   Calculate the centroid and spread of all units owned by a player.
+  Handles wrapping maps correctly via compute_wrapped_spread_and_centroid().
   Returns: { centroid: {x, y}, spread: number, count: number, tile: {x, y} }
   Returns null if player has no units.
 ****************************************************************************/
 function get_player_units_centroid_and_spread(player_id)
 {
-  var sum_x = 0, sum_y = 0, count = 0;
-  var min_x = Infinity, max_x = -Infinity;
-  var min_y = Infinity, max_y = -Infinity;
+  var positions = [];
 
   for (var unit_id in units) {
     var punit = units[unit_id];
     if (punit['owner'] === player_id) {
       var ptile = index_to_tile(punit['tile']);
       if (ptile) {
-        sum_x += ptile['x'];
-        sum_y += ptile['y'];
-        count++;
-        min_x = Math.min(min_x, ptile['x']);
-        max_x = Math.max(max_x, ptile['x']);
-        min_y = Math.min(min_y, ptile['y']);
-        max_y = Math.max(max_y, ptile['y']);
+        positions.push({ x: ptile['x'], y: ptile['y'], weight: 1 });
       }
     }
   }
 
-  if (count === 0) return null;
-
-  var centroid_x = Math.floor(sum_x / count);
-  var centroid_y = Math.floor(sum_y / count);
-  var spread = Math.max(max_x - min_x, max_y - min_y);
+  var result = compute_wrapped_spread_and_centroid(positions);
+  if (!result) return null;
 
   return {
-    centroid: { x: centroid_x, y: centroid_y },
-    spread: spread,
-    count: count,
-    tile: { x: centroid_x, y: centroid_y }
+    centroid: { x: result.centroid_x, y: result.centroid_y },
+    spread: result.spread,
+    count: positions.length,
+    tile: { x: result.centroid_x, y: result.centroid_y }
   };
 }
 
@@ -625,20 +680,142 @@ function center_on_player_units_with_zoom(player_id)
     Math.abs(unit_data.spread - observer_last_unit_spread) >= SPREAD_CHANGE_THRESHOLD
   );
 
+  // Center first — enable_mapview_slide_3d() recalculates camera_dy from current position.
+  center_tile_mapcanvas(unit_data.tile);
+
+  // Always enforce camera_dy to prevent race with camera preset init.
+  var target_dy = calculate_zoom_for_unit_spread(unit_data.spread);
+  camera_dy = target_dy;
+
   if (should_update_zoom) {
-    var target_dy = calculate_zoom_for_unit_spread(unit_data.spread);
-    camera_dy = target_dy;
     observer_last_unit_spread = unit_data.spread;
     freelog(LOG_DEBUG, '[Observer] Zoom updated: spread=' + unit_data.spread +
             ' tiles, dy=' + target_dy);
   }
 
-  center_tile_mapcanvas(unit_data.tile);
-
   freelog(LOG_DEBUG, '[Observer] Centered on ' + unit_data.count +
           ' unit(s) at (' + unit_data.centroid.x + ',' + unit_data.centroid.y + ')');
 
   return true;
+}
+
+// City centroid weight: each city contributes this many points to the centroid
+// to anchor the view near the empire core and prevent distant military
+// expeditions from pulling the camera away from the player's cities.
+var TERRITORY_CITY_WEIGHT = 3;
+
+/****************************************************************************
+  Calculate the centroid and spread of all territory (cities + units) owned
+  by a player. Territory provides a more stable and comprehensive view than
+  either cities or units alone.
+  Cities are weighted more heavily (TERRITORY_CITY_WEIGHT per city) so the
+  centroid stays anchored near the empire core.
+  Handles wrapping maps correctly via compute_wrapped_spread_and_centroid().
+  Returns: { centroid: {x, y}, spread: number, city_count: number,
+             unit_count: number, count: number, tile: {x, y} }
+  Returns null if player has no cities or units.
+****************************************************************************/
+function get_player_territory_centroid_and_spread(player_id)
+{
+  var positions = [];
+  var city_count = 0, unit_count = 0;
+
+  // Include all cities owned by this player (weighted for centroid stability)
+  for (var city_id in cities) {
+    var pcity = cities[city_id];
+    if (city_owner_player_id(pcity) === player_id) {
+      var ptile = city_tile(pcity);
+      if (ptile) {
+        positions.push({ x: ptile['x'], y: ptile['y'], weight: TERRITORY_CITY_WEIGHT });
+        city_count++;
+      }
+    }
+  }
+
+  // Include all units owned by this player (weight 1 each)
+  for (var unit_id in units) {
+    var punit = units[unit_id];
+    if (punit['owner'] === player_id) {
+      var ptile = index_to_tile(punit['tile']);
+      if (ptile) {
+        positions.push({ x: ptile['x'], y: ptile['y'], weight: 1 });
+        unit_count++;
+      }
+    }
+  }
+
+  var result = compute_wrapped_spread_and_centroid(positions);
+  if (!result) return null;
+
+  return {
+    centroid: { x: result.centroid_x, y: result.centroid_y },
+    spread: result.spread,
+    effective_radius: result.effective_radius,
+    city_count: city_count,
+    unit_count: unit_count,
+    count: result.total_weight,
+    tile: { x: result.centroid_x, y: result.centroid_y }
+  };
+}
+
+// Territory observer zoom configuration
+// Uses effective_radius (85th-percentile Chebyshev distance from centroid)
+// to compute camera height, ignoring distant outlier units.
+var TERRITORY_BASE_DY = 250;            // Minimum camera height for early game (radius 0)
+var TERRITORY_DY_PER_TILE = 28;         // Camera height gained per tile of effective radius
+var TERRITORY_MIN_ZOOM_DY = 200;        // Absolute minimum camera height
+var TERRITORY_MAX_ZOOM_DY = 900;        // Absolute maximum camera height
+var TERRITORY_COVERAGE_RATIO = 0.85;    // Fraction of positions included in zoom (outlier rejection)
+
+/****************************************************************************
+  Calculate camera height (zoom) based on territory effective radius.
+  Uses a simple linear formula: dy = BASE + radius * DY_PER_TILE,
+  clamped to [MIN, MAX]. The effective radius is the 85th-percentile
+  Chebyshev distance from centroid, which naturally excludes distant
+  outlier units while keeping the full city cluster in view.
+****************************************************************************/
+function calculate_zoom_for_territory_spread(effective_radius)
+{
+  var dy = TERRITORY_BASE_DY + effective_radius * TERRITORY_DY_PER_TILE;
+  return Math.floor(Math.max(TERRITORY_MIN_ZOOM_DY, Math.min(TERRITORY_MAX_ZOOM_DY, dy)));
+}
+
+/****************************************************************************
+  Center view on player's territory centroid with dynamic zoom.
+  Used in follow mode when player has cities and/or units.
+  Zoom only updates if effective radius changes significantly (>2 tiles).
+  Returns territory_data object if successfully centered, null if no territory.
+****************************************************************************/
+function center_on_player_territory_with_zoom(player_id)
+{
+  var territory_data = get_player_territory_centroid_and_spread(player_id);
+  if (!territory_data) return null;
+
+  // Only recalculate zoom if effective radius changed significantly or first time
+  var should_update_zoom = (
+    observer_last_territory_radius === null ||
+    Math.abs(territory_data.effective_radius - observer_last_territory_radius) >= TERRITORY_RADIUS_CHANGE_THRESHOLD
+  );
+
+  // Center first — this triggers enable_mapview_slide_3d() which recalculates
+  // camera_dy from the current camera position. We must set camera_dy AFTER.
+  center_tile_mapcanvas(territory_data.tile);
+
+  // Always set camera_dy to prevent race with camera preset init (?camera=cinematic)
+  // which can reset camera_dy=150 after our first centering call. Hysteresis only
+  // controls logging to avoid log spam — camera_dy must be enforced every cycle.
+  var target_dy = calculate_zoom_for_territory_spread(territory_data.effective_radius);
+  camera_dy = target_dy;
+
+  if (should_update_zoom) {
+    observer_last_territory_radius = territory_data.effective_radius;
+    freelog(LOG_DEBUG, '[Observer] Territory: centroid=(' + territory_data.centroid.x + ',' +
+            territory_data.centroid.y + ') radius=' + territory_data.effective_radius +
+            ' spread=' + territory_data.spread +
+            ' (' + territory_data.city_count + 'c/' + territory_data.unit_count + 'u) dy=' + target_dy);
+  }
+
+  return territory_data;
 }
 
 // Track last global spread for hysteresis to avoid jarring zoom changes
@@ -656,6 +833,7 @@ var GLOBAL_OBSERVER_SPREAD_MAX = 80;     // Spread threshold for maximum zoom
 /****************************************************************************
   Calculate the centroid and spread of all units from ALL non-barbarian
   alive players. Used for global observer view to fit all players in view.
+  Handles wrapping maps correctly via compute_wrapped_spread_and_centroid().
   Returns: { centroid: {x, y}, spread: number, count: number, player_count: number }
   Returns null if no non-barbarian players have units.
 ****************************************************************************/
@@ -663,9 +841,7 @@ function get_all_players_units_centroid_and_spread()
 {
   if (typeof units === 'undefined' || typeof players === 'undefined') return null;
 
-  var sum_x = 0, sum_y = 0, count = 0;
-  var min_x = Infinity, max_x = -Infinity;
-  var min_y = Infinity, max_y = -Infinity;
+  var positions = [];
   var players_with_units = {};
 
   for (var unit_id in units) {
@@ -684,30 +860,22 @@ function get_all_players_units_centroid_and_spread()
 
     var ptile = index_to_tile(punit['tile']);
     if (ptile) {
-      sum_x += ptile['x'];
-      sum_y += ptile['y'];
-      count++;
-      min_x = Math.min(min_x, ptile['x']);
-      max_x = Math.max(max_x, ptile['x']);
-      min_y = Math.min(min_y, ptile['y']);
-      max_y = Math.max(max_y, ptile['y']);
+      positions.push({ x: ptile['x'], y: ptile['y'], weight: 1 });
       players_with_units[owner_id] = true;
     }
   }
 
-  if (count === 0) return null;
+  var result = compute_wrapped_spread_and_centroid(positions);
+  if (!result) return null;
 
-  var centroid_x = Math.floor(sum_x / count);
-  var centroid_y = Math.floor(sum_y / count);
-  var spread = Math.max(max_x - min_x, max_y - min_y);
   var player_count = Object.keys(players_with_units).length;
 
   return {
-    centroid: { x: centroid_x, y: centroid_y },
-    spread: spread,
-    count: count,
+    centroid: { x: result.centroid_x, y: result.centroid_y },
+    spread: result.spread,
+    count: positions.length,
     player_count: player_count,
-    tile: { x: centroid_x, y: centroid_y }
+    tile: { x: result.centroid_x, y: result.centroid_y }
   };
 }
 
@@ -752,15 +920,18 @@ function center_on_all_players_with_zoom()
     Math.abs(unit_data.spread - observer_last_global_spread) >= GLOBAL_SPREAD_CHANGE_THRESHOLD
   );
 
+  // Center first — enable_mapview_slide_3d() recalculates camera_dy from current position.
+  center_tile_mapcanvas(unit_data.tile);
+
+  // Always enforce camera_dy to prevent race with camera preset init.
+  var target_dy = calculate_zoom_for_global_spread(unit_data.spread);
+  camera_dy = target_dy;
+
   if (should_update_zoom) {
-    var target_dy = calculate_zoom_for_global_spread(unit_data.spread);
-    camera_dy = target_dy;
     observer_last_global_spread = unit_data.spread;
     freelog(LOG_DEBUG, '[Observer Global] Zoom updated: spread=' + unit_data.spread +
             ' tiles, ' + unit_data.player_count + ' players, dy=' + target_dy);
   }
-
-  center_tile_mapcanvas(unit_data.tile);
 
   freelog(LOG_DEBUG, '[Observer Global] Centered on ' + unit_data.count +
           ' unit(s) from ' + unit_data.player_count + ' player(s) at (' +
@@ -901,6 +1072,7 @@ function cleanup_observer_follow_mode()
   }
   observer_follow_player = null;
   observer_last_unit_spread = null;
+  observer_last_territory_radius = null;
   observer_last_global_spread = null;
 }
 
