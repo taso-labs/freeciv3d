@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.55](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.54...freeciv3d-v0.3.55) (2026-02-17)
+
+
+### Bug Fixes
+
+* **proxy:** handle stale 'already connected' rejection on reconnection ([#154](https://github.com/taso-ventures/freeciv3d/issues/154)) ([e93c331](https://github.com/taso-ventures/freeciv3d/commit/e93c331f415fc4d3bec1b8f96ca2c95a5f8a073e))
+
 ## [0.3.54](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.53...freeciv3d-v0.3.54) (2026-02-15)
 
 
