@@ -154,16 +154,11 @@ class TestStaleConnectionConstants(unittest.TestCase):
         """Verify the stale connection constants are importable."""
         from llm_handler import (
             STALE_CONN_HANDSHAKE_WAIT_SEC,
-            STALE_CONN_HANDSHAKE_POLL_SEC,
             STALE_CONN_DISCONNECT_WAIT_SEC,
         )
         # Handshake wait should be reasonable (1-10s)
         self.assertGreaterEqual(STALE_CONN_HANDSHAKE_WAIT_SEC, 1.0)
         self.assertLessEqual(STALE_CONN_HANDSHAKE_WAIT_SEC, 10.0)
-
-        # Poll interval should be short
-        self.assertGreater(STALE_CONN_HANDSHAKE_POLL_SEC, 0)
-        self.assertLessEqual(STALE_CONN_HANDSHAKE_POLL_SEC, 1.0)
 
         # Disconnect wait should give civserver time to clean up
         self.assertGreaterEqual(STALE_CONN_DISCONNECT_WAIT_SEC, 1.0)
