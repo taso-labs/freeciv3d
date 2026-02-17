@@ -114,6 +114,10 @@ GAME_INFO_POLL_INTERVAL_SEC = 0.1  # Polling interval
 GAME_INFO_LOG_INTERVAL_SEC = 0.5  # Debug log frequency
 TURN_DRIFT_TOLERANCE = llm_config.get('reconnection.turn_drift_tolerance', 5)  # Max acceptable turn drift during reconnection
 
+# Stale connection retry constants — when civserver rejects join with "already connected"
+STALE_CONN_HANDSHAKE_WAIT_SEC = 5.0  # Max wait for handshake reply from civserver
+STALE_CONN_DISCONNECT_WAIT_SEC = 2.0  # Wait after force-closing old connection before retry
+
 # Connection health monitoring - threshold for marking connection as dead
 # After this many consecutive send failures, the connection is marked dead and game is paused
 # Higher values provide more tolerance for transient network issues
@@ -669,6 +673,81 @@ class LLMWSHandler(websocket.WebSocketHandler):
                         logger.warning(f"⚠️ Reconnecting but no existing CivCom found for {self.agent_id} - creating new")
                     self._connect_to_civserver(civserver_port, game_id)
                     logger.info(f"✓ Agent {self.agent_id} civcom connection established to port {civserver_port}")
+
+                    # FIX: Detect "already connected" rejection and retry after cleanup
+                    # When civserver still has a stale TCP connection for this username,
+                    # it rejects the new join. We force-close the old connection and retry once.
+                    if is_reconnecting and self.civcom:
+                        # Wait for handshake to complete (PACKET_SERVER_JOIN_REPLY)
+                        # Uses asyncio.to_thread to bridge threading.Event → async without polling
+                        try:
+                            await asyncio.wait_for(
+                                asyncio.to_thread(self.civcom.handshake_complete.wait),
+                                timeout=STALE_CONN_HANDSHAKE_WAIT_SEC
+                            )
+                        except asyncio.TimeoutError:
+                            logger.warning(f"Handshake timeout for {self.agent_id} after {STALE_CONN_HANDSHAKE_WAIT_SEC}s")
+
+                        if self.civcom.join_rejected and 'already connected' in (self.civcom.join_rejection_reason or ''):
+                            logger.warning(
+                                f"🔄 Stale connection detected for {self.agent_id}: "
+                                f"{self.civcom.join_rejection_reason}\n"
+                                f"   Force-closing stale connection and retrying..."
+                            )
+
+                            # 1. Stop the rejected CivCom cleanly
+                            self.civcom.cleanup()
+
+                            # 2. Force-close any old CivCom still registered for this agent
+                            old_civcom = civcom_registry.get_civcom(game_id, self.agent_id)
+                            if old_civcom and old_civcom is not self.civcom:
+                                logger.info(f"   Force-closing stale CivCom for {self.agent_id}")
+                                old_civcom.cleanup()
+                            civcom_registry.unregister_game(game_id, self.agent_id)
+
+                            # 3. Wait for civserver to process the disconnect
+                            await asyncio.sleep(STALE_CONN_DISCONNECT_WAIT_SEC)
+
+                            # 4. Retry: _connect_to_civserver creates a NEW CivCom instance
+                            #    with fresh state (join_rejected=False, new handshake_complete Event),
+                            #    so the wait below is against the retry CivCom, not the failed one.
+                            logger.info(f"   Retrying civserver connection for {self.agent_id}...")
+                            self._connect_to_civserver(civserver_port, game_id)
+
+                            # Wait for retry handshake
+                            try:
+                                await asyncio.wait_for(
+                                    asyncio.to_thread(self.civcom.handshake_complete.wait),
+                                    timeout=STALE_CONN_HANDSHAKE_WAIT_SEC
+                                )
+                            except asyncio.TimeoutError:
+                                logger.warning(f"Retry handshake timeout for {self.agent_id}")
+
+                            if self.civcom.join_rejected:
+                                logger.error(
+                                    f"❌ Retry failed for {self.agent_id}: "
+                                    f"{self.civcom.join_rejection_reason}\n"
+                                    f"   Civserver still rejecting connection after stale cleanup"
+                                )
+                                # Clean up the failed retry CivCom to prevent resource leaks
+                                self.civcom.cleanup()
+                                civcom_registry.unregister_game(game_id, self.agent_id)
+                                error_response = {
+                                    'type': 'error',
+                                    'code': 'E_STALE_CONNECTION',
+                                    'message': (
+                                        f"Civserver rejected reconnection: {self.civcom.join_rejection_reason}. "
+                                        f"The stale connection could not be cleared."
+                                    ),
+                                    'recoverable': False,
+                                }
+                                if correlation_id:
+                                    error_response['correlation_id'] = correlation_id
+                                self.write_message(json.dumps(error_response))
+                                self.close()
+                                return
+                            else:
+                                logger.info(f"✅ Retry succeeded for {self.agent_id} — stale connection cleared")
 
                     # FIX: State verification for fresh CivCom on reconnection (E120 detection)
                     # When we can't reuse CivCom and create a new one, verify the civserver
