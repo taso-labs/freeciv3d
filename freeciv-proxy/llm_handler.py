@@ -116,7 +116,6 @@ TURN_DRIFT_TOLERANCE = llm_config.get('reconnection.turn_drift_tolerance', 5)  #
 
 # Stale connection retry constants — when civserver rejects join with "already connected"
 STALE_CONN_HANDSHAKE_WAIT_SEC = 5.0  # Max wait for handshake reply from civserver
-STALE_CONN_HANDSHAKE_POLL_SEC = 0.1  # Poll interval for handshake completion
 STALE_CONN_DISCONNECT_WAIT_SEC = 2.0  # Wait after force-closing old connection before retry
 
 # Connection health monitoring - threshold for marking connection as dead

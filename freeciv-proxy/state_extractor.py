@@ -215,7 +215,8 @@ class CivComRegistry:
         Returns:
             Dictionary mapping (game_id, agent_id) tuples to CivCom instances
         """
-        return {k: v for k, v in self._civcom_instances.items() if k[0] == game_id}
+        with self._lock:
+            return {k: v for k, v in self._civcom_instances.items() if k[0] == game_id}
 
     def has_game(self, game_id: str, agent_id: Optional[str] = None) -> bool:
         """Check if game is registered
@@ -228,12 +229,12 @@ class CivComRegistry:
         Returns:
             True if game (and optionally agent) is registered
         """
-        if agent_id is not None:
-            key = (game_id, agent_id)
-            return key in self._civcom_instances
-        else:
-            # Check if any agent is registered for this game
-            return any(k[0] == game_id for k in self._civcom_instances.keys())
+        with self._lock:
+            if agent_id is not None:
+                key = (game_id, agent_id)
+                return key in self._civcom_instances
+            else:
+                return any(k[0] == game_id for k in self._civcom_instances.keys())
 
     def list_games(self) -> List[str]:
         """Get list of unique registered game IDs"""
