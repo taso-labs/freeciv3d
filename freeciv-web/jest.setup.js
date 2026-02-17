@@ -381,13 +381,13 @@ global.compute_wrapped_spread_and_centroid = function(positions) {
 
   // Compute percentile-based effective radius (mirrors production code)
   var distances = [];
-  for (var i = 0; i < positions.length; i++) {
-    var px = global.unwrap_coordinate(positions[i].x, ref_x, wrap_x, map_w);
-    var py = global.unwrap_coordinate(positions[i].y, ref_y, wrap_y, map_h);
-    var w = positions[i].weight || 1;
+  for (var k = 0; k < positions.length; k++) {
+    var px2 = global.unwrap_coordinate(positions[k].x, ref_x, wrap_x, map_w);
+    var py2 = global.unwrap_coordinate(positions[k].y, ref_y, wrap_y, map_h);
+    var w2 = positions[k].weight || 1;
 
-    var dist = Math.max(Math.abs(px - centroid_raw_x), Math.abs(py - centroid_raw_y));
-    for (var j = 0; j < w; j++) {
+    var dist = Math.max(Math.abs(px2 - centroid_raw_x), Math.abs(py2 - centroid_raw_y));
+    for (var j = 0; j < w2; j++) {
       distances.push(dist);
     }
   }

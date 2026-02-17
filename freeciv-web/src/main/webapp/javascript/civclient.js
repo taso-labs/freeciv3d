@@ -496,7 +496,8 @@ function observer_center_on_followed_player()
     return;
   }
 
-  // No territory or explored tiles found - notify parent once but keep trying
+  // No territory or explored tiles found - notify parent once but keep trying to center.
+  // Use separate flag so we don't spam parent but can still center when tiles load.
   if (!observer_parent_notified) {
     observer_parent_notified = true;
     console.warn('[Observer] No territory or explored tiles found for player ' + observer_follow_player + ' - will retry');
@@ -505,6 +506,7 @@ function observer_center_on_followed_player()
       reason: 'no_visible_tiles',
       player_id: observer_follow_player
     });
+    // NOTE: observer_centered_notified stays false so we keep trying to center
   }
 }
 
@@ -589,13 +591,13 @@ function compute_wrapped_spread_and_centroid(positions)
   // Uses Chebyshev distance (max of |dx|,|dy|) from raw centroid, expanded
   // by weight so cities (weight 3) are harder to exclude as outliers.
   var distances = [];
-  for (var i = 0; i < positions.length; i++) {
-    var px = unwrap_coordinate(positions[i].x, ref_x, wrap_x, map_w);
-    var py = unwrap_coordinate(positions[i].y, ref_y, wrap_y, map_h);
-    var w = positions[i].weight || 1;
+  for (var k = 0; k < positions.length; k++) {
+    var px2 = unwrap_coordinate(positions[k].x, ref_x, wrap_x, map_w);
+    var py2 = unwrap_coordinate(positions[k].y, ref_y, wrap_y, map_h);
+    var w2 = positions[k].weight || 1;
 
-    var dist = Math.max(Math.abs(px - centroid_raw_x), Math.abs(py - centroid_raw_y));
-    for (var j = 0; j < w; j++) {
+    var dist = Math.max(Math.abs(px2 - centroid_raw_x), Math.abs(py2 - centroid_raw_y));
+    for (var j = 0; j < w2; j++) {
       distances.push(dist);
     }
   }
