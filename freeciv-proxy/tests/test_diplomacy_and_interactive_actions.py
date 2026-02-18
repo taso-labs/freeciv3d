@@ -429,14 +429,14 @@ class TestDiplomacyPacketConverters:
 
     def test_diplomacy_reject_treaty(self):
         """diplomacy_reject_treaty → PACKET_DIPLOMACY_CANCEL_MEETING_REQ."""
-        action = {'type': 'diplomacy_reject_treaty', 'player_id': 2}
+        action = {'type': 'diplomacy_reject_treaty', 'target_player_id': 2}
         result = convert_action_to_packet(action)
         assert result['pid'] == PACKET_DIPLOMACY_CANCEL_MEETING_REQ
         assert result['counterpart'] == 2
 
     def test_diplomacy_cancel_treaty(self):
         """diplomacy_cancel_treaty → PACKET_DIPLOMACY_CANCEL_PACT."""
-        action = {'type': 'diplomacy_cancel_treaty', 'player_id': 3}
+        action = {'type': 'diplomacy_cancel_treaty', 'target_player_id': 3}
         result = convert_action_to_packet(action)
         assert result['pid'] == PACKET_DIPLOMACY_CANCEL_PACT
         assert result['other_player_id'] == 3
@@ -444,7 +444,7 @@ class TestDiplomacyPacketConverters:
 
     def test_diplomacy_cancel_treaty_with_clause_type(self):
         """diplomacy_cancel_treaty respects explicit clause_type."""
-        action = {'type': 'diplomacy_cancel_treaty', 'player_id': 3, 'clause_type': 8}
+        action = {'type': 'diplomacy_cancel_treaty', 'target_player_id': 3, 'clause_type': 8}
         result = convert_action_to_packet(action)
         assert result['clause'] == 8
 
@@ -464,47 +464,47 @@ class TestDiplomacyPacketConverters:
 
     def test_diplomacy_start_negotiation(self):
         """diplomacy_start_negotiation → PACKET_DIPLOMACY_INIT_MEETING_REQ."""
-        action = {'type': 'diplomacy_start_negotiation', 'player_id': 1}
+        action = {'type': 'diplomacy_start_negotiation', 'target_player_id': 1}
         result = convert_action_to_packet(action)
         assert result['pid'] == PACKET_DIPLOMACY_INIT_MEETING_REQ
         assert result['counterpart'] == 1
 
     def test_diplomacy_accept_treaty(self):
         """diplomacy_accept_treaty → PACKET_DIPLOMACY_ACCEPT_TREATY_REQ."""
-        action = {'type': 'diplomacy_accept_treaty', 'player_id': 1}
+        action = {'type': 'diplomacy_accept_treaty', 'target_player_id': 1}
         result = convert_action_to_packet(action)
         assert result['pid'] == PACKET_DIPLOMACY_ACCEPT_TREATY_REQ
         assert result['counterpart'] == 1
 
     def test_diplomacy_declare_war(self):
         """diplomacy_declare_war → PACKET_DIPLOMACY_CANCEL_PACT."""
-        action = {'type': 'diplomacy_declare_war', 'player_id': 1}
+        action = {'type': 'diplomacy_declare_war', 'target_player_id': 1}
         result = convert_action_to_packet(action)
         assert result['pid'] == PACKET_DIPLOMACY_CANCEL_PACT
 
     def test_diplomacy_propose_ceasefire(self):
         """diplomacy_propose_ceasefire → PACKET_DIPLOMACY_CREATE_CLAUSE_REQ."""
-        action = {'type': 'diplomacy_propose_ceasefire', 'player_id': 1}
+        action = {'type': 'diplomacy_propose_ceasefire', 'target_player_id': 1}
         result = convert_action_to_packet(action)
         assert result['pid'] == PACKET_DIPLOMACY_CREATE_CLAUSE_REQ
 
     def test_diplomacy_propose_peace(self):
         """diplomacy_propose_peace → PACKET_DIPLOMACY_CREATE_CLAUSE_REQ with type 6."""
-        action = {'type': 'diplomacy_propose_peace', 'player_id': 1}
+        action = {'type': 'diplomacy_propose_peace', 'target_player_id': 1}
         result = convert_action_to_packet(action)
         assert result['pid'] == PACKET_DIPLOMACY_CREATE_CLAUSE_REQ
         assert result['type'] == 6  # CLAUSE_PEACE
 
     def test_diplomacy_propose_alliance(self):
         """diplomacy_propose_alliance → PACKET_DIPLOMACY_CREATE_CLAUSE_REQ with type 7."""
-        action = {'type': 'diplomacy_propose_alliance', 'player_id': 1}
+        action = {'type': 'diplomacy_propose_alliance', 'target_player_id': 1}
         result = convert_action_to_packet(action)
         assert result['pid'] == PACKET_DIPLOMACY_CREATE_CLAUSE_REQ
         assert result['type'] == 7  # CLAUSE_ALLIANCE
 
     def test_diplomacy_share_vision(self):
         """diplomacy_share_vision → PACKET_DIPLOMACY_CREATE_CLAUSE_REQ with type 8."""
-        action = {'type': 'diplomacy_share_vision', 'player_id': 1}
+        action = {'type': 'diplomacy_share_vision', 'target_player_id': 1}
         result = convert_action_to_packet(action)
         assert result['pid'] == PACKET_DIPLOMACY_CREATE_CLAUSE_REQ
         assert result['type'] == 8  # CLAUSE_VISION
@@ -512,7 +512,7 @@ class TestDiplomacyPacketConverters:
     def test_diplomacy_withdraw_vision(self):
         """diplomacy_withdraw_vision → PACKET_DIPLOMACY_REMOVE_CLAUSE_REQ."""
         from packet_constants import PACKET_DIPLOMACY_REMOVE_CLAUSE_REQ
-        action = {'type': 'diplomacy_withdraw_vision', 'player_id': 1}
+        action = {'type': 'diplomacy_withdraw_vision', 'target_player_id': 1}
         result = convert_action_to_packet(action)
         assert result['pid'] == PACKET_DIPLOMACY_REMOVE_CLAUSE_REQ
 
@@ -742,7 +742,7 @@ class TestAllDiplomacyActionPacketCompleteness:
     @pytest.mark.parametrize("action_type", ALL_DIPLOMACY_ACTIONS)
     def test_action_has_packet_mapping(self, action_type):
         """Each diplomacy action type should produce a valid packet dict."""
-        action = {'type': action_type, 'player_id': 1, 'message': 'test'}
+        action = {'type': action_type, 'target_player_id': 1, 'player_id': 1, 'message': 'test'}
         result = convert_action_to_packet(action)
         assert result is not None, f"{action_type} returned None from convert_action_to_packet"
         assert 'pid' in result, f"{action_type} packet missing 'pid' field"
