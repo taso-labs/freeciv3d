@@ -604,7 +604,32 @@ global.observer_center_on_followed_player = function() {
         return;
       }
     }
-    // No city found on initial load — fall through to territory/explored fallbacks
+
+    // No city or city_tile returned null — try explored tile WITHOUT zoom.
+    var explored = global.find_first_explored_tile();
+    if (explored) {
+      global.center_tile_mapcanvas(explored);
+      global.observer_centered_notified = true;
+      global.observer_parent_notified = true;
+      global.notify_parent_iframe('observer_centered', {
+        center_type: 'explored_tile',
+        location: { x: explored['x'], y: explored['y'] }
+      });
+      return;
+    }
+
+    // Nothing available yet — notify parent but keep retrying.
+    if (!global.observer_parent_notified) {
+      global.observer_parent_notified = true;
+      console.warn('[Observer] Initial load: no city or explored tiles yet for player ' +
+                   global.observer_follow_player + ' - will retry');
+      global.notify_parent_iframe('observer_centered', {
+        center_type: 'none',
+        reason: 'no_visible_tiles',
+        player_id: global.observer_follow_player
+      });
+    }
+    return;
   }
 
   // After initial center: territory-aware centering with dynamic zoom

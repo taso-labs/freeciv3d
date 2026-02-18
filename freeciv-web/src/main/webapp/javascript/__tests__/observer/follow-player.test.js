@@ -244,21 +244,25 @@ describe('Follow Player System', () => {
       expect(center_tile_mapcanvas).toHaveBeenCalled();
     });
 
-    test('should fall through to territory when player has only units (no cities) on initial load', () => {
+    test('should use explored tile fallback when no cities on initial load (not territory)', () => {
       global.cities = {};
       global.observer_follow_player = 0;
       global.observer_centered_notified = false;
 
-      // Add units for player 0
+      // Add units for player 0 — but initial guard won't use territory centering
       global.index_to_tile.mockReturnValue({ x: 10, y: 20 });
       global.units = {
         1: createMockUnit({ id: 1, owner: 0, tile: 100 }),
       };
 
+      // Provide an explored tile fallback
+      global.find_first_explored_tile.mockReturnValueOnce({ x: 10, y: 20 });
+
       observer_center_on_followed_player();
 
-      // No cities means initial guard falls through to territory centering
-      expect(center_tile_mapcanvas).toHaveBeenCalled();
+      // Initial guard: no city → explored tile fallback (no zoom)
+      expect(center_tile_mapcanvas).toHaveBeenCalledWith({ x: 10, y: 20 });
+      expect(global.observer_centered_notified).toBe(true);
     });
 
     test('should not center if player has no cities or units', () => {
@@ -293,6 +297,26 @@ describe('Follow Player System', () => {
 
       expect(() => observer_center_on_followed_player()).not.toThrow();
       expect(center_tile_mapcanvas).not.toHaveBeenCalled();
+    });
+
+    test('should not fall through to territory zoom when city_tile returns null on initial load', () => {
+      // Capital exists but city_tile returns null — guard must NOT fall through
+      // to territory centering (which would set camera_dy)
+      global.city_tile.mockReturnValue(null);
+      global.observer_follow_player = 0;
+      global.observer_centered_notified = false;
+      global.camera_dy = 150;
+
+      // Provide an explored tile as fallback
+      global.find_first_explored_tile.mockReturnValueOnce({ x: 25, y: 25, known: 2 });
+
+      observer_center_on_followed_player();
+
+      // Should center on explored tile, not territory
+      expect(center_tile_mapcanvas).toHaveBeenCalledWith({ x: 25, y: 25, known: 2 });
+      // camera_dy must remain untouched (no zoom on initial load)
+      expect(global.camera_dy).toBe(150);
+      expect(global.observer_centered_notified).toBe(true);
     });
 
     test('should not adjust camera_dy on first call (initial load guard)', () => {
@@ -539,7 +563,7 @@ describe('Follow Player System', () => {
       expect(center_tile_mapcanvas).toHaveBeenCalledWith({ x: 17, y: 10 });
     });
 
-    test('should work with units only (no cities, turn 1)', () => {
+    test('should use territory centering with units only after initial center', () => {
       global.cities = {};
       global.index_to_tile.mockImplementation((index) => {
         const positions = {
@@ -554,8 +578,8 @@ describe('Follow Player System', () => {
       };
 
       global.observer_follow_player = 0;
-      // No cities means initial guard falls through to territory centering
-      global.observer_centered_notified = false;
+      // After initial center, territory centering kicks in for units-only
+      global.observer_centered_notified = true;
 
       observer_center_on_followed_player();
 

@@ -486,6 +486,7 @@ function observer_center_on_followed_player()
       }
     }
 
+    // Center on city tile if available
     if (target_city) {
       var ptile = city_tile(target_city);
       if (ptile) {
@@ -502,7 +503,37 @@ function observer_center_on_followed_player()
         return;
       }
     }
-    // No city found on initial load — fall through to territory/explored fallbacks
+
+    // No city or city_tile returned null — try explored tile WITHOUT zoom.
+    // We must not fall through to territory centering here, because that
+    // would set camera_dy during initial load (defeating the guard's purpose).
+    var explored = find_first_explored_tile();
+    if (explored) {
+      center_tile_mapcanvas(explored);
+      freelog(LOG_DEBUG, '[Observer] Initial center on explored tile (' +
+              explored['x'] + ',' + explored['y'] + ') - no city tile available');
+      observer_centered_notified = true;
+      observer_parent_notified = true;
+      notify_parent_iframe('observer_centered', {
+        center_type: 'explored_tile',
+        location: { x: explored['x'], y: explored['y'] }
+      });
+      return;
+    }
+
+    // Nothing available yet — notify parent but keep retrying.
+    // Do NOT fall through to territory centering on the first call.
+    if (!observer_parent_notified) {
+      observer_parent_notified = true;
+      console.warn('[Observer] Initial load: no city or explored tiles yet for player ' +
+                   observer_follow_player + ' - will retry');
+      notify_parent_iframe('observer_centered', {
+        center_type: 'none',
+        reason: 'no_visible_tiles',
+        player_id: observer_follow_player
+      });
+    }
+    return;
   }
 
   // After initial center: use territory-aware centering with dynamic zoom
@@ -549,7 +580,9 @@ var SPREAD_CHANGE_THRESHOLD = 5;  // Only recalc zoom if spread changes by >5 ti
 
 // Track last territory effective radius for follow mode auto-zoom hysteresis
 var observer_last_territory_radius = null;
-var TERRITORY_RADIUS_CHANGE_THRESHOLD = 2;  // Radius change threshold (tiles) before recalculating zoom
+// Hysteresis threshold: only recalculate zoom when effective radius changes by
+// >= 2 tiles. Prevents jittery zoom from minor unit movements between cycles.
+var TERRITORY_RADIUS_CHANGE_THRESHOLD = 2;
 
 /****************************************************************************
   Unwrap a coordinate relative to a reference point on a wrapping axis.
@@ -796,11 +829,19 @@ function get_player_territory_centroid_and_spread(player_id)
 // Territory observer zoom configuration
 // Uses effective_radius (85th-percentile Chebyshev distance from centroid)
 // to compute camera height, ignoring distant outlier units.
-var TERRITORY_BASE_DY = 250;            // Minimum camera height for early game (radius 0)
-var TERRITORY_DY_PER_TILE = 28;         // Camera height gained per tile of effective radius
-var TERRITORY_MIN_ZOOM_DY = 200;        // Absolute minimum camera height
-var TERRITORY_MAX_ZOOM_DY = 900;        // Absolute maximum camera height
-var TERRITORY_COVERAGE_RATIO = 0.85;    // Fraction of positions included in zoom (outlier rejection)
+//
+// Calibrated for the FreeCiv3D WebGL viewport at 1920x1080:
+// - Single city (radius ~0): dy=250 gives a close overhead view of the city area
+// - Mid-game empire (~10 tile radius): dy=530 keeps 2-3 cities in frame
+// - Late-game continental empire (~20+ tiles): dy=810+ shows the full territory
+// - DY_PER_TILE=28 was chosen so the zoom transition feels smooth across these stages
+var TERRITORY_BASE_DY = 250;
+var TERRITORY_DY_PER_TILE = 28;
+var TERRITORY_MIN_ZOOM_DY = 200;
+var TERRITORY_MAX_ZOOM_DY = 900;
+// 85th percentile: includes the main empire cluster while excluding the ~15% most
+// distant units (scouts, expeditionary forces) that would otherwise over-zoom.
+var TERRITORY_COVERAGE_RATIO = 0.85;
 
 /****************************************************************************
   Calculate camera height (zoom) based on territory effective radius.
