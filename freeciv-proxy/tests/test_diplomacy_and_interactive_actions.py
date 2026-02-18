@@ -38,149 +38,34 @@ from packet_converter import convert_action_to_packet
 def _make_civcom_stub():
     """Create a minimal CivCom-like object with diplomatic state support.
 
-    Returns an object that has the attributes and methods used by
-    _get_diplomacy_actions, get_diplstate, get_all_diplstates_for_player,
-    and get_all_players_with_diplomacy without needing a real websocket.
+    Imports and binds real CivCom methods (get_diplstate, _get_diplomacy_actions, etc.)
+    to a lightweight stub object, avoiding logic duplication while bypassing CivCom's
+    __init__ which requires a websocket connection.
     """
-    # We import CivCom's class-level constants via a simple namespace
+    from civcom import CivCom
+    from packet_constants import (
+        DS_WAR, DS_ARMISTICE, DS_CEASEFIRE, DS_PEACE, DS_ALLIANCE, DS_NO_CONTACT, DS_NAMES,
+    )
+
     class CivComStub:
-        DS_WAR = 0
-        DS_ARMISTICE = 1
-        DS_CEASEFIRE = 2
-        DS_PEACE = 3
-        DS_ALLIANCE = 4
-        DS_NO_CONTACT = 5
-        DS_NAMES = {0: 'war', 1: 'armistice', 2: 'ceasefire', 3: 'peace', 4: 'alliance', 5: 'no_contact'}
+        DS_WAR = DS_WAR
+        DS_ARMISTICE = DS_ARMISTICE
+        DS_CEASEFIRE = DS_CEASEFIRE
+        DS_PEACE = DS_PEACE
+        DS_ALLIANCE = DS_ALLIANCE
+        DS_NO_CONTACT = DS_NO_CONTACT
+        DS_NAMES = DS_NAMES
 
         def __init__(self):
             self.diplomatic_states = {}
             self.diplomacy_meetings = {}
             self.all_players = []
 
-        def get_diplstate(self, player1_id, player2_id):
-            state = self.diplomatic_states.get((player1_id, player2_id))
-            if state is None:
-                state = self.diplomatic_states.get((player2_id, player1_id))
-            if state is None:
-                state = {'type': self.DS_NO_CONTACT, 'turns_left': -1,
-                         'has_reason_to_cancel': 0, 'contact_turns_left': 0}
-            return {**state, 'type_name': self.DS_NAMES.get(state['type'], f"unknown({state['type']})")}
-
-        def get_all_diplstates_for_player(self, player_id):
-            result = {}
-            for (p1, p2), state in self.diplomatic_states.items():
-                if p1 == player_id:
-                    result[p2] = {**state, 'type_name': self.DS_NAMES.get(state['type'], f"unknown({state['type']})")}
-                elif p2 == player_id:
-                    result[p1] = {**state, 'type_name': self.DS_NAMES.get(state['type'], f"unknown({state['type']})")}
-            return result
-
-        def get_all_players_with_diplomacy(self, requesting_player_id):
-            enriched = []
-            for player in self.all_players:
-                player_copy = dict(player)
-                other_id = player.get('id')
-                if other_id is not None and other_id != requesting_player_id:
-                    ds = self.get_diplstate(requesting_player_id, other_id)
-                    player_copy['diplomatic_status'] = ds['type_name']
-                enriched.append(player_copy)
-            return enriched
-
-        def _get_diplomacy_actions(self, player_id):
-            """Port of civcom._get_diplomacy_actions logic for testing."""
-            actions = []
-            other_players = [p for p in self.all_players if p.get('id') != player_id]
-            if not other_players:
-                return actions
-
-            for other_player in other_players:
-                other_id = other_player.get('id')
-                if other_id is None:
-                    continue
-
-                ds = self.get_diplstate(player_id, other_id)
-                ds_type = ds['type']
-                in_meeting = other_id in self.diplomacy_meetings
-                other_name = other_player.get('name', f'Player{other_id}')
-
-                if not in_meeting:
-                    actions.append({
-                        'action': 'diplomacy_start_negotiation',
-                        'params': {'player_id': other_id, 'player_name': other_name},
-                        'is_valid': True, 'type': 'diplomacy',
-                    })
-
-                if ds_type != self.DS_WAR:
-                    actions.append({
-                        'action': 'diplomacy_declare_war',
-                        'params': {'player_id': other_id, 'player_name': other_name},
-                        'is_valid': True, 'type': 'diplomacy',
-                    })
-
-                actions.append({
-                    'action': 'diplomacy_message',
-                    'params': {'player_id': other_id, 'player_name': other_name, 'message': ''},
-                    'is_valid': True, 'type': 'diplomacy',
-                })
-
-                if in_meeting:
-                    meeting = self.diplomacy_meetings[other_id]
-                    has_clauses = len(meeting.get('clauses', [])) > 0
-
-                    if ds_type in (self.DS_WAR, self.DS_ARMISTICE):
-                        actions.append({
-                            'action': 'diplomacy_propose_ceasefire',
-                            'params': {'player_id': other_id, 'player_name': other_name},
-                            'is_valid': True, 'type': 'diplomacy',
-                        })
-
-                    if ds_type != self.DS_PEACE and ds_type != self.DS_ALLIANCE:
-                        actions.append({
-                            'action': 'diplomacy_propose_peace',
-                            'params': {'player_id': other_id, 'player_name': other_name},
-                            'is_valid': True, 'type': 'diplomacy',
-                        })
-
-                    if ds_type == self.DS_PEACE:
-                        actions.append({
-                            'action': 'diplomacy_propose_alliance',
-                            'params': {'player_id': other_id, 'player_name': other_name},
-                            'is_valid': True, 'type': 'diplomacy',
-                        })
-
-                    actions.append({
-                        'action': 'diplomacy_share_vision',
-                        'params': {'player_id': other_id, 'player_name': other_name},
-                        'is_valid': True, 'type': 'diplomacy',
-                    })
-
-                    if has_clauses:
-                        actions.append({
-                            'action': 'diplomacy_accept_treaty',
-                            'params': {'player_id': other_id, 'player_name': other_name},
-                            'is_valid': True, 'type': 'diplomacy',
-                        })
-                        actions.append({
-                            'action': 'diplomacy_reject_treaty',
-                            'params': {'player_id': other_id, 'player_name': other_name},
-                            'is_valid': True, 'type': 'diplomacy',
-                        })
-
-                if ds_type in (self.DS_CEASEFIRE, self.DS_PEACE, self.DS_ALLIANCE):
-                    actions.append({
-                        'action': 'diplomacy_cancel_treaty',
-                        'params': {'player_id': other_id, 'player_name': other_name},
-                        'is_valid': True, 'type': 'diplomacy',
-                    })
-
-                if ds_type in (self.DS_PEACE, self.DS_ALLIANCE):
-                    actions.append({
-                        'action': 'diplomacy_withdraw_vision',
-                        'params': {'player_id': other_id, 'player_name': other_name},
-                        'is_valid': True, 'type': 'diplomacy',
-                    })
-
-            return actions
+        # Bind real CivCom methods to avoid duplicating logic
+        get_diplstate = CivCom.get_diplstate
+        get_all_diplstates_for_player = CivCom.get_all_diplstates_for_player
+        get_all_players_with_diplomacy = CivCom.get_all_players_with_diplomacy
+        _get_diplomacy_actions = CivCom._get_diplomacy_actions
 
     return CivComStub()
 
@@ -287,12 +172,16 @@ class TestGetDiplomacyActions:
         assert c._get_diplomacy_actions(0) == []
 
     def test_no_contact_baseline(self):
-        """With no diplomatic state and no meeting, should get start_negotiation, declare_war, message."""
+        """With no diplomatic state (DS_NO_CONTACT), should get start_negotiation and message only.
+
+        declare_war requires established contact per FreeCiv rules.
+        """
         c = self._setup_two_player_game()
         types = self._action_types(c._get_diplomacy_actions(0))
         assert 'diplomacy_start_negotiation' in types
-        assert 'diplomacy_declare_war' in types
         assert 'diplomacy_message' in types
+        # declare_war requires contact — not available at DS_NO_CONTACT
+        assert 'diplomacy_declare_war' not in types
         # No meeting-dependent actions
         assert 'diplomacy_propose_ceasefire' not in types
         assert 'diplomacy_accept_treaty' not in types
@@ -450,14 +339,14 @@ class TestDiplomacyPacketConverters:
 
     def test_diplomacy_message(self):
         """diplomacy_message → PACKET_CHAT_MSG_REQ with /msg prefix."""
-        action = {'type': 'diplomacy_message', 'player_id': 2, 'message': 'Hello friend'}
+        action = {'type': 'diplomacy_message', 'target_player_id': 2, 'message': 'Hello friend'}
         result = convert_action_to_packet(action)
         assert result['pid'] == PACKET_CHAT_MSG_REQ
         assert '/msg 2 Hello friend' in result['message']
 
     def test_diplomacy_message_no_player(self):
-        """diplomacy_message without player_id sends raw message."""
-        action = {'type': 'diplomacy_message', 'player_id': -1, 'message': 'broadcast'}
+        """diplomacy_message without target_player_id sends raw message."""
+        action = {'type': 'diplomacy_message', 'message': 'broadcast'}
         result = convert_action_to_packet(action)
         assert result['pid'] == PACKET_CHAT_MSG_REQ
         assert result['message'] == 'broadcast'

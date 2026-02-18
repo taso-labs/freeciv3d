@@ -722,10 +722,10 @@ def _convert_action_to_packet_impl(
         # Send a diplomatic message via chat
         # FreeCiv chat protocol: /msg <player_id> <message> sends private message to target player
         message = action.get("message", "")
-        player_id = action.get("player_id", -1)
+        target_id = action.get("target_player_id", -1)
         return {
             "pid": PACKET_CHAT_MSG_REQ,
-            "message": f"/msg {player_id} {message}" if player_id >= 0 else message,
+            "message": f"/msg {target_id} {message}" if target_id >= 0 else message,
         }
 
     # City actions

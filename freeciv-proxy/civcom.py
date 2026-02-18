@@ -66,6 +66,8 @@ from packet_constants import (
     PACKET_DIPLOMACY_CREATE_CLAUSE_REQ,  # Request to add treaty clause (cs)
     PACKET_DIPLOMACY_ACCEPT_TREATY,  # Treaty accepted (sc)
     PACKET_UNIT_DO_ACTION,  # Unit action packet for disbanding
+    CLAUSE_VISION,  # Treaty clause type for vision sharing
+    DS_WAR, DS_ARMISTICE, DS_CEASEFIRE, DS_PEACE, DS_ALLIANCE, DS_NO_CONTACT, DS_NAMES,
     get_packet_name
 )
 
@@ -2133,16 +2135,27 @@ class CivCom(Thread):
                             is_peace_like = ds_type in (self.DS_PEACE, self.DS_ALLIANCE)
 
                             if was_war_like and is_peace_like:
-                                # Peace treaty signed - disband units in foreign territory
+                                # Peace treaty signed - disband units at foreign city tiles
                                 logger.info(
                                     f"Peace treaty signed between {self.username} and player {foreign_player_id}. "
-                                    f"Disbanding units in foreign territory."
+                                    f"Checking for units at foreign city tiles to disband."
                                 )
 
                                 units_to_disband = []
                                 units_dict = self._normalize_to_dict(self.player_units)
 
-                                # Find all units in foreign territory
+                                # Build tile→owner lookup for foreign cities (O(n) instead of O(n*m))
+                                # LIMITATION (MAJOR-4): Territory detection uses city tile locations only.
+                                # Full FreeCiv territory includes culture zones, outposts, and claimed tiles.
+                                # Acceptable for MVP since units typically disband from city tiles.
+                                foreign_city_tiles = set()
+                                for city in getattr(self, 'other_cities', {}).values():
+                                    if city.get('owner') == foreign_player_id:
+                                        tile = city.get('tile')
+                                        if tile is not None:
+                                            foreign_city_tiles.add(tile)
+
+                                # Find all units at foreign city tiles
                                 for unit_id, unit_data in units_dict.items():
                                     if unit_data is None:
                                         continue
@@ -2151,19 +2164,7 @@ class CivCom(Thread):
                                     if unit_tile is None:
                                         continue
 
-                                    # Check if tile is in foreign player's territory
-                                    # LIMITATION (MAJOR-4): Territory detection uses city locations only
-                                    # This implementation checks if unit is AT a foreign city tile
-                                    # Full FreeCiv territory includes: city centers, culture zones, outposts, and claimed tiles
-                                    # Current limitation is acceptable for MVP as units must be disbanding from cities anyway
-                                    # TODO: Enhance to consider culture zone radius and city cultural borders (post-MVP)
-                                    tile_owner = None
-                                    for city in getattr(self, 'other_cities', {}).values():
-                                        if city.get('tile') == unit_tile and city.get('owner') == foreign_player_id:
-                                            tile_owner = foreign_player_id
-                                            break
-
-                                    if tile_owner == foreign_player_id:
+                                    if unit_tile in foreign_city_tiles:
                                         if unit_id not in self._disbanded_unit_ids:
                                             units_to_disband.append(unit_id)
 
@@ -2185,6 +2186,26 @@ class CivCom(Thread):
                                     self._disbanded_unit_ids.update(units_to_disband)
                                     logger.info(
                                         f"Queued {len(units_to_disband)} unit(s) for disbanding: {units_to_disband}"
+                                    )
+
+                            # Auto-propose vision sharing on war→peace/alliance transition
+                            # Triggered here (DIPLSTATE handler) rather than CANCEL_MEETING
+                            # because DIPLSTATE is guaranteed to have the updated state
+                            if was_war_like and is_peace_like:
+                                if self.civserver_messages is not None and foreign_player_id not in self._vision_shared_with:
+                                    vision_clause = {
+                                        'pid': PACKET_DIPLOMACY_CREATE_CLAUSE_REQ,
+                                        'counterpart': foreign_player_id,
+                                        'giver': self.player_id,
+                                        'type': CLAUSE_VISION,
+                                        'value': 0,
+                                    }
+                                    message = json.dumps(vision_clause)
+                                    self.civserver_messages.append(message)
+                                    self._vision_shared_with.add(foreign_player_id)
+                                    logger.info(
+                                        f"Auto-proposing vision sharing with player {foreign_player_id} "
+                                        f"due to {self.DS_NAMES.get(ds_type, 'unknown')} treaty for {self.username}"
                                     )
 
             # DIPLOMACY INIT MEETING packet - server notifies a meeting has been initiated
@@ -2236,40 +2257,6 @@ class CivCom(Thread):
             elif packet_type == PACKET_DIPLOMACY_CANCEL_MEETING:
                 counterpart = packet.get('counterpart')
                 if counterpart is not None and counterpart in self.diplomacy_meetings:
-                    # Before clearing the meeting, check if treaty was accepted and includes peace/alliance
-                    # If so, automatically propose vision sharing per FreeCiv rules
-                    meeting = self.diplomacy_meetings.get(counterpart, {})
-                    if meeting.get('accept_self') and meeting.get('accept_other'):
-                        # Treaty was accepted by both - check if it includes peace/alliance
-                        # Defensive null-checks for MAJOR-3 fix
-                        if self.player_id is not None and self.civserver_messages is not None:
-                            ds = self.get_diplstate(self.player_id, counterpart)
-                            new_state = ds.get('type')
-                            is_peace_like = new_state in (self.DS_PEACE, self.DS_ALLIANCE)
-
-                            if is_peace_like and counterpart not in self._vision_shared_with:
-                                # Automatically enable vision sharing for peace/alliance treaties
-                                # Create diplomacy_share_vision clause proposal
-                                vision_clause = {
-                                    'pid': PACKET_DIPLOMACY_CREATE_CLAUSE_REQ,
-                                    'counterpart': counterpart,
-                                    'giver': self.player_id,
-                                    'type': 8,  # CLAUSE_VISION
-                                    'value': 0,
-                                }
-                                message = json.dumps(vision_clause)
-                                self.civserver_messages.append(message)
-                                self._vision_shared_with.add(counterpart)
-                                logger.info(
-                                    f"Auto-proposing vision sharing with player {counterpart} "
-                                    f"due to {self.DS_NAMES.get(new_state, 'unknown')} treaty for {self.username}"
-                                )
-                        else:
-                            logger.debug(
-                                f"Cannot propose vision sharing: player_id={self.player_id}, "
-                                f"civserver_messages={'set' if self.civserver_messages else 'None'}"
-                            )
-
                     del self.diplomacy_meetings[counterpart]
                     logger.info(f"Diplomacy meeting ended with player {counterpart} for {self.username}")
 
@@ -2293,14 +2280,14 @@ class CivCom(Thread):
         except (json.JSONDecodeError, KeyError, TypeError) as e:
             logger.debug(f"Could not parse packet for state storage: {e}")
 
-    # Diplomatic state constants
-    DS_WAR = 0
-    DS_ARMISTICE = 1
-    DS_CEASEFIRE = 2
-    DS_PEACE = 3
-    DS_ALLIANCE = 4
-    DS_NO_CONTACT = 5
-    DS_NAMES = {0: 'war', 1: 'armistice', 2: 'ceasefire', 3: 'peace', 4: 'alliance', 5: 'no_contact'}
+    # Diplomatic state constants — aliases for module-level constants in packet_constants.py
+    DS_WAR = DS_WAR
+    DS_ARMISTICE = DS_ARMISTICE
+    DS_CEASEFIRE = DS_CEASEFIRE
+    DS_PEACE = DS_PEACE
+    DS_ALLIANCE = DS_ALLIANCE
+    DS_NO_CONTACT = DS_NO_CONTACT
+    DS_NAMES = DS_NAMES
 
     def has_adjacent_foreign_unit(self, tile_index, player_id):
         """Check if a tile has adjacent foreign units.
@@ -2319,15 +2306,20 @@ class CivCom(Thread):
             return False
 
         xsize = self.map_info.get('width', 80)
+        ysize = self.map_info.get('height', 50)
         x, y = tile_index % xsize, tile_index // xsize
         wrap_x = self.map_info.get('wrap_x', True)
 
         # Check 8 adjacent tiles + center
+        # NOTE: Only X-axis wrapping is handled (standard for FreeCiv toroidal maps).
+        # Y-axis wrapping is not implemented as FreeCiv default maps use flat Y boundaries.
         for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (-1, 1), (1, -1), (1, 1), (0, 0)]:
             adj_x = (x + dx) % xsize if wrap_x else x + dx
             adj_y = y + dy
-            # Skip out-of-bounds for non-wrapping maps
+            # Skip out-of-bounds tiles
             if not wrap_x and (adj_x < 0 or adj_x >= xsize):
+                continue
+            if adj_y < 0 or adj_y >= ysize:
                 continue
             adj_tile = adj_x + adj_y * xsize
             for other_unit in self.other_units.values():
@@ -2804,8 +2796,9 @@ class CivCom(Thread):
                     'type': 'diplomacy',
                 })
 
-            # diplomacy_declare_war — available when not already at war
-            if ds_type != self.DS_WAR:
+            # diplomacy_declare_war — available when not already at war and have contact
+            # Per FreeCiv rules: can't declare war on a player you haven't met
+            if ds_type != self.DS_WAR and ds_type != self.DS_NO_CONTACT:
                 actions.append({
                     'action': 'diplomacy_declare_war',
                     'params': {'player_id': other_id, 'player_name': other_name},

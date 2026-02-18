@@ -3341,6 +3341,9 @@ class LLMWSHandler(websocket.WebSocketHandler):
                     continue
 
         # Diplomacy actions - generated from civcom's diplomatic state
+        # Note: _get_diplomacy_actions is also called in civcom._get_legal_actions_optimized()
+        # for state query responses. Both calls are intentional: this one formats for LLM prompt
+        # generation, while the civcom call provides raw legal_actions in state payloads.
         if self.civcom:
             diplomacy_actions = self.civcom._get_diplomacy_actions(self.player_id)
             for da in diplomacy_actions:

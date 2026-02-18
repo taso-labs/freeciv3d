@@ -233,9 +233,14 @@ class InputSanitizer:
             if 'player_id' in action:
                 sanitized['player_id'] = cls.sanitize_player_id(action['player_id'])
             if 'message' in action:
-                sanitized['message'] = cls.sanitize_string_field(
+                msg = cls.sanitize_string_field(
                     action['message'], 'diplomacy_message', max_length=500
                 )
+                # Strip newlines to prevent multi-line chat injection
+                msg = msg.replace('\n', ' ').replace('\r', ' ')
+                # Strip leading '/' to prevent FreeCiv server command injection (e.g. /set, /kick)
+                msg = msg.lstrip('/')
+                sanitized['message'] = msg
 
         # Generic handler for all other unit_* actions (unit_build_road, unit_fortify, etc.)
         elif action_type.startswith('unit_'):
