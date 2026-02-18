@@ -2070,6 +2070,11 @@ class CivCom(Thread):
                 plr2 = packet.get('plr2')
                 ds_type = packet.get('type', 5)  # Default to DS_NO_CONTACT
                 if plr1 is not None and plr2 is not None:
+                    # CRITICAL: Capture old state BEFORE updating dictionary
+                    # Required for accurate state transition detection (BLOCKER-1 fix)
+                    old_state = self.diplomatic_states.get((plr1, plr2))
+                    old_type = old_state.get('type') if old_state else None
+
                     self.diplomatic_states[(plr1, plr2)] = {
                         'type': ds_type,
                         'turns_left': packet.get('turns_left', -1),
@@ -2081,14 +2086,21 @@ class CivCom(Thread):
                         f"{self.DS_NAMES.get(ds_type, f'unknown({ds_type})')}"
                     )
 
-                    # Invalidate action cache when diplomatic state changes
-                    # Combat/spy actions depend on diplomatic state, so stale cache would show wrong actions
+                    # Invalidate action cache when diplomatic state actually changes (MAJOR-2 fix)
+                    # Only invalidate if state differs from previous state (performance optimization)
                     if self.player_id is not None:
                         if plr1 == self.player_id or plr2 == self.player_id:
-                            self.invalidate_action_cache()
-                            logger.debug(
-                                f"Action cache invalidated for {self.username} due to diplomatic state change"
-                            )
+                            if old_type != ds_type:
+                                self.invalidate_action_cache()
+                                logger.debug(
+                                    f"Action cache invalidated for {self.username}: "
+                                    f"{self.DS_NAMES.get(old_type, f'unknown({old_type})}')} -> {self.DS_NAMES.get(ds_type, f'unknown({ds_type})')}"
+                                )
+                            else:
+                                logger.debug(
+                                    f"Diplomatic state unchanged for {self.username} with player {plr2 if plr1 == self.player_id else plr1}: "
+                                    f"{self.DS_NAMES.get(ds_type, f'unknown({ds_type})')}"
+                                )
 
                     # Auto-disband military units in foreign territory when peace treaty is signed
                     # Per FreeCiv rules: foreign military units must be removed when peace is established
@@ -2102,9 +2114,7 @@ class CivCom(Thread):
 
                         # Check if transitioning from war-like to peace-like state
                         if foreign_player_id is not None:
-                            # Get old state if available
-                            old_state = self.diplomatic_states.get((plr1, plr2))
-                            old_type = old_state.get('type') if old_state else None
+                            # Use saved old_type (captured before dictionary update) for accurate transition detection
 
                             # War-like states: DS_WAR (0), DS_ARMISTICE (1), DS_CEASEFIRE (2)
                             # Peace-like states: DS_PEACE (3), DS_ALLIANCE (4)
@@ -2131,7 +2141,11 @@ class CivCom(Thread):
                                         continue
 
                                     # Check if tile is in foreign player's territory
-                                    # by checking if there's a city owned by foreign player at this tile
+                                    # LIMITATION (MAJOR-4): Territory detection uses city locations only
+                                    # This implementation checks if unit is AT a foreign city tile
+                                    # Full FreeCiv territory includes: city centers, culture zones, outposts, and claimed tiles
+                                    # Current limitation is acceptable for MVP as units must be disbanding from cities anyway
+                                    # TODO: Enhance to consider culture zone radius and city cultural borders (post-MVP)
                                     tile_owner = None
                                     for city in getattr(self, 'other_cities', {}).values():
                                         if city.get('tile') == unit_tile and city.get('owner') == foreign_player_id:
@@ -2214,25 +2228,32 @@ class CivCom(Thread):
                     meeting = self.diplomacy_meetings.get(counterpart, {})
                     if meeting.get('accept_self') and meeting.get('accept_other'):
                         # Treaty was accepted by both - check if it includes peace/alliance
-                        ds = self.get_diplstate(self.player_id, counterpart)
-                        new_state = ds.get('type')
-                        is_peace_like = new_state in (self.DS_PEACE, self.DS_ALLIANCE)
+                        # Defensive null-checks for MAJOR-3 fix
+                        if self.player_id is not None and self.civserver_messages is not None:
+                            ds = self.get_diplstate(self.player_id, counterpart)
+                            new_state = ds.get('type')
+                            is_peace_like = new_state in (self.DS_PEACE, self.DS_ALLIANCE)
 
-                        if is_peace_like and self.civserver_messages is not None:
-                            # Automatically enable vision sharing for peace/alliance treaties
-                            # Create diplomacy_share_vision clause proposal
-                            vision_clause = {
-                                'pid': PACKET_DIPLOMACY_CREATE_CLAUSE_REQ,
-                                'counterpart': counterpart,
-                                'giver': self.player_id,
-                                'type': 8,  # Vision-sharing clause type
-                                'value': 0,
-                            }
-                            message = json.dumps(vision_clause)
-                            self.civserver_messages.append(message)
-                            logger.info(
-                                f"Auto-proposing vision sharing with player {counterpart} "
-                                f"due to {self.DS_NAMES.get(new_state, 'unknown')} treaty for {self.username}"
+                            if is_peace_like:
+                                # Automatically enable vision sharing for peace/alliance treaties
+                                # Create diplomacy_share_vision clause proposal
+                                vision_clause = {
+                                    'pid': PACKET_DIPLOMACY_CREATE_CLAUSE_REQ,
+                                    'counterpart': counterpart,
+                                    'giver': self.player_id,
+                                    'type': 8,  # Vision-sharing clause type
+                                    'value': 0,
+                                }
+                                message = json.dumps(vision_clause)
+                                self.civserver_messages.append(message)
+                                logger.info(
+                                    f"Auto-proposing vision sharing with player {counterpart} "
+                                    f"due to {self.DS_NAMES.get(new_state, 'unknown')} treaty for {self.username}"
+                                )
+                        else:
+                            logger.debug(
+                                f"Cannot propose vision sharing: player_id={self.player_id}, "
+                                f"civserver_messages={'set' if self.civserver_messages else 'None'}"
                             )
 
                     del self.diplomacy_meetings[counterpart]

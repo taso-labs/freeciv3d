@@ -1401,10 +1401,12 @@ class StateExtractor:
                             ds = civcom.get_diplstate(player_id, dest_owner)
                             ds_type = ds.get('type') if ds else None
 
-                            # Block trade during war
-                            if ds_type == civcom.DS_WAR:
+                            # Block trade during active conflicts (MAJOR-1 fix)
+                            # Per FreeCiv rules: trade only allowed during peace/alliance
+                            if ds_type in (civcom.DS_WAR, civcom.DS_ARMISTICE, civcom.DS_CEASEFIRE):
                                 is_valid = False
-                                reason = f"Cannot trade - at war with player {dest_owner}"
+                                ds_name = civcom.DS_NAMES.get(ds_type, f'unknown({ds_type})')
+                                reason = f"Cannot trade - {ds_name} with player {dest_owner}"
 
                         add_action('trade_route',
                                  {'target_city_id': dest_city.get('id')},
@@ -2207,8 +2209,14 @@ class StateExtractor:
                     if ds_type == self.civcom.DS_WAR:
                         enemy_units.append(unit)
         else:
-            # Fallback if civcom not available: treat all as enemies (conservative)
-            enemy_units = all_other_units
+            # BLOCKER-2 Fix: Fallback when civcom unavailable
+            # Rather than treating all units as enemies (unrealistic), use empty list with warning
+            # This prevents incorrect threat assessment when diplomatic state is unknown
+            logger.warning(
+                f"CivCom unavailable for ZOC filtering - cannot assess diplomatic state for threats. "
+                f"Treating {len(all_other_units)} non-player unit(s) as non-hostile (conservative)."
+            )
+            enemy_units = []  # Conservative: no threats if we can't determine diplomatic state
 
         # Group similar units
         unit_groups = {}
