@@ -754,6 +754,23 @@ class StateExtractor:
             normalized['type'] = normalized.pop('action')
         return normalized
 
+    @staticmethod
+    def _get_tile_owner(civcom, target_index):
+        """Get the owner of the entity (city or unit) at a target tile.
+
+        Checks cities first, then units. Returns the owner player_id or None.
+        Used by combat and bombard validation to determine diplomatic restrictions.
+        """
+        if civcom is None or target_index is None:
+            return None
+        for city in getattr(civcom, 'other_cities', {}).values():
+            if city.get('tile') == target_index:
+                return city.get('owner')
+        for unit in getattr(civcom, 'other_units', {}).values():
+            if unit.get('tile') == target_index:
+                return unit.get('owner')
+        return None
+
     def get_unit_actions(self, unit_id: int, player_id: int, game_state: Dict[str, Any] = None, game_id: str = None) -> Dict[str, Any]:
         """
         Get available actions for a specific unit.
@@ -1262,29 +1279,11 @@ class StateExtractor:
                         reason = "No moves left"
 
                     # Diplomatic state validation: only allow combat if at war
-                    # Check target tile for enemy units or cities
                     if is_valid and civcom and target_index is not None:
-                        target_owner = None
-
-                        # Check for cities at target tile
-                        for city in getattr(civcom, 'other_cities', {}).values():
-                            if city.get('tile') == target_index:
-                                target_owner = city.get('owner')
-                                break
-
-                        # Check for enemy units at target tile if no city found
-                        if target_owner is None:
-                            for unit in getattr(civcom, 'other_units', {}).values():
-                                if unit.get('tile') == target_index:
-                                    target_owner = unit.get('owner')
-                                    break
-
-                        # Validate diplomatic state: must be at war to attack
+                        target_owner = self._get_tile_owner(civcom, target_index)
                         if target_owner is not None and target_owner != player_id:
                             ds = civcom.get_diplstate(player_id, target_owner)
                             ds_type = ds.get('type') if ds else None
-
-                            # Only allow attack if at war (DS_WAR = 0)
                             if ds_type != civcom.DS_WAR:
                                 is_valid = False
                                 ds_name = civcom.DS_NAMES.get(ds_type, 'unknown')
@@ -1309,27 +1308,10 @@ class StateExtractor:
 
                 # Diplomatic state validation: only allow bombard if at war
                 if is_valid and civcom and target_index is not None:
-                    target_owner = None
-
-                    # Check for cities at target tile
-                    for city in getattr(civcom, 'other_cities', {}).values():
-                        if city.get('tile') == target_index:
-                            target_owner = city.get('owner')
-                            break
-
-                    # Check for enemy units at target tile if no city found
-                    if target_owner is None:
-                        for unit in getattr(civcom, 'other_units', {}).values():
-                            if unit.get('tile') == target_index:
-                                target_owner = unit.get('owner')
-                                break
-
-                    # Validate diplomatic state: must be at war to bombard
+                    target_owner = self._get_tile_owner(civcom, target_index)
                     if target_owner is not None and target_owner != player_id:
                         ds = civcom.get_diplstate(player_id, target_owner)
                         ds_type = ds.get('type') if ds else None
-
-                        # Only allow bombard if at war (DS_WAR = 0)
                         if ds_type != civcom.DS_WAR:
                             is_valid = False
                             ds_name = civcom.DS_NAMES.get(ds_type, 'unknown')

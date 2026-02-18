@@ -366,10 +366,11 @@ class TestDiplomacyPacketConverters:
         assert result['counterpart'] == 1
 
     def test_diplomacy_declare_war(self):
-        """diplomacy_declare_war → PACKET_DIPLOMACY_CANCEL_PACT."""
+        """diplomacy_declare_war → PACKET_DIPLOMACY_CANCEL_PACT with CLAUSE_CEASEFIRE."""
         action = {'type': 'diplomacy_declare_war', 'target_player_id': 1}
         result = convert_action_to_packet(action)
         assert result['pid'] == PACKET_DIPLOMACY_CANCEL_PACT
+        assert result['clause'] == CLAUSE_CEASEFIRE
 
     def test_diplomacy_propose_ceasefire(self):
         """diplomacy_propose_ceasefire → PACKET_DIPLOMACY_CREATE_CLAUSE_REQ."""
@@ -775,3 +776,98 @@ class TestDiplomacyMessageSanitization:
         action = {'type': 'diplomacy_message', 'target_player_id': 1, 'message': msg}
         with pytest.raises(SecurityError):
             InputSanitizer.sanitize_action_data(action)
+
+    def test_message_newlines_stripped(self):
+        """Newlines should be replaced with spaces to prevent chat injection."""
+        from security import InputSanitizer
+        action = {'type': 'diplomacy_message', 'target_player_id': 1, 'message': 'line1\nline2\rline3'}
+        result = InputSanitizer.sanitize_action_data(action)
+        assert '\n' not in result['message']
+        assert '\r' not in result['message']
+        assert result['message'] == 'line1 line2 line3'
+
+    def test_message_slash_commands_stripped(self):
+        """Leading / should be stripped to prevent FreeCiv server command injection."""
+        from security import InputSanitizer
+        action = {'type': 'diplomacy_message', 'target_player_id': 1, 'message': '/set timeout 0'}
+        result = InputSanitizer.sanitize_action_data(action)
+        assert not result['message'].startswith('/')
+        assert result['message'] == 'set timeout 0'
+
+    def test_message_multiple_leading_slashes_stripped(self):
+        """Multiple leading / should all be stripped."""
+        from security import InputSanitizer
+        action = {'type': 'diplomacy_message', 'target_player_id': 1, 'message': '///kick player1'}
+        result = InputSanitizer.sanitize_action_data(action)
+        assert not result['message'].startswith('/')
+
+
+class TestVisionSharingWarPeaceCycles:
+    """Test _vision_shared_with reset across war→peace→war→peace cycles."""
+
+    def test_vision_re_proposed_after_war_peace_war_peace(self):
+        """After war→peace→war→peace, vision should be re-proposed the second time."""
+        stub = _make_civcom_stub()
+        stub.player_id = 0
+        stub._vision_shared_with = set()
+
+        counterpart = 1
+        # First peace: vision proposed
+        stub._vision_shared_with.add(counterpart)
+        assert counterpart in stub._vision_shared_with
+
+        # War breaks out: clear vision record for this player
+        stub._vision_shared_with.discard(counterpart)
+        assert counterpart not in stub._vision_shared_with
+
+        # Second peace: vision can be re-proposed
+        stub._vision_shared_with.add(counterpart)
+        assert counterpart in stub._vision_shared_with
+
+    def test_war_transition_only_clears_specific_counterpart(self):
+        """Going to war with player 1 should not affect vision record for player 2."""
+        stub = _make_civcom_stub()
+        stub._vision_shared_with = {1, 2}
+
+        # War with player 1 only
+        stub._vision_shared_with.discard(1)
+        assert 1 not in stub._vision_shared_with
+        assert 2 in stub._vision_shared_with
+
+
+class TestTargetInferenceAmbiguity:
+    """Test target inference behavior with multiple valid targets."""
+
+    def test_single_target_inferred(self):
+        """With one valid target for an action, inference should succeed."""
+        stub = _make_civcom_stub()
+        stub.all_players = [
+            {'id': 0, 'name': 'Me'},
+            {'id': 1, 'name': 'Enemy'},
+        ]
+        stub.diplomatic_states = {(0, 1): {'type': DS_WAR, 'turns_left': -1, 'has_reason_to_cancel': 0, 'contact_turns_left': 0}}
+        actions = stub._get_diplomacy_actions(0)
+        # diplomacy_message should have exactly one target (player 1)
+        msg_actions = [a for a in actions if a['action'] == 'diplomacy_message']
+        assert len(msg_actions) == 1
+        assert msg_actions[0]['params']['player_id'] == 1
+
+    def test_multiple_targets_exist_in_three_player_game(self):
+        """With 3 players, diplomacy actions have multiple targets."""
+        stub = _make_civcom_stub()
+        stub.all_players = [
+            {'id': 0, 'name': 'Me'},
+            {'id': 1, 'name': 'Player1'},
+            {'id': 2, 'name': 'Player2'},
+        ]
+        stub.diplomatic_states = {
+            (0, 1): {'type': DS_WAR, 'turns_left': -1, 'has_reason_to_cancel': 0, 'contact_turns_left': 0},
+            (0, 2): {'type': DS_WAR, 'turns_left': -1, 'has_reason_to_cancel': 0, 'contact_turns_left': 0},
+        }
+        actions = stub._get_diplomacy_actions(0)
+        # diplomacy_message should exist for both targets
+        msg_actions = [a for a in actions if a['action'] == 'diplomacy_message']
+        targets = [a['params']['player_id'] for a in msg_actions]
+        assert 1 in targets
+        assert 2 in targets
+        assert len(targets) == 2

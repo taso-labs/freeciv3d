@@ -1688,18 +1688,24 @@ class LLMWSHandler(websocket.WebSocketHandler):
                     if civcom:
                         legal_actions = civcom._get_legal_actions_optimized(player_id)
                         logger.info(f"   Found {len(legal_actions)} legal_actions, searching for {action_type}")
-                        found = False
+                        # Collect all matching targets to detect ambiguity
+                        matching_targets = []
                         for legal_action in legal_actions:
-                            action_type_in_legal = legal_action.get('action')
-                            if action_type_in_legal == action_type:
+                            if legal_action.get('action') == action_type:
                                 params = legal_action.get('params', {})
                                 if 'player_id' in params:
-                                    inferred_target = params['player_id']
-                                    normalized["target_player_id"] = inferred_target
-                                    logger.info(f"✅ INFERRED target_player_id={inferred_target}")
-                                    found = True
-                                    break
-                        if not found:
+                                    matching_targets.append(params['player_id'])
+                        # Deduplicate (same action type can appear multiple times for same target)
+                        unique_targets = list(dict.fromkeys(matching_targets))
+                        if len(unique_targets) == 1:
+                            normalized["target_player_id"] = unique_targets[0]
+                            logger.info(f"✅ INFERRED target_player_id={unique_targets[0]}")
+                        elif len(unique_targets) > 1:
+                            logger.warning(
+                                f"   Ambiguous inference for {action_type}: {len(unique_targets)} "
+                                f"valid targets {unique_targets} — skipping inference"
+                            )
+                        else:
                             logger.warning(f"   No {action_type} found in legal_actions")
                     else:
                         logger.warning(f"   civcom is None from registry for game={game_id}")
@@ -4065,7 +4071,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
             return {
                 'pid': PACKET_DIPLOMACY_CREATE_CLAUSE_REQ,
                 'counterpart': action.get('target_player_id', action.get('player_id')),
-                'giver': action.get('giver', -1),  # Player giving the clause
+                'giver': action.get('giver', action.get('player_id', -1)),
                 'type': 5,  # CLAUSE_CEASEFIRE
                 'value': 0
             }
@@ -4073,7 +4079,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
             return {
                 'pid': PACKET_DIPLOMACY_CREATE_CLAUSE_REQ,
                 'counterpart': action.get('target_player_id', action.get('player_id')),
-                'giver': action.get('giver', -1),
+                'giver': action.get('giver', action.get('player_id', -1)),
                 'type': 6,  # CLAUSE_PEACE
                 'value': 0
             }
@@ -4081,7 +4087,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
             return {
                 'pid': PACKET_DIPLOMACY_CREATE_CLAUSE_REQ,
                 'counterpart': action.get('target_player_id', action.get('player_id')),
-                'giver': action.get('giver', -1),
+                'giver': action.get('giver', action.get('player_id', -1)),
                 'type': 7,  # CLAUSE_ALLIANCE
                 'value': 0
             }
@@ -4089,7 +4095,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
             return {
                 'pid': PACKET_DIPLOMACY_CREATE_CLAUSE_REQ,
                 'counterpart': action.get('target_player_id', action.get('player_id')),
-                'giver': action.get('giver', -1),
+                'giver': action.get('giver', action.get('player_id', -1)),
                 'type': 8,  # CLAUSE_VISION
                 'value': 0
             }
@@ -4097,20 +4103,20 @@ class LLMWSHandler(websocket.WebSocketHandler):
             return {
                 'pid': PACKET_DIPLOMACY_REMOVE_CLAUSE_REQ,
                 'counterpart': action.get('target_player_id', action.get('player_id')),
-                'giver': action.get('giver', -1),
+                'giver': action.get('giver', action.get('player_id', -1)),
                 'type': 8,  # CLAUSE_VISION
                 'value': 0
             }
         elif action_type == 'diplomacy_reject_treaty':
             return {
                 'pid': PACKET_DIPLOMACY_CANCEL_MEETING_REQ,
-                'counterpart': action['target_player_id']
+                'counterpart': action.get('target_player_id', action.get('player_id'))
             }
         elif action_type == 'diplomacy_cancel_treaty':
             clause_type = action.get('clause_type', 6)  # Default to CLAUSE_PEACE
             return {
                 'pid': PACKET_DIPLOMACY_CANCEL_PACT,
-                'other_player_id': action['target_player_id'],
+                'other_player_id': action.get('target_player_id', action.get('player_id')),
                 'clause': clause_type
             }
         elif action_type == 'diplomacy_message':

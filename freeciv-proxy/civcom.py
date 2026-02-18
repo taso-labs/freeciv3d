@@ -2132,7 +2132,14 @@ class CivCom(Thread):
                             # War-like states: DS_WAR (0), DS_ARMISTICE (1), DS_CEASEFIRE (2)
                             # Peace-like states: DS_PEACE (3), DS_ALLIANCE (4)
                             was_war_like = old_type in (self.DS_WAR, self.DS_ARMISTICE, self.DS_CEASEFIRE)
+                            was_peace_like = old_type in (self.DS_PEACE, self.DS_ALLIANCE)
+                            is_war_like = ds_type in (self.DS_WAR, self.DS_ARMISTICE)
                             is_peace_like = ds_type in (self.DS_PEACE, self.DS_ALLIANCE)
+
+                            # Clear vision sharing record on peace→war so it can be
+                            # re-proposed on the next peace transition
+                            if was_peace_like and is_war_like:
+                                self._vision_shared_with.discard(foreign_player_id)
 
                             if was_war_like and is_peace_like:
                                 # Peace treaty signed - disband units at foreign city tiles
@@ -2168,19 +2175,17 @@ class CivCom(Thread):
                                         if unit_id not in self._disbanded_unit_ids:
                                             units_to_disband.append(unit_id)
 
-                                # Send disband commands for units in foreign territory
+                                # Send disband commands for units at foreign city tiles
                                 for unit_id in units_to_disband:
-                                    # Create PACKET_UNIT_DO_ACTION packet for disbanding
-                                    packet = {
-                                        'pid': PACKET_UNIT_DO_ACTION,  # pid 74
+                                    disband_packet = {
+                                        'pid': PACKET_UNIT_DO_ACTION,
                                         'action_type': ACTION_DISBAND_UNIT,
                                         'actor_id': unit_id,
-                                        'target_id': 0,  # Not used for disband
-                                        'sub_tgt_id': 0,  # Not used for disband
-                                        'sub_target': 0,  # Not used for disband
+                                        'target_id': 0,
+                                        'sub_tgt_id': 0,
+                                        'sub_target': 0,
                                     }
-                                    message = json.dumps(packet)
-                                    self.civserver_messages.append(message)
+                                    self.civserver_messages.append(json.dumps(disband_packet))
 
                                 if units_to_disband:
                                     self._disbanded_unit_ids.update(units_to_disband)
@@ -2310,7 +2315,9 @@ class CivCom(Thread):
         x, y = tile_index % xsize, tile_index // xsize
         wrap_x = self.map_info.get('wrap_x', True)
 
-        # Check 8 adjacent tiles + center
+        # Check 8 adjacent tiles + center tile (0,0).
+        # Center is included intentionally: detects foreign units stacked on the same tile
+        # (e.g. units that entered before war was declared). This enables expel for co-located units.
         # NOTE: Only X-axis wrapping is handled (standard for FreeCiv toroidal maps).
         # Y-axis wrapping is not implemented as FreeCiv default maps use flat Y boundaries.
         for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (-1, 1), (1, -1), (1, 1), (0, 0)]:
