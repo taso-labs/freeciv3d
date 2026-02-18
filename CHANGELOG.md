@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.56](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.55...freeciv3d-v0.3.56) (2026-02-18)
+
+
+### Features
+
+* **observer:** auto-scale Follow Agent views with territory-aware centering and dynamic zoom ([#157](https://github.com/taso-ventures/freeciv3d/issues/157)) ([73f7f0d](https://github.com/taso-ventures/freeciv3d/commit/73f7f0d7cd55acc7fc9b4ab086c56a0f7dca449c))
+
 ## [0.3.55](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.54...freeciv3d-v0.3.55) (2026-02-17)
 
 
