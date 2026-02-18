@@ -3987,37 +3987,38 @@ class LLMWSHandler(websocket.WebSocketHandler):
         elif action_type == 'diplomacy_start_negotiation':
             return {
                 'pid': PACKET_DIPLOMACY_INIT_MEETING_REQ,
-                'counterpart': action['player_id']
+                'counterpart': action.get('target_player_id', action.get('player_id'))
             }
         elif action_type == 'diplomacy_cancel_meeting':
             return {
                 'pid': PACKET_DIPLOMACY_CANCEL_MEETING_REQ,
-                'counterpart': action['player_id']
+                'counterpart': action.get('target_player_id', action.get('player_id'))
             }
         elif action_type == 'diplomacy_accept_treaty':
             return {
                 'pid': PACKET_DIPLOMACY_ACCEPT_TREATY_REQ,
-                'counterpart': action['player_id']
+                'counterpart': action.get('target_player_id', action.get('player_id'))
             }
         elif action_type == 'diplomacy_cancel_pact':
             # CLAUSE_CEASEFIRE = 5, CLAUSE_PEACE = 6, CLAUSE_ALLIANCE = 7
             clause_type = action.get('clause_type', 6)  # Default to CLAUSE_PEACE
             return {
                 'pid': PACKET_DIPLOMACY_CANCEL_PACT,
-                'other_player_id': action['player_id'],
+                'other_player_id': action.get('target_player_id', action.get('player_id')),
                 'clause': clause_type
             }
         elif action_type == 'diplomacy_declare_war':
             # Cancel all peace clauses to declare war
+            # Use target_player_id (set by normalization) not player_id
             return {
                 'pid': PACKET_DIPLOMACY_CANCEL_PACT,
-                'other_player_id': action['player_id'],
+                'other_player_id': action.get('target_player_id', action.get('player_id')),
                 'clause': 5  # CLAUSE_CEASEFIRE - canceling to declare war
             }
         elif action_type == 'diplomacy_propose_ceasefire':
             return {
                 'pid': PACKET_DIPLOMACY_CREATE_CLAUSE_REQ,
-                'counterpart': action['player_id'],
+                'counterpart': action.get('target_player_id', action.get('player_id')),
                 'giver': action.get('giver', -1),  # Player giving the clause
                 'type': 5,  # CLAUSE_CEASEFIRE
                 'value': 0
@@ -4025,7 +4026,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
         elif action_type == 'diplomacy_propose_peace':
             return {
                 'pid': PACKET_DIPLOMACY_CREATE_CLAUSE_REQ,
-                'counterpart': action['player_id'],
+                'counterpart': action.get('target_player_id', action.get('player_id')),
                 'giver': action.get('giver', -1),
                 'type': 6,  # CLAUSE_PEACE
                 'value': 0
@@ -4033,7 +4034,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
         elif action_type == 'diplomacy_propose_alliance':
             return {
                 'pid': PACKET_DIPLOMACY_CREATE_CLAUSE_REQ,
-                'counterpart': action['player_id'],
+                'counterpart': action.get('target_player_id', action.get('player_id')),
                 'giver': action.get('giver', -1),
                 'type': 7,  # CLAUSE_ALLIANCE
                 'value': 0
@@ -4041,7 +4042,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
         elif action_type == 'diplomacy_share_vision':
             return {
                 'pid': PACKET_DIPLOMACY_CREATE_CLAUSE_REQ,
-                'counterpart': action['player_id'],
+                'counterpart': action.get('target_player_id', action.get('player_id')),
                 'giver': action.get('giver', -1),
                 'type': 8,  # CLAUSE_VISION
                 'value': 0
@@ -4049,7 +4050,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
         elif action_type == 'diplomacy_withdraw_vision':
             return {
                 'pid': PACKET_DIPLOMACY_REMOVE_CLAUSE_REQ,
-                'counterpart': action['player_id'],
+                'counterpart': action.get('target_player_id', action.get('player_id')),
                 'giver': action.get('giver', -1),
                 'type': 8,  # CLAUSE_VISION
                 'value': 0
