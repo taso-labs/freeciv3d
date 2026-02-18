@@ -1683,7 +1683,8 @@ class LLMWSHandler(websocket.WebSocketHandler):
             if "target_player_id" not in normalized and player_id is not None and game_id is not None:
                 try:
                     logger.info(f"🔎 TARGET INFERENCE: Attempting for {action_type}, player={player_id}, game={game_id}")
-                    civcom = self._get_civcom_for_player(player_id, game_id=game_id)
+                    # Get civcom from registry (not from self, which doesn't have the method)
+                    civcom = civcom_registry.get_civcom(game_id, self.agent_id)
                     if civcom:
                         legal_actions = civcom._get_legal_actions_optimized(player_id)
                         logger.info(f"   Found {len(legal_actions)} legal_actions, searching for {action_type}")
@@ -1701,7 +1702,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                         if not found:
                             logger.warning(f"   No {action_type} found in legal_actions")
                     else:
-                        logger.warning(f"   civcom is None for player={player_id}, game={game_id}")
+                        logger.warning(f"   civcom is None from registry for game={game_id}")
                 except Exception as e:
                     logger.warning(f"Target inference failed: {e}", exc_info=True)
 
