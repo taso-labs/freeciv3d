@@ -447,7 +447,14 @@ function find_first_explored_tile()
   Uses territory-aware centering (cities + units) with auto-zoom based on
   empire spread. This ensures the view scales appropriately from turn 1
   through turn 200+ as the player's territory expands.
-  Priority: 1) Territory centroid with auto-zoom, 2) Any explored tile
+
+  On the FIRST successful center (before observer_centered_notified is set),
+  uses simple capital/largest-city centering without zoom manipulation.
+  This gives the renderer time to populate terrain textures before we start
+  adjusting camera_dy. Subsequent calls use full territory + auto-zoom.
+
+  Priority: 1) Capital/city (initial) or territory centroid (ongoing),
+            2) Any explored tile
 ****************************************************************************/
 function observer_center_on_followed_player()
 {
@@ -459,22 +466,48 @@ function observer_center_on_followed_player()
     return;
   }
 
-  // Priority 1: Territory-aware centering (cities + units with dynamic zoom)
-  // Centers on territory centroid and auto-zooms based on empire spread
+  // On first center, use simple city centering (capital or largest city) without
+  // zoom manipulation. This avoids aggressive camera_dy changes during initial load
+  // when terrain textures may still be populating into the DataTexture.
+  if (!observer_centered_notified) {
+    var target_city = player_capital(player);
+
+    // Fallback: largest city by population
+    if (!target_city) {
+      var max_size = 0;
+      for (var city_id in cities) {
+        var pcity = cities[city_id];
+        if (city_owner_player_id(pcity) === observer_follow_player) {
+          if (pcity['size'] > max_size) {
+            max_size = pcity['size'];
+            target_city = pcity;
+          }
+        }
+      }
+    }
+
+    if (target_city) {
+      var ptile = city_tile(target_city);
+      if (ptile) {
+        center_tile_mapcanvas(ptile);
+        freelog(LOG_DEBUG, '[Observer] Initial center on ' + (target_city['name'] || 'city') +
+                ' (simple mode, no zoom adjustment)');
+        observer_centered_notified = true;
+        observer_parent_notified = true;
+        notify_parent_iframe('observer_centered', {
+          center_type: 'city',
+          city_name: target_city['name'],
+          location: { x: ptile['x'], y: ptile['y'] }
+        });
+        return;
+      }
+    }
+    // No city found on initial load — fall through to territory/explored fallbacks
+  }
+
+  // After initial center: use territory-aware centering with dynamic zoom
   var territory_data = center_on_player_territory_with_zoom(observer_follow_player);
   if (territory_data) {
-    // Notify parent on first successful center
-    if (!observer_centered_notified) {
-      observer_centered_notified = true;
-      observer_parent_notified = true;
-      notify_parent_iframe('observer_centered', {
-        center_type: 'territory',
-        city_count: territory_data.city_count,
-        unit_count: territory_data.unit_count,
-        spread: territory_data.spread,
-        location: { x: territory_data.centroid.x, y: territory_data.centroid.y }
-      });
-    }
     return;
   }
 

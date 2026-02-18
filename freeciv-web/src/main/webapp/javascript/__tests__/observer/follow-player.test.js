@@ -223,17 +223,31 @@ describe('Follow Player System', () => {
       expect(center_tile_mapcanvas).not.toHaveBeenCalled();
     });
 
-    test('should center when player has cities', () => {
+    test('should center on capital city on first call (initial load guard)', () => {
       global.observer_follow_player = 0; // Player1 with cities
+      global.observer_centered_notified = false;
+
+      observer_center_on_followed_player();
+
+      // First call uses simple capital/city centering, not territory
+      expect(center_tile_mapcanvas).toHaveBeenCalled();
+      expect(global.observer_centered_notified).toBe(true);
+    });
+
+    test('should use territory centering on subsequent calls', () => {
+      global.observer_follow_player = 0;
+      // Simulate initial center already done
+      global.observer_centered_notified = true;
 
       observer_center_on_followed_player();
 
       expect(center_tile_mapcanvas).toHaveBeenCalled();
     });
 
-    test('should center when player has only units (no cities)', () => {
+    test('should fall through to territory when player has only units (no cities) on initial load', () => {
       global.cities = {};
       global.observer_follow_player = 0;
+      global.observer_centered_notified = false;
 
       // Add units for player 0
       global.index_to_tile.mockReturnValue({ x: 10, y: 20 });
@@ -243,6 +257,7 @@ describe('Follow Player System', () => {
 
       observer_center_on_followed_player();
 
+      // No cities means initial guard falls through to territory centering
       expect(center_tile_mapcanvas).toHaveBeenCalled();
     });
 
@@ -280,8 +295,26 @@ describe('Follow Player System', () => {
       expect(center_tile_mapcanvas).not.toHaveBeenCalled();
     });
 
-    test('should update camera_dy based on territory spread', () => {
-      // Setup cities at distinct positions
+    test('should not adjust camera_dy on first call (initial load guard)', () => {
+      global.city_tile.mockImplementation((city) => {
+        const positions = {
+          100: { x: 10, y: 10 },
+          101: { x: 30, y: 10 },
+        };
+        return positions[city.id] || { x: 0, y: 0 };
+      });
+
+      global.observer_follow_player = 0;
+      global.observer_centered_notified = false;
+      global.camera_dy = 150; // default preset value
+
+      observer_center_on_followed_player();
+
+      // First call uses simple city centering — camera_dy should be untouched
+      expect(global.camera_dy).toBe(150);
+    });
+
+    test('should update camera_dy based on territory spread after initial center', () => {
       global.city_tile.mockImplementation((city) => {
         const positions = {
           100: { x: 10, y: 10 },  // PlayerCapital
@@ -291,6 +324,8 @@ describe('Follow Player System', () => {
       });
 
       global.observer_follow_player = 0;
+      // Simulate initial center already done
+      global.observer_centered_notified = true;
       global.observer_last_territory_radius = null;
 
       observer_center_on_followed_player();
@@ -439,8 +474,7 @@ describe('Follow Player System', () => {
   // ===========================================================================
 
   describe('territory centering behavior', () => {
-    test('should center on territory centroid (not just capital)', () => {
-      // Setup cities at distinct positions
+    test('should center on capital on initial call (not territory centroid)', () => {
       global.city_tile.mockImplementation((city) => {
         const positions = {
           100: { x: 10, y: 10 },  // PlayerCapital
@@ -450,6 +484,26 @@ describe('Follow Player System', () => {
       });
 
       global.observer_follow_player = 0;
+      global.observer_centered_notified = false;
+
+      observer_center_on_followed_player();
+
+      // First call centers on capital city tile, not territory centroid
+      expect(center_tile_mapcanvas).toHaveBeenCalledWith({ x: 10, y: 10 });
+    });
+
+    test('should center on territory centroid after initial center', () => {
+      global.city_tile.mockImplementation((city) => {
+        const positions = {
+          100: { x: 10, y: 10 },  // PlayerCapital
+          101: { x: 20, y: 10 },  // PlayerCity2
+        };
+        return positions[city.id] || { x: 0, y: 0 };
+      });
+
+      global.observer_follow_player = 0;
+      // Simulate initial center already done
+      global.observer_centered_notified = true;
 
       observer_center_on_followed_player();
 
@@ -457,7 +511,7 @@ describe('Follow Player System', () => {
       expect(center_tile_mapcanvas).toHaveBeenCalledWith({ x: 15, y: 10 });
     });
 
-    test('should include units in territory calculation (cities weighted)', () => {
+    test('should include units in territory calculation after initial center', () => {
       // One city and one distant unit
       global.city_tile.mockImplementation((city) => {
         if (city.id === 100) return { x: 10, y: 10 };
@@ -475,6 +529,8 @@ describe('Follow Player System', () => {
       };
 
       global.observer_follow_player = 0;
+      // Simulate initial center already done
+      global.observer_centered_notified = true;
 
       observer_center_on_followed_player();
 
@@ -498,6 +554,8 @@ describe('Follow Player System', () => {
       };
 
       global.observer_follow_player = 0;
+      // No cities means initial guard falls through to territory centering
+      global.observer_centered_notified = false;
 
       observer_center_on_followed_player();
 

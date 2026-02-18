@@ -557,7 +557,9 @@ global.center_on_player_units_with_zoom = function(player_id) {
 
 /**
  * Center view on followed player's territory with dynamic zoom.
- * Priority: 1) Territory centroid with auto-zoom, 2) Explored tile fallback
+ * On first center: simple capital/largest-city centering (no zoom manipulation).
+ * After initial center: territory centroid with auto-zoom.
+ * Fallback: any explored tile.
  * Mirrors production observer_center_on_followed_player() in civclient.js.
  */
 global.observer_center_on_followed_player = function() {
@@ -569,24 +571,49 @@ global.observer_center_on_followed_player = function() {
     return;
   }
 
-  // Priority 1: Territory-aware centering with dynamic zoom
+  // On first center, use simple city centering without zoom manipulation.
+  // Avoids aggressive camera_dy changes during initial load.
+  if (!global.observer_centered_notified) {
+    var target_city = global.player_capital(player);
+
+    // Fallback: largest city by population
+    if (!target_city) {
+      var max_size = 0;
+      for (var city_id in global.cities) {
+        var pcity = global.cities[city_id];
+        if (global.city_owner_player_id(pcity) === global.observer_follow_player) {
+          if (pcity['size'] > max_size) {
+            max_size = pcity['size'];
+            target_city = pcity;
+          }
+        }
+      }
+    }
+
+    if (target_city) {
+      var ptile = global.city_tile(target_city);
+      if (ptile) {
+        global.center_tile_mapcanvas(ptile);
+        global.observer_centered_notified = true;
+        global.observer_parent_notified = true;
+        global.notify_parent_iframe('observer_centered', {
+          center_type: 'city',
+          city_name: target_city['name'],
+          location: { x: ptile['x'], y: ptile['y'] }
+        });
+        return;
+      }
+    }
+    // No city found on initial load — fall through to territory/explored fallbacks
+  }
+
+  // After initial center: territory-aware centering with dynamic zoom
   var territory_data = global.center_on_player_territory_with_zoom(global.observer_follow_player);
   if (territory_data) {
-    if (!global.observer_centered_notified) {
-      global.observer_centered_notified = true;
-      global.observer_parent_notified = true;
-      global.notify_parent_iframe('observer_centered', {
-        center_type: 'territory',
-        city_count: territory_data.city_count,
-        unit_count: territory_data.unit_count,
-        spread: territory_data.spread,
-        location: { x: territory_data.centroid.x, y: territory_data.centroid.y }
-      });
-    }
     return;
   }
 
-  // Priority 2: Fall back to any explored tile (prevents black screen)
+  // Fallback: any explored tile (prevents black screen)
   var explored_tile = global.find_first_explored_tile();
   if (explored_tile) {
     global.center_tile_mapcanvas(explored_tile);
