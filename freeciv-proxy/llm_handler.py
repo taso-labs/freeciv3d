@@ -1682,22 +1682,28 @@ class LLMWSHandler(websocket.WebSocketHandler):
             # SMART TARGET INFERENCE: If target still missing, look it up from legal_actions
             if "target_player_id" not in normalized and player_id is not None and game_id is not None:
                 try:
-                    logger.debug(f"Target missing for {action_type}, attempting inference from legal_actions")
-                    # Get legal actions to find matching diplomacy action with target
+                    logger.info(f"🔎 TARGET INFERENCE: Attempting for {action_type}, player={player_id}, game={game_id}")
                     civcom = self._get_civcom_for_player(player_id, game_id=game_id)
                     if civcom:
                         legal_actions = civcom._get_legal_actions_optimized(player_id)
-                        # Find matching diplomacy action in legal_actions
+                        logger.info(f"   Found {len(legal_actions)} legal_actions, searching for {action_type}")
+                        found = False
                         for legal_action in legal_actions:
-                            if legal_action.get('action') == action_type:
+                            action_type_in_legal = legal_action.get('action')
+                            if action_type_in_legal == action_type:
                                 params = legal_action.get('params', {})
                                 if 'player_id' in params:
                                     inferred_target = params['player_id']
                                     normalized["target_player_id"] = inferred_target
-                                    logger.info(f"✅ INFERRED target_player_id={inferred_target} from legal_actions for {action_type}")
+                                    logger.info(f"✅ INFERRED target_player_id={inferred_target}")
+                                    found = True
                                     break
+                        if not found:
+                            logger.warning(f"   No {action_type} found in legal_actions")
+                    else:
+                        logger.warning(f"   civcom is None for player={player_id}, game={game_id}")
                 except Exception as e:
-                    logger.warning(f"Failed to infer target from legal_actions: {e}")
+                    logger.warning(f"Target inference failed: {e}", exc_info=True)
 
             # Validate that target_player_id is set and different from actor (player_id)
             target_id = normalized.get("target_player_id")
