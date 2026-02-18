@@ -2079,6 +2079,15 @@ class CivCom(Thread):
                         f"{self.DS_NAMES.get(ds_type, f'unknown({ds_type})')}"
                     )
 
+                    # Invalidate action cache when diplomatic state changes
+                    # Combat/spy actions depend on diplomatic state, so stale cache would show wrong actions
+                    if self.player_id is not None:
+                        if plr1 == self.player_id or plr2 == self.player_id:
+                            self.invalidate_action_cache()
+                            logger.debug(
+                                f"Action cache invalidated for {self.username} due to diplomatic state change"
+                            )
+
             # DIPLOMACY INIT MEETING packet - server notifies a meeting has been initiated
             elif packet_type == PACKET_DIPLOMACY_INIT_MEETING:
                 counterpart = packet.get('counterpart')

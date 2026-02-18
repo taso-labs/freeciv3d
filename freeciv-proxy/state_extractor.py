@@ -1357,7 +1357,7 @@ class StateExtractor:
         # === TRADE ACTIONS ===
         # Trade units (caravans/freight) must be in a city to establish trade or help
         if can_do_action(ACTION_TRADE_ROUTE):
-            # Must be in a city to establish trade route
+            # Must be in a city to establish trade route, and not at war with destination
             in_city = False
             unit_city_id = None
             if civcom:
@@ -1366,18 +1366,32 @@ class StateExtractor:
                         in_city = True
                         unit_city_id = city_id
                         break
-            
+
             if in_city and unit_city_id:
                 # Generate trade route actions to other cities
+                # Validate diplomatic state: trade blocked during war per FreeCiv rules
                 cities = state.get('cities', {})
                 for dest_city_id, dest_city in cities.items():
                     if str(dest_city.get('id')) != str(unit_city_id):
-                        # Can establish trade with different cities
-                        add_action('trade_route', 
+                        is_valid = True
+                        reason = None
+
+                        # Check diplomatic state with destination city owner
+                        dest_owner = dest_city.get('owner')
+                        if is_valid and civcom and dest_owner is not None and dest_owner != player_id:
+                            ds = civcom.get_diplstate(player_id, dest_owner)
+                            ds_type = ds.get('type') if ds else None
+
+                            # Block trade during war
+                            if ds_type == civcom.DS_WAR:
+                                is_valid = False
+                                reason = f"Cannot trade - at war with player {dest_owner}"
+
+                        add_action('trade_route',
                                  {'target_city_id': dest_city.get('id')},
-                                 True, None, ACTION_TRADE_ROUTE)
+                                 is_valid, reason, ACTION_TRADE_ROUTE)
             else:
-                add_action('trade_route', {}, False, 
+                add_action('trade_route', {}, False,
                          "Must be in a city to establish trade route", ACTION_TRADE_ROUTE)
         
         if can_do_action(ACTION_MARKETPLACE):
