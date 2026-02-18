@@ -1668,9 +1668,23 @@ class LLMWSHandler(websocket.WebSocketHandler):
                     normalized["target_player_id"] = target["player_id"]
                 if "message" in target:
                     normalized["message"] = target["message"]
-            # Ensure target_player_id is set for validation
-            if "target_player_id" not in normalized and "actor_id" in action_data:
-                normalized["target_player_id"] = action_data["actor_id"]
+
+            # Also check for target_player_id directly in action_data or params
+            if "target_player_id" not in normalized:
+                if "target_player_id" in action_data:
+                    normalized["target_player_id"] = action_data["target_player_id"]
+                elif "params" in action_data and isinstance(action_data["params"], dict):
+                    if "player_id" in action_data["params"]:
+                        normalized["target_player_id"] = action_data["params"]["player_id"]
+
+            # Validate that target_player_id is set and different from actor (player_id)
+            target_id = normalized.get("target_player_id")
+            actor_id = normalized.get("player_id")
+            if target_id is None:
+                logger.warning(f"Diplomacy action missing target_player_id: {action_type}")
+            elif target_id == actor_id:
+                logger.warning(f"Diplomacy action {action_type} targets self (actor={actor_id}, target={target_id})")
+
             logger.info(f"Normalized diplomacy action: {action_type} targeting player {normalized.get('target_player_id')}")
 
         elif action_type == "end_turn":
