@@ -1221,7 +1221,7 @@ class StateExtractor:
         
         # === COMBAT ACTIONS ===
         # Attack actions for adjacent tiles
-        # Require moves_left > 0 - combat actions consume movement points
+        # Require moves_left > 0 and must be at war with target player
         basic_combat_actions = [
             (ACTION_ATTACK, 'attack'),
             (ACTION_SUICIDE_ATTACK, 'suicide_attack'),
@@ -1231,33 +1231,98 @@ class StateExtractor:
 
         for action_id, action_name in basic_combat_actions:
             if can_do_action(action_id):
-                # Check if unit has moves remaining
-                is_valid = moves_left > 0
-                reason = "No moves left" if not is_valid else None
                 # Add attack actions for each direction
                 for direction in directions:
-                    target_x, target_y, _ = get_target_tile(direction)
+                    target_x, target_y, target_index = get_target_tile(direction)
+
+                    is_valid = moves_left > 0
+                    reason = None
+
+                    # Check if we have moves remaining
+                    if not is_valid:
+                        reason = "No moves left"
+
+                    # Diplomatic state validation: only allow combat if at war
+                    # Check target tile for enemy units or cities
+                    if is_valid and civcom and target_index is not None:
+                        target_owner = None
+
+                        # Check for cities at target tile
+                        for city in getattr(civcom, 'other_cities', {}).values():
+                            if city.get('tile') == target_index:
+                                target_owner = city.get('owner')
+                                break
+
+                        # Check for enemy units at target tile if no city found
+                        if target_owner is None:
+                            for unit in getattr(civcom, 'other_units', {}).values():
+                                if unit.get('tile') == target_index:
+                                    target_owner = unit.get('owner')
+                                    break
+
+                        # Validate diplomatic state: must be at war to attack
+                        if target_owner is not None and target_owner != player_id:
+                            ds = civcom.get_diplstate(player_id, target_owner)
+                            ds_type = ds.get('type') if ds else None
+
+                            # Only allow attack if at war (DS_WAR = 0)
+                            if ds_type != civcom.DS_WAR:
+                                is_valid = False
+                                ds_name = civcom.DS_NAMES.get(ds_type, 'unknown')
+                                reason = f"Cannot attack - at {ds_name} with player {target_owner}"
+
                     add_action(action_name, {
                         'direction': direction,
                         'target': {'x': target_x, 'y': target_y}
                     }, is_valid, reason, action_id)
 
-        # Bombard is ranged - check for visible targets
-        # Require moves_left > 0 - bombard consumes movement points
+        # Bombard is ranged - check for visible targets and diplomatic state
+        # Require moves_left > 0 and must be at war with target player
         if can_do_action(ACTION_BOMBARD):
-            is_valid = moves_left > 0
-            reason = "No moves left" if not is_valid else None
-            # Simplified: add bombard for adjacent tiles (full implementation would check range)
-            # In full version: get unit type's bombard range and check for enemy units/cities in range
             for direction in directions:
-                target_x, target_y, _ = get_target_tile(direction)
+                target_x, target_y, target_index = get_target_tile(direction)
+
+                is_valid = moves_left > 0
+                reason = None
+
+                if not is_valid:
+                    reason = "No moves left"
+
+                # Diplomatic state validation: only allow bombard if at war
+                if is_valid and civcom and target_index is not None:
+                    target_owner = None
+
+                    # Check for cities at target tile
+                    for city in getattr(civcom, 'other_cities', {}).values():
+                        if city.get('tile') == target_index:
+                            target_owner = city.get('owner')
+                            break
+
+                    # Check for enemy units at target tile if no city found
+                    if target_owner is None:
+                        for unit in getattr(civcom, 'other_units', {}).values():
+                            if unit.get('tile') == target_index:
+                                target_owner = unit.get('owner')
+                                break
+
+                    # Validate diplomatic state: must be at war to bombard
+                    if target_owner is not None and target_owner != player_id:
+                        ds = civcom.get_diplstate(player_id, target_owner)
+                        ds_type = ds.get('type') if ds else None
+
+                        # Only allow bombard if at war (DS_WAR = 0)
+                        if ds_type != civcom.DS_WAR:
+                            is_valid = False
+                            ds_name = civcom.DS_NAMES.get(ds_type, 'unknown')
+                            reason = f"Cannot bombard - at {ds_name} with player {target_owner}"
+
                 add_action('bombard', {
                     'direction': direction,
                     'target': {'x': target_x, 'y': target_y}
                 }, is_valid, reason, ACTION_BOMBARD)
         
         # === NUCLEAR ACTIONS ===
-        # Nuclear weapons require targets and sufficient moves
+        # Nuclear weapons require targets and sufficient moves, must be at war to use
         if can_do_action(ACTION_NUKE):
             # Require target selection and not being transported
             is_valid = not is_transported and moves_left > 0
@@ -1266,8 +1331,9 @@ class StateExtractor:
                 reason = "Cannot launch nuke while transported"
             elif moves_left <= 0:
                 reason = "No moves left"
+            # Note: Full nuke validation would check for valid targets and diplomatic state
             add_action('nuke', {}, is_valid, reason, ACTION_NUKE)
-        
+
         if can_do_action(ACTION_NUKE_CITY):
             is_valid = not is_transported and moves_left > 0
             reason = None
@@ -1275,8 +1341,9 @@ class StateExtractor:
                 reason = "Cannot launch nuke while transported"
             elif moves_left <= 0:
                 reason = "No moves left"
+            # Note: Full nuke validation would check for valid enemy cities and diplomatic state
             add_action('nuke_city', {}, is_valid, reason, ACTION_NUKE_CITY)
-        
+
         if can_do_action(ACTION_NUKE_UNITS):
             is_valid = not is_transported and moves_left > 0
             reason = None
@@ -1284,6 +1351,7 @@ class StateExtractor:
                 reason = "Cannot launch nuke while transported"
             elif moves_left <= 0:
                 reason = "No moves left"
+            # Note: Full nuke validation would check for valid enemy units and diplomatic state
             add_action('nuke_units', {}, is_valid, reason, ACTION_NUKE_UNITS)
         
         # === TRADE ACTIONS ===
@@ -1373,17 +1441,32 @@ class StateExtractor:
             if can_do_action(action_id):
                 if adjacent_foreign_cities:
                     for city in adjacent_foreign_cities:
-                        add_action(action_name, 
+                        city_owner = city.get('owner')
+                        is_valid = True
+                        reason = None
+
+                        # Validate diplomatic state: spy actions generally require non-alliance status
+                        # Espionage is not allowed against allied players
+                        if is_valid and civcom and city_owner is not None:
+                            ds = civcom.get_diplstate(player_id, city_owner)
+                            ds_type = ds.get('type') if ds else None
+
+                            # Block espionage against allies
+                            if ds_type == civcom.DS_ALLIANCE:
+                                is_valid = False
+                                reason = f"Cannot spy on allied player {city_owner}"
+
+                        add_action(action_name,
                                  {'target_city_id': city.get('id')},
-                                 True, None, action_id)
+                                 is_valid, reason, action_id)
                 else:
-                    add_action(action_name, {}, False, 
+                    add_action(action_name, {}, False,
                              "No foreign city nearby", action_id)
         
         # Unit-based espionage actions
         if can_do_action(ACTION_SPY_BRIBE_UNIT) or can_do_action(ACTION_SPY_SABOTAGE_UNIT):
-            # Check for adjacent foreign units
-            has_adjacent_enemy = False
+            # Check for adjacent foreign units (not allied)
+            adjacent_hostile_units = []
             if civcom and tile_index is not None:
                 xsize = civcom.map_info.get('width', 80)
                 for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (-1, 1), (1, -1), (1, 1)]:
@@ -1391,23 +1474,25 @@ class StateExtractor:
                     if civcom.map_info.get('wrap_x', True):
                         adj_x = adj_x % xsize
                     adj_tile = adj_x + adj_y * xsize
-                    
-                    # Check for enemy units
+
+                    # Check for foreign units (validate diplomatic state)
                     for other_unit in getattr(civcom, 'other_units', {}).values():
                         if other_unit.get('tile') == adj_tile and other_unit.get('owner') != player_id:
-                            has_adjacent_enemy = True
-                            break
-                    if has_adjacent_enemy:
-                        break
-            
+                            unit_owner = other_unit.get('owner')
+                            # Check if not allied with this unit's owner
+                            ds = civcom.get_diplstate(player_id, unit_owner)
+                            ds_type = ds.get('type') if ds else None
+                            if ds_type != civcom.DS_ALLIANCE:
+                                adjacent_hostile_units.append(other_unit)
+
             if can_do_action(ACTION_SPY_BRIBE_UNIT):
-                add_action('bribe_unit', {}, has_adjacent_enemy,
-                         None if has_adjacent_enemy else "No enemy unit nearby", 
+                add_action('bribe_unit', {}, bool(adjacent_hostile_units),
+                         None if adjacent_hostile_units else "No non-allied unit nearby",
                          ACTION_SPY_BRIBE_UNIT)
-            
+
             if can_do_action(ACTION_SPY_SABOTAGE_UNIT):
-                add_action('sabotage_unit', {}, has_adjacent_enemy,
-                         None if has_adjacent_enemy else "No enemy unit nearby",
+                add_action('sabotage_unit', {}, bool(adjacent_hostile_units),
+                         None if adjacent_hostile_units else "No non-allied unit nearby",
                          ACTION_SPY_SABOTAGE_UNIT)
         
         if can_do_action(ACTION_SPY_ATTACK):
