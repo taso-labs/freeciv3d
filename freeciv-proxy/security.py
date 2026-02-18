@@ -232,6 +232,10 @@ class InputSanitizer:
                 sanitized['target_player_id'] = cls.sanitize_player_id(action['target_player_id'])
             if 'player_id' in action:
                 sanitized['player_id'] = cls.sanitize_player_id(action['player_id'])
+            if 'message' in action:
+                sanitized['message'] = cls.sanitize_string_field(
+                    action['message'], 'diplomacy_message', max_length=500
+                )
 
         # Generic handler for all other unit_* actions (unit_build_road, unit_fortify, etc.)
         elif action_type.startswith('unit_'):

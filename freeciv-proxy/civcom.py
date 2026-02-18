@@ -417,6 +417,13 @@ class CivCom(Thread):
         # Keyed by counterpart player_id, stores meeting state
         self.diplomacy_meetings = {}  # {counterpart_id: {clauses: [], accept_self: bool, accept_other: bool}}
 
+        # Track units already disbanded due to peace treaties to prevent duplicate disband commands
+        # on reconnect or duplicate PACKET_PLAYER_DIPLSTATE processing. Cleared on new turn.
+        self._disbanded_unit_ids = set()
+
+        # Track players we've already auto-proposed vision sharing to, preventing duplicate proposals
+        self._vision_shared_with = set()
+
         # Tile data storage for terrain lookups
         self.tiles = {}  # {tile_index: {terrain, extras, ...}}
 
@@ -1541,6 +1548,7 @@ class CivCom(Thread):
                 self.game_turn = new_turn
                 self.turn_started = True  # Signal to state_query that turn is active
                 self.turn_advance_event.set()  # Wake up any coroutines waiting for turn start
+                self._disbanded_unit_ids.clear()  # Reset per-turn disband tracking
 
             # CRITICAL: Connection info packet - contains player_num assignment
             # This is the FIX for the PACKET_CONN_INFO bug
@@ -2088,6 +2096,8 @@ class CivCom(Thread):
 
                     # Invalidate action cache when diplomatic state actually changes (MAJOR-2 fix)
                     # Only invalidate if state differs from previous state (performance optimization)
+                    # Thread-safety note: CivCom packet processing is single-threaded (one websocket
+                    # reader per CivCom instance), so no lock is needed around state updates.
                     if self.player_id is not None:
                         if plr1 == self.player_id or plr2 == self.player_id:
                             if old_type != ds_type:
@@ -2154,7 +2164,8 @@ class CivCom(Thread):
                                             break
 
                                     if tile_owner == foreign_player_id:
-                                        units_to_disband.append(unit_id)
+                                        if unit_id not in self._disbanded_unit_ids:
+                                            units_to_disband.append(unit_id)
 
                                 # Send disband commands for units in foreign territory
                                 for unit_id in units_to_disband:
@@ -2171,6 +2182,7 @@ class CivCom(Thread):
                                     self.civserver_messages.append(message)
 
                                 if units_to_disband:
+                                    self._disbanded_unit_ids.update(units_to_disband)
                                     logger.info(
                                         f"Queued {len(units_to_disband)} unit(s) for disbanding: {units_to_disband}"
                                     )
@@ -2235,18 +2247,19 @@ class CivCom(Thread):
                             new_state = ds.get('type')
                             is_peace_like = new_state in (self.DS_PEACE, self.DS_ALLIANCE)
 
-                            if is_peace_like:
+                            if is_peace_like and counterpart not in self._vision_shared_with:
                                 # Automatically enable vision sharing for peace/alliance treaties
                                 # Create diplomacy_share_vision clause proposal
                                 vision_clause = {
                                     'pid': PACKET_DIPLOMACY_CREATE_CLAUSE_REQ,
                                     'counterpart': counterpart,
                                     'giver': self.player_id,
-                                    'type': 8,  # Vision-sharing clause type
+                                    'type': 8,  # CLAUSE_VISION
                                     'value': 0,
                                 }
                                 message = json.dumps(vision_clause)
                                 self.civserver_messages.append(message)
+                                self._vision_shared_with.add(counterpart)
                                 logger.info(
                                     f"Auto-proposing vision sharing with player {counterpart} "
                                     f"due to {self.DS_NAMES.get(new_state, 'unknown')} treaty for {self.username}"

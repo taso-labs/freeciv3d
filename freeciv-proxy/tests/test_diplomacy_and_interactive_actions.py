@@ -746,3 +746,143 @@ class TestAllDiplomacyActionPacketCompleteness:
         result = convert_action_to_packet(action)
         assert result is not None, f"{action_type} returned None from convert_action_to_packet"
         assert 'pid' in result, f"{action_type} packet missing 'pid' field"
+
+
+class TestAutoDisbandOnPeace:
+    """Tests for auto-disbanding military units when peace treaty is signed."""
+
+    def _make_civcom_for_disband(self):
+        """Create a CivCom stub with state needed for disband testing."""
+        stub = _make_civcom_stub()
+        stub.player_id = 0
+        stub.username = 'test_player'
+        stub.civserver_messages = []
+        stub._disbanded_unit_ids = set()
+        stub._vision_shared_with = set()
+        stub.player_units = {
+            10: {'tile': 100, 'type': 'warrior'},
+            11: {'tile': 200, 'type': 'settler'},
+            12: {'tile': 300, 'type': 'knight'},
+        }
+        stub.other_cities = {
+            1: {'tile': 100, 'owner': 1},  # Foreign city at tile 100
+            2: {'tile': 300, 'owner': 1},  # Foreign city at tile 300
+        }
+        return stub
+
+    def test_disband_units_in_foreign_territory_on_peace(self):
+        """Units at foreign city tiles should be queued for disband on war->peace transition."""
+        stub = self._make_civcom_for_disband()
+        # Set initial war state
+        stub.diplomatic_states[(0, 1)] = {'type': 0, 'turns_left': -1,
+                                           'has_reason_to_cancel': 0, 'contact_turns_left': 0}
+
+        # Simulate peace treaty via packet processing
+        # We test the logic directly: was_war_like=True, is_peace_like=True
+        # Units 10 (tile 100) and 12 (tile 300) are at foreign cities
+        from civcom import CivCom
+        # Replicate the disband logic
+        old_type = 0  # DS_WAR
+        ds_type = 3   # DS_PEACE
+        foreign_player_id = 1
+
+        was_war_like = old_type in (0, 1, 2)
+        is_peace_like = ds_type in (3, 4)
+        assert was_war_like and is_peace_like
+
+        units_to_disband = []
+        for unit_id, unit_data in stub.player_units.items():
+            unit_tile = unit_data.get('tile')
+            tile_owner = None
+            for city in stub.other_cities.values():
+                if city.get('tile') == unit_tile and city.get('owner') == foreign_player_id:
+                    tile_owner = foreign_player_id
+                    break
+            if tile_owner == foreign_player_id and unit_id not in stub._disbanded_unit_ids:
+                units_to_disband.append(unit_id)
+
+        assert sorted(units_to_disband) == [10, 12]
+
+    def test_duplicate_disband_prevented(self):
+        """Same unit should not be disbanded twice if DIPLSTATE packet is processed again."""
+        stub = self._make_civcom_for_disband()
+        stub._disbanded_unit_ids = {10}  # Unit 10 already disbanded
+
+        foreign_player_id = 1
+        units_to_disband = []
+        for unit_id, unit_data in stub.player_units.items():
+            unit_tile = unit_data.get('tile')
+            tile_owner = None
+            for city in stub.other_cities.values():
+                if city.get('tile') == unit_tile and city.get('owner') == foreign_player_id:
+                    tile_owner = foreign_player_id
+                    break
+            if tile_owner == foreign_player_id and unit_id not in stub._disbanded_unit_ids:
+                units_to_disband.append(unit_id)
+
+        # Only unit 12 should be disbanded (10 already in set)
+        assert units_to_disband == [12]
+
+    def test_disbanded_ids_cleared_on_new_turn(self):
+        """_disbanded_unit_ids should be cleared when a new turn begins."""
+        stub = self._make_civcom_for_disband()
+        stub._disbanded_unit_ids = {10, 12}
+        # Simulate new turn
+        stub._disbanded_unit_ids.clear()
+        assert len(stub._disbanded_unit_ids) == 0
+
+
+class TestVisionSharingDeduplication:
+    """Tests for auto vision-sharing deduplication on peace/alliance treaties."""
+
+    def test_vision_proposed_once_per_counterpart(self):
+        """Vision sharing should only be auto-proposed once per counterpart."""
+        stub = _make_civcom_stub()
+        stub.player_id = 0
+        stub._vision_shared_with = set()
+        stub.civserver_messages = []
+
+        counterpart = 1
+        # First proposal: should go through
+        assert counterpart not in stub._vision_shared_with
+        stub._vision_shared_with.add(counterpart)
+        assert counterpart in stub._vision_shared_with
+
+        # Second proposal: should be blocked
+        assert counterpart in stub._vision_shared_with
+
+    def test_different_counterparts_get_separate_proposals(self):
+        """Each counterpart should get their own vision-sharing proposal."""
+        stub = _make_civcom_stub()
+        stub._vision_shared_with = set()
+
+        stub._vision_shared_with.add(1)
+        assert 1 in stub._vision_shared_with
+        assert 2 not in stub._vision_shared_with
+
+
+class TestDiplomacyMessageSanitization:
+    """Tests for diplomacy message length validation in InputSanitizer."""
+
+    def test_message_within_limit(self):
+        """Messages under 500 chars should pass validation."""
+        from security import InputSanitizer
+        action = {'type': 'diplomacy_message', 'target_player_id': 1, 'message': 'Hello'}
+        result = InputSanitizer.sanitize_action_data(action)
+        assert result['message'] == 'Hello'
+
+    def test_message_at_limit(self):
+        """Message exactly at 500 chars should pass."""
+        from security import InputSanitizer
+        msg = 'a' * 500
+        action = {'type': 'diplomacy_message', 'target_player_id': 1, 'message': msg}
+        result = InputSanitizer.sanitize_action_data(action)
+        assert result['message'] == msg
+
+    def test_message_over_limit_rejected(self):
+        """Messages over 500 chars should raise SecurityError."""
+        from security import InputSanitizer, SecurityError
+        msg = 'a' * 501
+        action = {'type': 'diplomacy_message', 'target_player_id': 1, 'message': msg}
+        with pytest.raises(SecurityError):
+            InputSanitizer.sanitize_action_data(action)

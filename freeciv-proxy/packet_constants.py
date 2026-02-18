@@ -251,6 +251,12 @@ PACKET_DIPLOMACY_ACCEPT_TREATY_REQ = 103  # cs - Request accept treaty
 PACKET_DIPLOMACY_ACCEPT_TREATY = 104  # sc - Treaty accepted
 PACKET_DIPLOMACY_CANCEL_PACT = 105  # cs - Cancel diplomatic pact
 
+# Treaty clause types (used in CREATE_CLAUSE_REQ / REMOVE_CLAUSE_REQ)
+CLAUSE_CEASEFIRE = 5
+CLAUSE_PEACE = 6
+CLAUSE_ALLIANCE = 7
+CLAUSE_VISION = 8
+
 
 # =============================================================================
 # CONNECTION AND HEALTH PACKETS
