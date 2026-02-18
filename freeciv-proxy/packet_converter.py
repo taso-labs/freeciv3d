@@ -648,25 +648,25 @@ def _convert_action_to_packet_impl(
 
     # Diplomacy – use numeric packet IDs for these as in existing code
     elif action_type == "diplomacy_start_negotiation":
-        return {"pid": PACKET_DIPLOMACY_INIT_MEETING_REQ, "counterpart": action["player_id"]}
+        return {"pid": PACKET_DIPLOMACY_INIT_MEETING_REQ, "counterpart": action["target_player_id"]}
     elif action_type == "diplomacy_cancel_meeting":
-        return {"pid": PACKET_DIPLOMACY_CANCEL_MEETING_REQ, "counterpart": action["player_id"]}
+        return {"pid": PACKET_DIPLOMACY_CANCEL_MEETING_REQ, "counterpart": action["target_player_id"]}
     elif action_type == "diplomacy_accept_treaty":
         # Accept treaty should use the ACCEPT_TREATY request packet
-        return {"pid": PACKET_DIPLOMACY_ACCEPT_TREATY_REQ, "counterpart": action["player_id"]}
+        return {"pid": PACKET_DIPLOMACY_ACCEPT_TREATY_REQ, "counterpart": action["target_player_id"]}
     elif action_type == "diplomacy_cancel_pact":
         clause_type = action.get("clause_type", 6)
         return {
             "pid": PACKET_DIPLOMACY_CANCEL_PACT,
-            "other_player_id": action["player_id"],
+            "other_player_id": action["target_player_id"],
             "clause": clause_type,
         }
     elif action_type == "diplomacy_declare_war":
-        return {"pid": PACKET_DIPLOMACY_CANCEL_PACT, "other_player_id": action["player_id"], "clause": 5}
+        return {"pid": PACKET_DIPLOMACY_CANCEL_PACT, "other_player_id": action["target_player_id"], "clause": 5}
     elif action_type == "diplomacy_propose_ceasefire":
         return {
             "pid": PACKET_DIPLOMACY_CREATE_CLAUSE_REQ,
-            "counterpart": action["player_id"],
+            "counterpart": action["target_player_id"],
             "giver": action.get("giver", -1),
             "type": 5,
             "value": 0,
@@ -674,7 +674,7 @@ def _convert_action_to_packet_impl(
     elif action_type == "diplomacy_propose_peace":
         return {
             "pid": PACKET_DIPLOMACY_CREATE_CLAUSE_REQ,
-            "counterpart": action["player_id"],
+            "counterpart": action["target_player_id"],
             "giver": action.get("giver", -1),
             "type": 6,
             "value": 0,
@@ -682,7 +682,7 @@ def _convert_action_to_packet_impl(
     elif action_type == "diplomacy_propose_alliance":
         return {
             "pid": PACKET_DIPLOMACY_CREATE_CLAUSE_REQ,
-            "counterpart": action["player_id"],
+            "counterpart": action["target_player_id"],
             "giver": action.get("giver", -1),
             "type": 7,
             "value": 0,
@@ -690,7 +690,7 @@ def _convert_action_to_packet_impl(
     elif action_type == "diplomacy_share_vision":
         return {
             "pid": PACKET_DIPLOMACY_CREATE_CLAUSE_REQ,
-            "counterpart": action["player_id"],
+            "counterpart": action["target_player_id"],
             "giver": action.get("giver", -1),
             "type": 8,
             "value": 0,
@@ -699,20 +699,20 @@ def _convert_action_to_packet_impl(
         # Use REMOVE_CLAUSE request packet (pid 101) for withdrawing vision
         return {
             "pid": PACKET_DIPLOMACY_REMOVE_CLAUSE_REQ,
-            "counterpart": action["player_id"],
+            "counterpart": action["target_player_id"],
             "giver": action.get("giver", -1),
             "type": 8,
             "value": 0,
         }
     elif action_type == "diplomacy_reject_treaty":
         # Rejecting a treaty = cancelling the meeting
-        return {"pid": PACKET_DIPLOMACY_CANCEL_MEETING_REQ, "counterpart": action["player_id"]}
+        return {"pid": PACKET_DIPLOMACY_CANCEL_MEETING_REQ, "counterpart": action["target_player_id"]}
     elif action_type == "diplomacy_cancel_treaty":
         # Cancel an existing treaty/pact
         clause_type = action.get("clause_type", 6)  # Default to peace pact
         return {
             "pid": PACKET_DIPLOMACY_CANCEL_PACT,
-            "other_player_id": action["player_id"],
+            "other_player_id": action["target_player_id"],
             "clause": clause_type,
         }
     elif action_type == "diplomacy_message":

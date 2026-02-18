@@ -1660,18 +1660,18 @@ class LLMWSHandler(websocket.WebSocketHandler):
 
         elif action_type.startswith("diplomacy_"):
             # Diplomacy actions use different structure than unit/city actions
-            # Instead of actor_id/target_unit_id, they use player_id (target) and message (for diplomacy_message)
+            # They require target_player_id (for validation) and message (for diplomacy_message)
             # Target dict contains {'player_id': int, 'player_name': str, 'message': str (optional)}
             target = action_data.get("target", {})
             if isinstance(target, dict):
                 if "player_id" in target:
-                    normalized["player_id"] = target["player_id"]
+                    normalized["target_player_id"] = target["player_id"]
                 if "message" in target:
                     normalized["message"] = target["message"]
-            # Ensure player_id is set for packet conversion
-            if "player_id" not in normalized and "actor_id" in action_data:
-                normalized["player_id"] = action_data["actor_id"]
-            logger.info(f"Normalized diplomacy action: {action_type} targeting player {normalized.get('player_id')}")
+            # Ensure target_player_id is set for validation
+            if "target_player_id" not in normalized and "actor_id" in action_data:
+                normalized["target_player_id"] = action_data["actor_id"]
+            logger.info(f"Normalized diplomacy action: {action_type} targeting player {normalized.get('target_player_id')}")
 
         elif action_type == "end_turn":
             # end_turn is simple - just needs player_id (already mapped above)
@@ -4057,18 +4057,18 @@ class LLMWSHandler(websocket.WebSocketHandler):
         elif action_type == 'diplomacy_reject_treaty':
             return {
                 'pid': PACKET_DIPLOMACY_CANCEL_MEETING_REQ,
-                'counterpart': action['player_id']
+                'counterpart': action['target_player_id']
             }
         elif action_type == 'diplomacy_cancel_treaty':
             clause_type = action.get('clause_type', 6)  # Default to CLAUSE_PEACE
             return {
                 'pid': PACKET_DIPLOMACY_CANCEL_PACT,
-                'other_player_id': action['player_id'],
+                'other_player_id': action['target_player_id'],
                 'clause': clause_type
             }
         elif action_type == 'diplomacy_message':
             message = action.get('message', '')
-            target_player = action.get('player_id', -1)
+            target_player = action.get('target_player_id', -1)
             # FreeCiv chat protocol: /msg <player_id> <message> sends private message to target player
             return {
                 'pid': PACKET_CHAT_MSG_REQ,
