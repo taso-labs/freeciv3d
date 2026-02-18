@@ -242,6 +242,8 @@ global.init_camera_from_url_params = function() {
 global.observing = false;
 global.observer_follow_player = null;
 global.observer_auto_center_interval = null;
+global.observer_initial_center_interval = null;
+global.observer_player_search_interval = null;
 global.OBSERVER_AUTO_CENTER_MS = 5000;
 global.embed_mode = false;
 
@@ -322,8 +324,243 @@ global.init_observer_follow_mode = function() {
 };
 
 /**
- * Center view on followed player's main population center.
- * Priority: 1) Capital city, 2) Largest city by size, 3) Any city
+ * Unwrap a coordinate relative to a reference point on a wrapping axis.
+ * Mirrors production unwrap_coordinate() in civclient.js.
+ */
+global.unwrap_coordinate = function(val, ref, wraps, map_size) {
+  if (!wraps || map_size <= 0) return val;
+  var delta = val - ref;
+  var half = Math.floor(map_size / 2);
+  if (delta > half) return val - map_size;
+  if (delta < -half) return val + map_size;
+  return val;
+};
+
+/**
+ * Compute wrap-aware spread and centroid from position array.
+ * Mirrors the production compute_wrapped_spread_and_centroid() in civclient.js.
+ */
+global.compute_wrapped_spread_and_centroid = function(positions) {
+  if (!positions || positions.length === 0) return null;
+
+  var wrap_x = (typeof global.wrap_has_flag === 'function' && typeof global.WRAP_X !== 'undefined') ? global.wrap_has_flag(global.WRAP_X) : false;
+  var wrap_y = (typeof global.wrap_has_flag === 'function' && typeof global.WRAP_Y !== 'undefined') ? global.wrap_has_flag(global.WRAP_Y) : false;
+  var map_w = (global.map && global.map['xsize']) ? global.map['xsize'] : 0;
+  var map_h = (global.map && global.map['ysize']) ? global.map['ysize'] : 0;
+
+  var ref_x = positions[0].x;
+  var ref_y = positions[0].y;
+
+  var sum_x = 0, sum_y = 0, total_weight = 0;
+  var min_x = Infinity, max_x = -Infinity;
+  var min_y = Infinity, max_y = -Infinity;
+
+  for (var i = 0; i < positions.length; i++) {
+    var px = global.unwrap_coordinate(positions[i].x, ref_x, wrap_x, map_w);
+    var py = global.unwrap_coordinate(positions[i].y, ref_y, wrap_y, map_h);
+    var w = positions[i].weight || 1;
+
+    sum_x += px * w;
+    sum_y += py * w;
+    total_weight += w;
+    min_x = Math.min(min_x, px);
+    max_x = Math.max(max_x, px);
+    min_y = Math.min(min_y, py);
+    max_y = Math.max(max_y, py);
+  }
+
+  var centroid_raw_x = sum_x / total_weight;
+  var centroid_raw_y = sum_y / total_weight;
+  var centroid_x = Math.floor(centroid_raw_x);
+  var centroid_y = Math.floor(centroid_raw_y);
+
+  if (wrap_x && map_w > 0) centroid_x = ((centroid_x % map_w) + map_w) % map_w;
+  if (wrap_y && map_h > 0) centroid_y = ((centroid_y % map_h) + map_h) % map_h;
+
+  var spread = Math.max(max_x - min_x, max_y - min_y);
+
+  // Compute percentile-based effective radius (mirrors production code)
+  var distances = [];
+  for (var k = 0; k < positions.length; k++) {
+    var px2 = global.unwrap_coordinate(positions[k].x, ref_x, wrap_x, map_w);
+    var py2 = global.unwrap_coordinate(positions[k].y, ref_y, wrap_y, map_h);
+    var w2 = positions[k].weight || 1;
+
+    var dist = Math.max(Math.abs(px2 - centroid_raw_x), Math.abs(py2 - centroid_raw_y));
+    for (var j = 0; j < w2; j++) {
+      distances.push(dist);
+    }
+  }
+
+  distances.sort(function(a, b) { return a - b; });
+  var coverage = (typeof global.TERRITORY_COVERAGE_RATIO !== 'undefined') ? global.TERRITORY_COVERAGE_RATIO : 0.85;
+  var percentile_index = Math.min(Math.floor(distances.length * coverage), distances.length - 1);
+  var effective_radius = distances[percentile_index];
+
+  return {
+    centroid_x: centroid_x,
+    centroid_y: centroid_y,
+    spread: spread,
+    effective_radius: effective_radius,
+    total_weight: total_weight
+  };
+};
+
+/**
+ * Get city owner player ID (matches real city_owner_player_id from city.js)
+ */
+global.city_owner_player_id = function(city) {
+  if (!city) return null;
+  return city.owner;
+};
+
+/**
+ * Calculate the centroid and spread of all territory (cities + units) owned by a player.
+ * Cities are weighted by TERRITORY_CITY_WEIGHT to anchor centroid near empire core.
+ * Uses compute_wrapped_spread_and_centroid() for wrap-aware calculations.
+ */
+global.get_player_territory_centroid_and_spread = function(player_id) {
+  var positions = [];
+  var city_count = 0, unit_count = 0;
+
+  for (var city_id in global.cities) {
+    var pcity = global.cities[city_id];
+    if (global.city_owner_player_id(pcity) === player_id) {
+      var ptile = global.city_tile(pcity);
+      if (ptile) {
+        positions.push({ x: ptile['x'], y: ptile['y'], weight: global.TERRITORY_CITY_WEIGHT });
+        city_count++;
+      }
+    }
+  }
+
+  for (var unit_id in global.units) {
+    var punit = global.units[unit_id];
+    if (punit['owner'] === player_id) {
+      var ptile = global.index_to_tile(punit['tile']);
+      if (ptile) {
+        positions.push({ x: ptile['x'], y: ptile['y'], weight: 1 });
+        unit_count++;
+      }
+    }
+  }
+
+  var result = global.compute_wrapped_spread_and_centroid(positions);
+  if (!result) return null;
+
+  return {
+    centroid: { x: result.centroid_x, y: result.centroid_y },
+    spread: result.spread,
+    effective_radius: result.effective_radius,
+    city_count: city_count,
+    unit_count: unit_count,
+    count: result.total_weight,
+    tile: { x: result.centroid_x, y: result.centroid_y }
+  };
+};
+
+/**
+ * Calculate camera height based on territory effective radius.
+ * Linear formula: dy = BASE + radius * DY_PER_TILE, clamped to [MIN, MAX].
+ */
+global.calculate_zoom_for_territory_spread = function(effective_radius) {
+  var dy = global.TERRITORY_BASE_DY + effective_radius * global.TERRITORY_DY_PER_TILE;
+  return Math.floor(Math.max(global.TERRITORY_MIN_ZOOM_DY, Math.min(global.TERRITORY_MAX_ZOOM_DY, dy)));
+};
+
+/**
+ * Center view on player's territory centroid with dynamic zoom.
+ * Uses effective_radius (percentile-based) for zoom calculation.
+ */
+global.center_on_player_territory_with_zoom = function(player_id) {
+  var territory_data = global.get_player_territory_centroid_and_spread(player_id);
+  if (!territory_data) return null;
+
+  var should_update_zoom = (
+    global.observer_last_territory_radius === null ||
+    Math.abs(territory_data.effective_radius - global.observer_last_territory_radius) >= global.TERRITORY_RADIUS_CHANGE_THRESHOLD
+  );
+
+  if (should_update_zoom) {
+    var target_dy = global.calculate_zoom_for_territory_spread(territory_data.effective_radius);
+    global.camera_dy = target_dy;
+    global.observer_last_territory_radius = territory_data.effective_radius;
+  }
+
+  global.center_tile_mapcanvas(territory_data.tile);
+  return territory_data;
+};
+
+/**
+ * Calculate centroid and spread of all units owned by a player.
+ * Mirrors production get_player_units_centroid_and_spread() in civclient.js.
+ * Uses compute_wrapped_spread_and_centroid() for wrap-aware calculations.
+ */
+global.get_player_units_centroid_and_spread = function(player_id) {
+  var positions = [];
+
+  for (var unit_id in global.units) {
+    var punit = global.units[unit_id];
+    if (punit['owner'] === player_id) {
+      var ptile = global.index_to_tile(punit['tile']);
+      if (ptile) {
+        positions.push({ x: ptile['x'], y: ptile['y'], weight: 1 });
+      }
+    }
+  }
+
+  var result = global.compute_wrapped_spread_and_centroid(positions);
+  if (!result) return null;
+
+  return {
+    centroid: { x: result.centroid_x, y: result.centroid_y },
+    spread: result.spread,
+    count: positions.length,
+    tile: { x: result.centroid_x, y: result.centroid_y }
+  };
+};
+
+/**
+ * Calculate camera height based on unit spread.
+ * Mirrors production calculate_zoom_for_unit_spread() in civclient.js.
+ */
+global.calculate_zoom_for_unit_spread = function(spread) {
+  var MIN_ZOOM_DY = 300, MAX_ZOOM_DY = 600, SPREAD_MIN = 2, SPREAD_MAX = 20;
+  if (spread <= SPREAD_MIN) return MIN_ZOOM_DY;
+  if (spread >= SPREAD_MAX) return MAX_ZOOM_DY;
+  var zoom_factor = (spread - SPREAD_MIN) / (SPREAD_MAX - SPREAD_MIN);
+  return Math.floor(MIN_ZOOM_DY + zoom_factor * (MAX_ZOOM_DY - MIN_ZOOM_DY));
+};
+
+/**
+ * Center view on player's units with dynamic zoom.
+ * Mirrors production center_on_player_units_with_zoom() in civclient.js.
+ */
+global.center_on_player_units_with_zoom = function(player_id) {
+  var unit_data = global.get_player_units_centroid_and_spread(player_id);
+  if (!unit_data) return false;
+
+  var should_update_zoom = (
+    global.observer_last_unit_spread === null ||
+    Math.abs(unit_data.spread - global.observer_last_unit_spread) >= global.SPREAD_CHANGE_THRESHOLD
+  );
+
+  if (should_update_zoom) {
+    var target_dy = global.calculate_zoom_for_unit_spread(unit_data.spread);
+    global.camera_dy = target_dy;
+    global.observer_last_unit_spread = unit_data.spread;
+  }
+
+  global.center_tile_mapcanvas(unit_data.tile);
+  return true;
+};
+
+/**
+ * Center view on followed player's territory with dynamic zoom.
+ * On first center: simple capital/largest-city centering (no zoom manipulation).
+ * After initial center: territory centroid with auto-zoom.
+ * Fallback: any explored tile.
+ * Mirrors production observer_center_on_followed_player() in civclient.js.
  */
 global.observer_center_on_followed_player = function() {
   if (global.observer_follow_player === null) return;
@@ -334,34 +571,97 @@ global.observer_center_on_followed_player = function() {
     return;
   }
 
-  var target_city = null;
+  // On first center, use simple city centering without zoom manipulation.
+  // Avoids aggressive camera_dy changes during initial load.
+  if (!global.observer_centered_notified) {
+    var target_city = global.player_capital(player);
 
-  // Priority 1: Capital city
-  target_city = global.player_capital(player);
-
-  // Priority 2: Largest city by population size
-  if (!target_city) {
-    var max_size = 0;
-    for (var city_id in global.cities) {
-      var pcity = global.cities[city_id];
-      if (pcity.owner === global.observer_follow_player) {
-        if (pcity['size'] > max_size) {
-          max_size = pcity['size'];
-          target_city = pcity;
+    // Fallback: largest city by population
+    if (!target_city) {
+      var max_size = 0;
+      for (var city_id in global.cities) {
+        var pcity = global.cities[city_id];
+        if (global.city_owner_player_id(pcity) === global.observer_follow_player) {
+          if (pcity['size'] > max_size) {
+            max_size = pcity['size'];
+            target_city = pcity;
+          }
         }
       }
     }
+
+    if (target_city) {
+      var ptile = global.city_tile(target_city);
+      if (ptile) {
+        global.center_tile_mapcanvas(ptile);
+        global.observer_centered_notified = true;
+        global.observer_parent_notified = true;
+        global.notify_parent_iframe('observer_centered', {
+          center_type: 'city',
+          city_name: target_city['name'],
+          location: { x: ptile['x'], y: ptile['y'] }
+        });
+        return;
+      }
+    }
+
+    // No city or city_tile returned null — try explored tile WITHOUT zoom.
+    var explored = global.find_first_explored_tile();
+    if (explored) {
+      global.center_tile_mapcanvas(explored);
+      global.observer_centered_notified = true;
+      global.observer_parent_notified = true;
+      global.notify_parent_iframe('observer_centered', {
+        center_type: 'explored_tile',
+        location: { x: explored['x'], y: explored['y'] }
+      });
+      return;
+    }
+
+    // Nothing available yet — notify parent but keep retrying.
+    if (!global.observer_parent_notified) {
+      global.observer_parent_notified = true;
+      console.warn('[Observer] Initial load: no city or explored tiles yet for player ' +
+                   global.observer_follow_player + ' - will retry');
+      global.notify_parent_iframe('observer_centered', {
+        center_type: 'none',
+        reason: 'no_visible_tiles',
+        player_id: global.observer_follow_player
+      });
+    }
+    return;
   }
 
-  // Center on target
-  if (target_city) {
-    var ptile = global.city_tile(target_city);
-    if (ptile) {
-      global.center_tile_mapcanvas(ptile);
-      console.log('[Observer] Centered on', target_city['name'], 'size:', target_city['size']);
+  // After initial center: territory-aware centering with dynamic zoom
+  var territory_data = global.center_on_player_territory_with_zoom(global.observer_follow_player);
+  if (territory_data) {
+    return;
+  }
+
+  // Fallback: any explored tile (prevents black screen)
+  var explored_tile = global.find_first_explored_tile();
+  if (explored_tile) {
+    global.center_tile_mapcanvas(explored_tile);
+    if (!global.observer_centered_notified) {
+      global.observer_centered_notified = true;
+      global.observer_parent_notified = true;
+      global.notify_parent_iframe('observer_centered', {
+        center_type: 'explored_tile',
+        location: { x: explored_tile['x'], y: explored_tile['y'] }
+      });
     }
-  } else {
-    console.log('[Observer] No cities found for player', global.observer_follow_player);
+    return;
+  }
+
+  // No territory or explored tiles - notify parent once
+  if (!global.observer_parent_notified) {
+    global.observer_parent_notified = true;
+    console.warn('[Observer] No territory or explored tiles found for player ' + global.observer_follow_player + ' - will retry');
+    global.notify_parent_iframe('observer_centered', {
+      center_type: 'none',
+      reason: 'no_visible_tiles',
+      player_id: global.observer_follow_player
+    });
   }
 };
 
@@ -373,7 +673,18 @@ global.cleanup_observer_follow_mode = function() {
     clearInterval(global.observer_auto_center_interval);
     global.observer_auto_center_interval = null;
   }
+  if (global.observer_initial_center_interval) {
+    clearInterval(global.observer_initial_center_interval);
+    global.observer_initial_center_interval = null;
+  }
+  if (global.observer_player_search_interval) {
+    clearInterval(global.observer_player_search_interval);
+    global.observer_player_search_interval = null;
+  }
   global.observer_follow_player = null;
+  global.observer_last_unit_spread = null;
+  global.observer_last_territory_radius = null;
+  global.observer_last_global_spread = null;
 };
 
 // =============================================================================
@@ -701,9 +1012,30 @@ global.client = {
   },
 };
 
+// Map wrapping globals (defaults to non-wrapping for tests)
+global.WRAP_X = 1;
+global.WRAP_Y = 2;
+global.map = { xsize: 0, ysize: 0, topology_id: 0, wrap_id: 0 };
+global.wrap_has_flag = function(flag) {
+  return ((global.map['wrap_id'] & flag) !== 0);
+};
+
 // Unit spread tracking for observer mode
 global.observer_last_unit_spread = null;
 global.SPREAD_CHANGE_THRESHOLD = 5;
+
+// Global view spread tracking
+global.observer_last_global_spread = null;
+
+// Territory spread tracking for follow mode with cities
+global.observer_last_territory_radius = null;
+global.TERRITORY_RADIUS_CHANGE_THRESHOLD = 2;
+global.TERRITORY_CITY_WEIGHT = 3;
+global.TERRITORY_BASE_DY = 250;
+global.TERRITORY_DY_PER_TILE = 28;
+global.TERRITORY_MIN_ZOOM_DY = 200;
+global.TERRITORY_MAX_ZOOM_DY = 900;
+global.TERRITORY_COVERAGE_RATIO = 0.85;
 
 // Constants
 global.CAPITAL_PRIMARY = 1;
@@ -730,6 +1062,9 @@ global.LOG_DEBUG = 0;
 // Parent iframe notification mock
 global.notify_parent_iframe = jest.fn();
 global.notify_parent_error = jest.fn();
+
+// Explored tile fallback (returns null by default, tests can override)
+global.find_first_explored_tile = jest.fn(() => null);
 
 // =============================================================================
 // TEST UTILITIES
@@ -779,10 +1114,20 @@ global.resetAllMocks = () => {
   global.observing = false;
   global.observer_follow_player = null;
   global.observer_last_unit_spread = null;
+  global.observer_last_territory_radius = null;
+  global.observer_last_global_spread = null;
   if (global.observer_auto_center_interval) {
     clearInterval(global.observer_auto_center_interval);
   }
   global.observer_auto_center_interval = null;
+  if (global.observer_initial_center_interval) {
+    clearInterval(global.observer_initial_center_interval);
+  }
+  global.observer_initial_center_interval = null;
+  if (global.observer_player_search_interval) {
+    clearInterval(global.observer_player_search_interval);
+  }
+  global.observer_player_search_interval = null;
   global.OBSERVER_AUTO_CENTER_MS = 5000;
   global.embed_mode = false;
   global.players = {};
