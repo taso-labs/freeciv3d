@@ -1043,37 +1043,40 @@ class StateExtractor:
         if moves_left > 0:
             # Pre-compute city tile indexes for efficient lookup
             city_tiles = set()
+            city_owners = {}  # Map tile index to city owner
             if civcom:
                 for city_id, city in civcom.player_cities.items():
                     city_tile = city.get('tile')
                     if city_tile is not None:
                         city_tiles.add(city_tile)
+                        city_owners[city_tile] = city.get('owner')
                 # Also check enemy cities
                 for city in getattr(civcom, 'other_cities', {}).values():
                     city_tile = city.get('tile')
                     if city_tile is not None:
                         city_tiles.add(city_tile)
-            
+                        city_owners[city_tile] = city.get('owner')
+
             for direction in directions:
                 target_x, target_y, target_index = get_target_tile(direction)
-                
+
                 is_valid = True
                 reason = None
-                
+
                 # Check terrain accessibility if we have civcom data
                 if civcom and target_index is not None:
                     tile = civcom.tiles.get(target_index)
                     if tile:
                         terrain_id = tile.get('terrain')
                         terrain_class = civcom.get_terrain_class(terrain_id) if terrain_id is not None else TC_LAND
-                        
+
                         # Get unit class info for terrain checking
                         unit_type_data = civcom.unit_types.get(unit_type_id, {})
                         unit_class_id = unit_type_data.get('unit_class')
-                        
+
                         # Check if target tile has a city (cities allow entry for most unit types)
                         tile_has_city = target_index in city_tiles
-                        
+
                         # Use proper native_to checking if available, fall back to class name check
                         if unit_class_id is not None and terrain_id is not None:
                             is_native = civcom.is_unit_class_native_to_terrain(unit_class_id, terrain_id)
@@ -1090,7 +1093,7 @@ class StateExtractor:
                             # Fallback: simple land/sea check by class name
                             unit_class = civcom.unit_classes.get(unit_class_id, {}) if unit_class_id else {}
                             class_name = unit_class.get('name', '').lower()
-                            
+
                             if terrain_class == TC_OCEAN and not tile_has_city:
                                 # Check if unit class can enter ocean
                                 # Sea, Trireme, Air, Helicopter can enter ocean
@@ -1103,8 +1106,24 @@ class StateExtractor:
                                 if class_name in ('sea', 'trireme'):
                                     is_valid = False
                                     reason = "Cannot enter land (naval unit)"
-                
-                add_action('move', {'direction': direction, 'target': {'x': target_x, 'y': target_y}}, 
+
+                # Diplomatic state validation: block movement into foreign territory during peace/alliance
+                # Per FreeCiv rules: "Peace prevents moving military units into other's territory"
+                if is_valid and civcom and target_index is not None:
+                    target_owner = city_owners.get(target_index)
+
+                    # If moving into foreign territory (city owner != current player)
+                    if target_owner is not None and target_owner != player_id:
+                        ds = civcom.get_diplstate(player_id, target_owner)
+                        ds_type = ds.get('type') if ds else None
+
+                        # Only allow movement if at war with target territory owner
+                        if ds_type != civcom.DS_WAR:
+                            is_valid = False
+                            ds_name = civcom.DS_NAMES.get(ds_type, 'unknown')
+                            reason = f"Cannot move into foreign territory - at {ds_name} with player {target_owner}"
+
+                add_action('move', {'direction': direction, 'target': {'x': target_x, 'y': target_y}},
                           is_valid, reason)
         
         # === CITY FOUNDING ACTIONS ===
