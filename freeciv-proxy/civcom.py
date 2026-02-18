@@ -2074,10 +2074,9 @@ class CivCom(Thread):
                         'has_reason_to_cancel': packet.get('has_reason_to_cancel', 0),
                         'contact_turns_left': packet.get('contact_turns_left', 0),
                     }
-                    ds_names = {0: 'war', 1: 'armistice', 2: 'ceasefire', 3: 'peace', 4: 'alliance', 5: 'no_contact'}
                     logger.debug(
                         f"Diplomatic state: player {plr1} <-> player {plr2}: "
-                        f"{ds_names.get(ds_type, f'unknown({ds_type})')}"
+                        f"{self.DS_NAMES.get(ds_type, f'unknown({ds_type})')}"
                     )
 
             # DIPLOMACY INIT MEETING packet - server notifies a meeting has been initiated
@@ -2161,11 +2160,56 @@ class CivCom(Thread):
     DS_NO_CONTACT = 5
     DS_NAMES = {0: 'war', 1: 'armistice', 2: 'ceasefire', 3: 'peace', 4: 'alliance', 5: 'no_contact'}
 
+    def has_adjacent_foreign_unit(self, tile_index, player_id):
+        """Check if a tile has adjacent foreign units.
+
+        Used for expel unit action availability and spy proximity checks.
+        Handles map wrapping for toroidal maps.
+
+        Args:
+            tile_index: Tile index to check
+            player_id: Current player ID (to identify foreign units)
+
+        Returns:
+            bool: True if any adjacent tile has a unit owned by another player
+        """
+        if tile_index is None or not hasattr(self, 'other_units'):
+            return False
+
+        xsize = self.map_info.get('width', 80)
+        x, y = tile_index % xsize, tile_index // xsize
+        wrap_x = self.map_info.get('wrap_x', True)
+
+        # Check 8 adjacent tiles + center
+        for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (-1, 1), (1, -1), (1, 1), (0, 0)]:
+            adj_x = (x + dx) % xsize if wrap_x else x + dx
+            adj_y = y + dy
+            # Skip out-of-bounds for non-wrapping maps
+            if not wrap_x and (adj_x < 0 or adj_x >= xsize):
+                continue
+            adj_tile = adj_x + adj_y * xsize
+            for other_unit in self.other_units.values():
+                if other_unit.get('tile') == adj_tile and other_unit.get('owner') != player_id:
+                    return True
+        return False
+
     def get_diplstate(self, player1_id, player2_id):
         """Get the diplomatic state between two players.
 
-        Returns dict with 'type' (int), 'type_name' (str), 'turns_left', etc.
-        Defaults to DS_NO_CONTACT if no state is tracked.
+        Handles bidirectional lookup: tries (player1_id, player2_id) then (player2_id, player1_id).
+        Defaults to DS_NO_CONTACT if no tracked state exists.
+
+        Args:
+            player1_id: First player ID
+            player2_id: Second player ID
+
+        Returns:
+            dict with keys:
+                - 'type': int (DS_WAR, DS_ARMISTICE, DS_CEASEFIRE, DS_PEACE, DS_ALLIANCE, DS_NO_CONTACT)
+                - 'type_name': str (human-readable state name)
+                - 'turns_left': int (turns until state expires, -1 if permanent)
+                - 'has_reason_to_cancel': bool (can player cancel this state)
+                - 'contact_turns_left': int (turns until contact is established)
         """
         state = self.diplomatic_states.get((player1_id, player2_id))
         if state is None:
@@ -2565,12 +2609,29 @@ class CivCom(Thread):
             player_id: The player ID
 
         Returns:
-            list: List of diplomacy action dicts
+            list: List of diplomacy action dicts with schema:
+                {
+                    'action': str (e.g., 'diplomacy_declare_war'),
+                    'params': dict (target player_id, player_name, message if applicable),
+                    'is_valid': bool (always True from this generator),
+                    'type': 'diplomacy' (for category identification)
+                }
+
+        Note:
+            Actions generated per player depend on:
+            - Current diplomatic state (war/peace/alliance)
+            - Active meeting status (some actions require a meeting)
+            - Clause presence in meeting (accept/reject only when clauses exist)
+            Eliminated players are excluded from action generation.
         """
         actions = []
 
-        # Get all other known players
-        other_players = [p for p in self.all_players if p.get('id') != player_id]
+        # Get all other alive players (excluding self)
+        # Eliminated players have 'eliminated' flag set or are marked as defeated
+        other_players = [
+            p for p in self.all_players
+            if p.get('id') != player_id and not p.get('eliminated', False)
+        ]
         if not other_players:
             return actions
 

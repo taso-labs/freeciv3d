@@ -1414,23 +1414,10 @@ class StateExtractor:
             add_action('spy_attack', {}, True, None, ACTION_SPY_ATTACK)
 
         # === EXPEL ACTION ===
-        # Expel foreign units from your territory
+        # Expel foreign units from your territory (military units only)
         if can_do_action(ACTION_EXPEL_UNIT):
-            # Reuse has_adjacent_enemy from spy check above, or recompute
-            has_enemy_nearby = False
-            if civcom and tile_index is not None:
-                xsize = civcom.map_info.get('width', 80)
-                for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (-1, 1), (1, -1), (1, 1), (0, 0)]:
-                    adj_x, adj_y = x + dx, y + dy
-                    if civcom.map_info.get('wrap_x', True):
-                        adj_x = adj_x % xsize
-                    adj_tile = adj_x + adj_y * xsize
-                    for other_unit in getattr(civcom, 'other_units', {}).values():
-                        if other_unit.get('tile') == adj_tile and other_unit.get('owner') != player_id:
-                            has_enemy_nearby = True
-                            break
-                    if has_enemy_nearby:
-                        break
+            # Check if there's an adjacent foreign unit using shared helper
+            has_enemy_nearby = civcom and tile_index is not None and civcom.has_adjacent_foreign_unit(tile_index, player_id)
             add_action('expel', {}, has_enemy_nearby,
                      None if has_enemy_nearby else "No foreign unit nearby",
                      ACTION_EXPEL_UNIT)

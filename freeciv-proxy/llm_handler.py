@@ -1659,7 +1659,9 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 normalized["target_city_id"] = action_data["target_city_id"]
 
         elif action_type.startswith("diplomacy_"):
-            # Diplomacy actions: extract player_id from target
+            # Diplomacy actions use different structure than unit/city actions
+            # Instead of actor_id/target_unit_id, they use player_id (target) and message (for diplomacy_message)
+            # Target dict contains {'player_id': int, 'player_name': str, 'message': str (optional)}
             target = action_data.get("target", {})
             if isinstance(target, dict):
                 if "player_id" in target:
@@ -4067,6 +4069,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
         elif action_type == 'diplomacy_message':
             message = action.get('message', '')
             target_player = action.get('player_id', -1)
+            # FreeCiv chat protocol: /msg <player_id> <message> sends private message to target player
             return {
                 'pid': PACKET_CHAT_MSG_REQ,
                 'message': f"/msg {target_player} {message}" if target_player >= 0 else message,

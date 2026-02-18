@@ -26,23 +26,8 @@ os.environ.setdefault('CACHE_HMAC_SECRET', secrets.token_hex(32))
 import pytest
 from unittest.mock import Mock, MagicMock, patch
 
-from action_constants import (
-    ACTION_SPY_TARGETED_SABOTAGE_CITY,
-    ACTION_SPY_TARGETED_STEAL_TECH,
-    ACTION_SPY_STEAL_GOLD,
-    ACTION_STEAL_MAPS,
-    ACTION_SPY_SPREAD_PLAGUE,
-    ACTION_SPY_NUKE,
-    ACTION_EXPEL_UNIT,
-)
-from packet_constants import (
-    PACKET_DIPLOMACY_CANCEL_MEETING_REQ,
-    PACKET_DIPLOMACY_CANCEL_PACT,
-    PACKET_CHAT_MSG_REQ,
-    PACKET_DIPLOMACY_INIT_MEETING_REQ,
-    PACKET_DIPLOMACY_ACCEPT_TREATY_REQ,
-    PACKET_DIPLOMACY_CREATE_CLAUSE_REQ,
-)
+from action_constants import *
+from packet_constants import *
 from packet_converter import convert_action_to_packet
 
 
