@@ -59,6 +59,11 @@ from packet_constants import (
     PACKET_PLAYER_READY,  # Player ready signal
     PACKET_PLAYER_RESEARCH,  # Player research selection
     PACKET_UNIT_ORDERS,  # Unit order queue for pathfinding
+    PACKET_PLAYER_DIPLSTATE,  # Player diplomatic state (war/peace/ceasefire/alliance)
+    PACKET_DIPLOMACY_INIT_MEETING,  # Diplomatic meeting initiated (sc)
+    PACKET_DIPLOMACY_CANCEL_MEETING,  # Diplomatic meeting cancelled (sc)
+    PACKET_DIPLOMACY_CREATE_CLAUSE,  # Treaty clause created (sc)
+    PACKET_DIPLOMACY_ACCEPT_TREATY,  # Treaty accepted (sc)
     get_packet_name
 )
 
@@ -400,6 +405,15 @@ class CivCom(Thread):
         # Used by llm_handler to detect "already connected" and retry after cleanup
         self.join_rejected = False
         self.join_rejection_reason = None  # e.g. "'username' already connected."
+
+        # Diplomatic state tracking - populated from PACKET_PLAYER_DIPLSTATE (pid 59)
+        # Keyed by (player1_id, player2_id) tuple, stores diplomatic relationship
+        # DS_WAR=0, DS_ARMISTICE=1, DS_CEASEFIRE=2, DS_PEACE=3, DS_ALLIANCE=4, DS_NO_CONTACT=5
+        self.diplomatic_states = {}  # {(p1, p2): {type, turns_left, has_reason_to_cancel, contact_turns_left}}
+
+        # Active diplomacy meetings - populated from PACKET_DIPLOMACY_INIT_MEETING
+        # Keyed by counterpart player_id, stores meeting state
+        self.diplomacy_meetings = {}  # {counterpart_id: {clauses: [], accept_self: bool, accept_other: bool}}
 
         # Tile data storage for terrain lookups
         self.tiles = {}  # {tile_index: {terrain, extras, ...}}
@@ -2046,6 +2060,78 @@ class CivCom(Thread):
                         except Exception as e:
                             logger.error(f"Failed to send game_ended notification: {e}")
 
+            # DIPLOMATIC STATE packet - tracks war/peace/ceasefire/alliance between player pairs
+            # Sent by server whenever diplomatic relationships change
+            # DS_WAR=0, DS_ARMISTICE=1, DS_CEASEFIRE=2, DS_PEACE=3, DS_ALLIANCE=4, DS_NO_CONTACT=5
+            elif packet_type == PACKET_PLAYER_DIPLSTATE:
+                plr1 = packet.get('plr1')
+                plr2 = packet.get('plr2')
+                ds_type = packet.get('type', 5)  # Default to DS_NO_CONTACT
+                if plr1 is not None and plr2 is not None:
+                    self.diplomatic_states[(plr1, plr2)] = {
+                        'type': ds_type,
+                        'turns_left': packet.get('turns_left', -1),
+                        'has_reason_to_cancel': packet.get('has_reason_to_cancel', 0),
+                        'contact_turns_left': packet.get('contact_turns_left', 0),
+                    }
+                    ds_names = {0: 'war', 1: 'armistice', 2: 'ceasefire', 3: 'peace', 4: 'alliance', 5: 'no_contact'}
+                    logger.debug(
+                        f"Diplomatic state: player {plr1} <-> player {plr2}: "
+                        f"{ds_names.get(ds_type, f'unknown({ds_type})')}"
+                    )
+
+            # DIPLOMACY INIT MEETING packet - server notifies a meeting has been initiated
+            elif packet_type == PACKET_DIPLOMACY_INIT_MEETING:
+                counterpart = packet.get('counterpart')
+                if counterpart is not None:
+                    self.diplomacy_meetings[counterpart] = {
+                        'clauses': [],
+                        'accept_self': False,
+                        'accept_other': False,
+                    }
+                    logger.info(f"Diplomacy meeting initiated with player {counterpart} for {self.username}")
+
+            # DIPLOMACY CREATE CLAUSE packet - server notifies a clause was added to a treaty
+            elif packet_type == PACKET_DIPLOMACY_CREATE_CLAUSE:
+                counterpart = packet.get('counterpart')
+                giver = packet.get('giver')
+                clause_type = packet.get('type')
+                value = packet.get('value', 0)
+                if counterpart is not None and counterpart in self.diplomacy_meetings:
+                    self.diplomacy_meetings[counterpart]['clauses'].append({
+                        'giver': giver,
+                        'type': clause_type,
+                        'value': value,
+                    })
+                    # Reset acceptance since treaty changed
+                    self.diplomacy_meetings[counterpart]['accept_self'] = False
+                    self.diplomacy_meetings[counterpart]['accept_other'] = False
+                    logger.info(
+                        f"Treaty clause added: type={clause_type}, value={value}, "
+                        f"giver={giver}, counterpart={counterpart}"
+                    )
+
+            # DIPLOMACY ACCEPT TREATY packet - server notifies treaty acceptance
+            elif packet_type == PACKET_DIPLOMACY_ACCEPT_TREATY:
+                counterpart = packet.get('counterpart')
+                i_accepted = packet.get('i_accepted', False)
+                other_accepted = packet.get('other_accepted', False)
+                if counterpart is not None and counterpart in self.diplomacy_meetings:
+                    self.diplomacy_meetings[counterpart]['accept_self'] = i_accepted
+                    self.diplomacy_meetings[counterpart]['accept_other'] = other_accepted
+                    logger.info(
+                        f"Treaty acceptance update: counterpart={counterpart}, "
+                        f"i_accepted={i_accepted}, other_accepted={other_accepted}"
+                    )
+                    # If both accepted, meeting will be closed by server (cancel_meeting follows)
+
+            # DIPLOMACY CANCEL MEETING packet - server notifies meeting was cancelled/completed
+            elif packet_type == PACKET_DIPLOMACY_CANCEL_MEETING:
+                counterpart = packet.get('counterpart')
+                if counterpart is not None and counterpart in self.diplomacy_meetings:
+                    del self.diplomacy_meetings[counterpart]
+                    logger.info(f"Diplomacy meeting ended with player {counterpart} for {self.username}")
+
             # CRITICAL: Connection ping packet - MUST respond with pong to keep connection alive
             # FreeCiv civserver sends PACKET_CONN_PING every ~2 minutes to verify connection health
             # Without responding with PACKET_CONN_PONG, the server will timeout and disconnect with "ping timeout"
@@ -2065,6 +2151,60 @@ class CivCom(Thread):
 
         except (json.JSONDecodeError, KeyError, TypeError) as e:
             logger.debug(f"Could not parse packet for state storage: {e}")
+
+    # Diplomatic state constants
+    DS_WAR = 0
+    DS_ARMISTICE = 1
+    DS_CEASEFIRE = 2
+    DS_PEACE = 3
+    DS_ALLIANCE = 4
+    DS_NO_CONTACT = 5
+    DS_NAMES = {0: 'war', 1: 'armistice', 2: 'ceasefire', 3: 'peace', 4: 'alliance', 5: 'no_contact'}
+
+    def get_diplstate(self, player1_id, player2_id):
+        """Get the diplomatic state between two players.
+
+        Returns dict with 'type' (int), 'type_name' (str), 'turns_left', etc.
+        Defaults to DS_NO_CONTACT if no state is tracked.
+        """
+        state = self.diplomatic_states.get((player1_id, player2_id))
+        if state is None:
+            # Try reverse direction
+            state = self.diplomatic_states.get((player2_id, player1_id))
+        if state is None:
+            state = {'type': self.DS_NO_CONTACT, 'turns_left': -1, 'has_reason_to_cancel': 0, 'contact_turns_left': 0}
+        return {
+            **state,
+            'type_name': self.DS_NAMES.get(state['type'], f"unknown({state['type']})"),
+        }
+
+    def get_all_diplstates_for_player(self, player_id):
+        """Get diplomatic states between this player and all other known players.
+
+        Returns dict keyed by other player_id with diplomatic state info.
+        """
+        result = {}
+        for (p1, p2), state in self.diplomatic_states.items():
+            if p1 == player_id:
+                result[p2] = {**state, 'type_name': self.DS_NAMES.get(state['type'], f"unknown({state['type']})")}
+            elif p2 == player_id:
+                result[p1] = {**state, 'type_name': self.DS_NAMES.get(state['type'], f"unknown({state['type']})")}
+        return result
+
+    def get_all_players_with_diplomacy(self, requesting_player_id):
+        """Get all_players list enriched with diplomatic state relative to requesting player.
+
+        Returns a copy of all_players with 'diplomatic_status' field added.
+        """
+        enriched = []
+        for player in self.all_players:
+            player_copy = dict(player)
+            other_id = player.get('id')
+            if other_id is not None and other_id != requesting_player_id:
+                ds = self.get_diplstate(requesting_player_id, other_id)
+                player_copy['diplomatic_status'] = ds['type_name']
+            enriched.append(player_copy)
+        return enriched
 
     # LLM-optimized state query methods
     def _normalize_to_dict(self, collection):
@@ -2110,8 +2250,9 @@ class CivCom(Thread):
 
         # Convert all_players list to dict keyed by player ID (as string)
         # Required for agent-clash FreeCivState compatibility
+        # Enrich with diplomatic state relative to requesting player
         players_dict = {}
-        for p in getattr(self, 'all_players', []):
+        for p in self.get_all_players_with_diplomacy(player_id):
             pid = p.get('id') if isinstance(p, dict) else None
             if pid is not None:
                 players_dict[str(pid)] = p
@@ -2414,6 +2555,135 @@ class CivCom(Thread):
         
         return actions
 
+    def _get_diplomacy_actions(self, player_id):
+        """Generate legal diplomacy actions based on current diplomatic state.
+
+        Player-level actions (not tied to any unit) that allow agents to
+        negotiate treaties, declare war, share vision, etc.
+
+        Args:
+            player_id: The player ID
+
+        Returns:
+            list: List of diplomacy action dicts
+        """
+        actions = []
+
+        # Get all other known players
+        other_players = [p for p in self.all_players if p.get('id') != player_id]
+        if not other_players:
+            return actions
+
+        for other_player in other_players:
+            other_id = other_player.get('id')
+            if other_id is None:
+                continue
+
+            ds = self.get_diplstate(player_id, other_id)
+            ds_type = ds['type']
+            in_meeting = other_id in self.diplomacy_meetings
+
+            other_name = other_player.get('name', f'Player{other_id}')
+
+            # diplomacy_start_negotiation — available when not currently in a meeting
+            if not in_meeting:
+                actions.append({
+                    'action': 'diplomacy_start_negotiation',
+                    'params': {'player_id': other_id, 'player_name': other_name},
+                    'is_valid': True,
+                    'type': 'diplomacy',
+                })
+
+            # diplomacy_declare_war — available when not already at war
+            if ds_type != self.DS_WAR:
+                actions.append({
+                    'action': 'diplomacy_declare_war',
+                    'params': {'player_id': other_id, 'player_name': other_name},
+                    'is_valid': True,
+                    'type': 'diplomacy',
+                })
+
+            # diplomacy_message — always available
+            actions.append({
+                'action': 'diplomacy_message',
+                'params': {'player_id': other_id, 'player_name': other_name, 'message': ''},
+                'is_valid': True,
+                'type': 'diplomacy',
+            })
+
+            # Actions that require an active meeting
+            if in_meeting:
+                meeting = self.diplomacy_meetings[other_id]
+                has_clauses = len(meeting.get('clauses', [])) > 0
+
+                # Propose treaty clauses (only when in meeting)
+                if ds_type in (self.DS_WAR, self.DS_ARMISTICE):
+                    actions.append({
+                        'action': 'diplomacy_propose_ceasefire',
+                        'params': {'player_id': other_id, 'player_name': other_name},
+                        'is_valid': True,
+                        'type': 'diplomacy',
+                    })
+
+                if ds_type != self.DS_PEACE and ds_type != self.DS_ALLIANCE:
+                    actions.append({
+                        'action': 'diplomacy_propose_peace',
+                        'params': {'player_id': other_id, 'player_name': other_name},
+                        'is_valid': True,
+                        'type': 'diplomacy',
+                    })
+
+                if ds_type == self.DS_PEACE:
+                    actions.append({
+                        'action': 'diplomacy_propose_alliance',
+                        'params': {'player_id': other_id, 'player_name': other_name},
+                        'is_valid': True,
+                        'type': 'diplomacy',
+                    })
+
+                # Share/withdraw vision
+                actions.append({
+                    'action': 'diplomacy_share_vision',
+                    'params': {'player_id': other_id, 'player_name': other_name},
+                    'is_valid': True,
+                    'type': 'diplomacy',
+                })
+
+                # Accept/reject treaty (when clauses exist)
+                if has_clauses:
+                    actions.append({
+                        'action': 'diplomacy_accept_treaty',
+                        'params': {'player_id': other_id, 'player_name': other_name},
+                        'is_valid': True,
+                        'type': 'diplomacy',
+                    })
+                    actions.append({
+                        'action': 'diplomacy_reject_treaty',
+                        'params': {'player_id': other_id, 'player_name': other_name},
+                        'is_valid': True,
+                        'type': 'diplomacy',
+                    })
+
+            # Cancel existing treaty (when peace, ceasefire, or alliance is active)
+            if ds_type in (self.DS_CEASEFIRE, self.DS_PEACE, self.DS_ALLIANCE):
+                actions.append({
+                    'action': 'diplomacy_cancel_treaty',
+                    'params': {'player_id': other_id, 'player_name': other_name},
+                    'is_valid': True,
+                    'type': 'diplomacy',
+                })
+
+            # Withdraw vision (doesn't require a meeting)
+            if ds_type in (self.DS_PEACE, self.DS_ALLIANCE):
+                actions.append({
+                    'action': 'diplomacy_withdraw_vision',
+                    'params': {'player_id': other_id, 'player_name': other_name},
+                    'is_valid': True,
+                    'type': 'diplomacy',
+                })
+
+        return actions
+
     def _get_legal_actions_optimized(self, player_id):
         """Pre-compute top legal actions for LLM.
 
@@ -2421,11 +2691,13 @@ class CivCom(Thread):
         - Unit actions: NOT cached (regenerated every call)
         - City production: Cached per turn
         - Tech research: Cached per turn, only when researching==A_UNSET
+        - Diplomacy: NOT cached (depends on meeting state)
 
         Per-category handling:
         - Unit actions: all units with moves remaining
         - City production: all cities needing production selection
         - Tech research: all researchable techs (when needed)
+        - Diplomacy: player-level actions based on diplomatic state
 
         Args:
             player_id: The player ID
@@ -2447,6 +2719,10 @@ class CivCom(Thread):
         tech_actions = self._get_tech_research_actions(player_id)
         all_actions.extend(tech_actions)
 
+        # Get diplomacy actions (NOT CACHED - depends on meeting state)
+        diplomacy_actions = self._get_diplomacy_actions(player_id)
+        all_actions.extend(diplomacy_actions)
+
         return all_actions
 
     def _score_and_filter_actions(self, actions, max_actions):
@@ -2464,7 +2740,7 @@ class CivCom(Thread):
         scored_actions.sort(key=lambda x: x[0], reverse=True)
         return [action for score, action in scored_actions[:max_actions]]
 
-    def _build_state_dict(self, units, cities, game_extra=None):
+    def _build_state_dict(self, units, cities, game_extra=None, requesting_player_id=None):
         """Shared helper that assembles the full state dict.
 
         Args:
@@ -2472,13 +2748,18 @@ class CivCom(Thread):
             cities: Pre-built cities dict (filtered or unfiltered).
             game_extra: Optional extra keys merged into the ``game`` sub-dict
                         (e.g. ``{'current_player': pid}``).
+            requesting_player_id: If provided, enrich players with diplomatic
+                                  state relative to this player.
 
         Returns:
             Complete state dict with turn, phase, units, cities, players,
             techs, wonders, spaceship, map, and game metadata.
         """
         map_info = self._get_valid_map_info()
-        all_players_raw = getattr(self, 'all_players', [])
+        if requesting_player_id is not None:
+            all_players_raw = self.get_all_players_with_diplomacy(requesting_player_id)
+        else:
+            all_players_raw = getattr(self, 'all_players', [])
         players_dict = self._normalize_to_dict(all_players_raw)
 
         game_turn = getattr(self, 'game_turn', 1)
@@ -2520,6 +2801,7 @@ class CivCom(Thread):
             units=player_units_dict,
             cities=player_cities_dict,
             game_extra={'current_player': player_id},
+            requesting_player_id=player_id,
         )
         state['player_id'] = player_id
         state['visible_tiles'] = getattr(self, 'visible_tiles', [])

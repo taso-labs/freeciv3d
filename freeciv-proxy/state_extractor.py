@@ -954,6 +954,10 @@ class StateExtractor:
             ACTION_ESTABLISH_EMBASSY, ACTION_SPY_INVESTIGATE_CITY, ACTION_SPY_POISON,
             ACTION_SPY_SABOTAGE_CITY, ACTION_SPY_STEAL_TECH, ACTION_SPY_INCITE_CITY,
             ACTION_SPY_BRIBE_UNIT, ACTION_SPY_SABOTAGE_UNIT, ACTION_SPY_ATTACK,
+            ACTION_SPY_TARGETED_SABOTAGE_CITY, ACTION_SPY_TARGETED_STEAL_TECH,
+            ACTION_SPY_STEAL_GOLD, ACTION_STEAL_MAPS,
+            ACTION_SPY_SPREAD_PLAGUE, ACTION_SPY_NUKE,
+            ACTION_EXPEL_UNIT,
             ACTION_DISBAND_UNIT, ACTION_HOME_CITY, ACTION_UPGRADE_UNIT,
             ACTION_CONVERT, ACTION_AIRLIFT, ACTION_PARADROP,
             ACTION_TRANSPORT_BOARD, ACTION_TRANSPORT_DEBOARD,
@@ -1342,6 +1346,12 @@ class StateExtractor:
             (ACTION_SPY_SABOTAGE_CITY, 'sabotage_city'),
             (ACTION_SPY_STEAL_TECH, 'steal_tech'),
             (ACTION_SPY_INCITE_CITY, 'incite_city'),
+            (ACTION_SPY_TARGETED_SABOTAGE_CITY, 'targeted_sabotage_city'),
+            (ACTION_SPY_TARGETED_STEAL_TECH, 'targeted_steal_tech'),
+            (ACTION_SPY_STEAL_GOLD, 'steal_gold'),
+            (ACTION_STEAL_MAPS, 'steal_maps'),
+            (ACTION_SPY_SPREAD_PLAGUE, 'spread_plague'),
+            (ACTION_SPY_NUKE, 'spy_nuke'),
         ]
         
         # Check for adjacent foreign cities for city-based espionage
@@ -1402,7 +1412,29 @@ class StateExtractor:
         
         if can_do_action(ACTION_SPY_ATTACK):
             add_action('spy_attack', {}, True, None, ACTION_SPY_ATTACK)
-        
+
+        # === EXPEL ACTION ===
+        # Expel foreign units from your territory
+        if can_do_action(ACTION_EXPEL_UNIT):
+            # Reuse has_adjacent_enemy from spy check above, or recompute
+            has_enemy_nearby = False
+            if civcom and tile_index is not None:
+                xsize = civcom.map_info.get('width', 80)
+                for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (-1, 1), (1, -1), (1, 1), (0, 0)]:
+                    adj_x, adj_y = x + dx, y + dy
+                    if civcom.map_info.get('wrap_x', True):
+                        adj_x = adj_x % xsize
+                    adj_tile = adj_x + adj_y * xsize
+                    for other_unit in getattr(civcom, 'other_units', {}).values():
+                        if other_unit.get('tile') == adj_tile and other_unit.get('owner') != player_id:
+                            has_enemy_nearby = True
+                            break
+                    if has_enemy_nearby:
+                        break
+            add_action('expel', {}, has_enemy_nearby,
+                     None if has_enemy_nearby else "No foreign unit nearby",
+                     ACTION_EXPEL_UNIT)
+
         # === TRANSPORT ACTIONS ===
         # Only offer disembark/deboard if unit is actually on a transport
         # Only offer embark/board if unit is NOT on a transport
@@ -1589,32 +1621,44 @@ class StateExtractor:
             ACTION_ESTABLISH_EMBASSY, ACTION_SPY_INVESTIGATE_CITY, ACTION_SPY_POISON,
             ACTION_SPY_SABOTAGE_CITY, ACTION_SPY_STEAL_TECH, ACTION_SPY_INCITE_CITY,
             ACTION_SPY_BRIBE_UNIT, ACTION_SPY_SABOTAGE_UNIT,
+            ACTION_SPY_TARGETED_SABOTAGE_CITY, ACTION_SPY_TARGETED_STEAL_TECH,
+            ACTION_SPY_STEAL_GOLD, ACTION_STEAL_MAPS,
+            ACTION_SPY_SPREAD_PLAGUE, ACTION_SPY_NUKE,
+            ACTION_EXPEL_UNIT,
             ACTION_PARADROP, ACTION_NUKE,
         )
-        
+
         # Settler actions
         settler_types = ('settler', 'settlers', 'colonist')
         if action_id in (ACTION_FOUND_CITY, ACTION_JOIN_CITY):
             return any(s in unit_type_name for s in settler_types)
-        
+
         # Worker/Engineer actions
         worker_types = ('worker', 'workers', 'engineer', 'engineers', 'settler', 'settlers')
         if action_id in (ACTION_ROAD, ACTION_IRRIGATE, ACTION_MINE, ACTION_BASE,
                         ACTION_CULTIVATE, ACTION_PLANT, ACTION_TRANSFORM_TERRAIN):
             return any(w in unit_type_name for w in worker_types)
-        
+
         # Caravan/Freight actions
         trade_types = ('caravan', 'freight')
         if action_id in (ACTION_TRADE_ROUTE, ACTION_MARKETPLACE, ACTION_HELP_WONDER):
             return any(t in unit_type_name for t in trade_types)
-        
-        # Diplomat/Spy actions
+
+        # Diplomat/Spy actions (all espionage actions)
         spy_types = ('diplomat', 'spy')
         if action_id in (ACTION_ESTABLISH_EMBASSY, ACTION_SPY_INVESTIGATE_CITY,
                         ACTION_SPY_POISON, ACTION_SPY_SABOTAGE_CITY,
                         ACTION_SPY_STEAL_TECH, ACTION_SPY_INCITE_CITY,
-                        ACTION_SPY_BRIBE_UNIT, ACTION_SPY_SABOTAGE_UNIT):
+                        ACTION_SPY_BRIBE_UNIT, ACTION_SPY_SABOTAGE_UNIT,
+                        ACTION_SPY_TARGETED_SABOTAGE_CITY, ACTION_SPY_TARGETED_STEAL_TECH,
+                        ACTION_SPY_STEAL_GOLD, ACTION_STEAL_MAPS,
+                        ACTION_SPY_SPREAD_PLAGUE, ACTION_SPY_NUKE):
             return any(s in unit_type_name for s in spy_types)
+
+        # Expel unit - most military units can expel foreign units from territory
+        if action_id == ACTION_EXPEL_UNIT:
+            civilian_types = ('settler', 'worker', 'engineer', 'caravan', 'freight', 'explorer')
+            return not any(c in unit_type_name for c in civilian_types)
         
         # Paradrop action
         if action_id == ACTION_PARADROP:
@@ -2102,9 +2146,43 @@ class StateExtractor:
         # Simple scoring: cities worth more than units
         return len(cities) * 10 + len(units) * 2
 
-    def _get_diplomatic_summary(self, state: Dict[str, Any], player_id: int) -> Dict[str, str]:
-        """Get simplified diplomatic status (placeholder)"""
-        return {"status": "neutral"}  # Simplified for MVP
+    def _get_diplomatic_summary(self, state: Dict[str, Any], player_id: int) -> Dict[str, Any]:
+        """Get diplomatic status with all other known players.
+
+        Returns relationships from civcom's diplomatic_states tracking
+        and any active diplomacy meetings.
+        """
+        civcom = self._get_civcom_for_player(player_id)
+        if not civcom:
+            return {"status": "neutral"}  # Fallback when no civcom available
+
+        relationships = {}
+        diplstates = civcom.get_all_diplstates_for_player(player_id)
+        for other_id, ds in diplstates.items():
+            # Find player name for readability
+            player_name = None
+            for p in civcom.all_players:
+                if p.get('id') == other_id:
+                    player_name = p.get('name', f'Player{other_id}')
+                    break
+            relationships[str(other_id)] = {
+                'player_name': player_name or f'Player{other_id}',
+                'state': ds['type_name'],
+                'turns_left': ds['turns_left'],
+            }
+
+        active_meetings = {}
+        for counterpart_id, meeting in civcom.diplomacy_meetings.items():
+            active_meetings[str(counterpart_id)] = {
+                'clauses': meeting['clauses'],
+                'i_accepted': meeting['accept_self'],
+                'other_accepted': meeting['accept_other'],
+            }
+
+        result = {'relationships': relationships}
+        if active_meetings:
+            result['active_meetings'] = active_meetings
+        return result
 
     def _assess_relative_strength(self, state: Dict[str, Any], player_id: int) -> str:
         """Assess military strength relative to others"""

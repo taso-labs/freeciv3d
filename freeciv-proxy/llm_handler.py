@@ -51,6 +51,7 @@ from packet_constants import (
     PACKET_DIPLOMACY_REMOVE_CLAUSE_REQ,
     PACKET_DIPLOMACY_ACCEPT_TREATY_REQ,
     PACKET_DIPLOMACY_CANCEL_PACT,
+    PACKET_CHAT_MSG_REQ,
 )
 from action_constants import *
 from activity_constants import *
@@ -1553,7 +1554,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                     normalized["unit_id"] = action_data["actor_id"]
                 elif action_type.startswith("city_"):
                     normalized["city_id"] = action_data["actor_id"]
-                elif action_type in ("tech_research", "end_turn", "diplomacy_message"):
+                elif action_type in ("tech_research", "end_turn") or action_type.startswith("diplomacy_"):
                     normalized["player_id"] = action_data["actor_id"]
                 else:
                     # Fallback: if unknown action type, leave as player_id to be conservative
@@ -1656,6 +1657,19 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 normalized["target_unit_id"] = action_data["target_unit_id"]
             if "target_city_id" in action_data:
                 normalized["target_city_id"] = action_data["target_city_id"]
+
+        elif action_type.startswith("diplomacy_"):
+            # Diplomacy actions: extract player_id from target
+            target = action_data.get("target", {})
+            if isinstance(target, dict):
+                if "player_id" in target:
+                    normalized["player_id"] = target["player_id"]
+                if "message" in target:
+                    normalized["message"] = target["message"]
+            # Ensure player_id is set for packet conversion
+            if "player_id" not in normalized and "actor_id" in action_data:
+                normalized["player_id"] = action_data["actor_id"]
+            logger.info(f"Normalized diplomacy action: {action_type} targeting player {normalized.get('player_id')}")
 
         elif action_type == "end_turn":
             # end_turn is simple - just needs player_id (already mapped above)
@@ -3281,6 +3295,18 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 except (ValueError, TypeError):
                     continue
 
+        # Diplomacy actions - generated from civcom's diplomatic state
+        if self.civcom:
+            diplomacy_actions = self.civcom._get_diplomacy_actions(self.player_id)
+            for da in diplomacy_actions:
+                action_entry = {
+                    'action_type': da['action'],
+                    'actor_id': self.player_id or 0,
+                    'target': da.get('params', {}),
+                    'is_valid': da.get('is_valid', True),
+                }
+                actions.append(action_entry)
+
         # ALWAYS add end_turn action - critical for game progression
         actions.append({
             'action_type': 'end_turn',
@@ -4025,6 +4051,25 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 'giver': action.get('giver', -1),
                 'type': 8,  # CLAUSE_VISION
                 'value': 0
+            }
+        elif action_type == 'diplomacy_reject_treaty':
+            return {
+                'pid': PACKET_DIPLOMACY_CANCEL_MEETING_REQ,
+                'counterpart': action['player_id']
+            }
+        elif action_type == 'diplomacy_cancel_treaty':
+            clause_type = action.get('clause_type', 6)  # Default to CLAUSE_PEACE
+            return {
+                'pid': PACKET_DIPLOMACY_CANCEL_PACT,
+                'other_player_id': action['player_id'],
+                'clause': clause_type
+            }
+        elif action_type == 'diplomacy_message':
+            message = action.get('message', '')
+            target_player = action.get('player_id', -1)
+            return {
+                'pid': PACKET_CHAT_MSG_REQ,
+                'message': f"/msg {target_player} {message}" if target_player >= 0 else message,
             }
 
         # =================================================================

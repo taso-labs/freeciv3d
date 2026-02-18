@@ -26,6 +26,7 @@ from packet_constants import (
     PACKET_DIPLOMACY_CREATE_CLAUSE_REQ,
     PACKET_DIPLOMACY_CANCEL_PACT,
     PACKET_DIPLOMACY_REMOVE_CLAUSE_REQ,
+    PACKET_CHAT_MSG_REQ,
 )
 from action_constants import *
 from activity_constants import *
@@ -702,6 +703,25 @@ def _convert_action_to_packet_impl(
             "giver": action.get("giver", -1),
             "type": 8,
             "value": 0,
+        }
+    elif action_type == "diplomacy_reject_treaty":
+        # Rejecting a treaty = cancelling the meeting
+        return {"pid": PACKET_DIPLOMACY_CANCEL_MEETING_REQ, "counterpart": action["player_id"]}
+    elif action_type == "diplomacy_cancel_treaty":
+        # Cancel an existing treaty/pact
+        clause_type = action.get("clause_type", 6)  # Default to peace pact
+        return {
+            "pid": PACKET_DIPLOMACY_CANCEL_PACT,
+            "other_player_id": action["player_id"],
+            "clause": clause_type,
+        }
+    elif action_type == "diplomacy_message":
+        # Send a diplomatic message via chat
+        message = action.get("message", "")
+        player_id = action.get("player_id", -1)
+        return {
+            "pid": PACKET_CHAT_MSG_REQ,
+            "message": f"/msg {player_id} {message}" if player_id >= 0 else message,
         }
 
     # City actions

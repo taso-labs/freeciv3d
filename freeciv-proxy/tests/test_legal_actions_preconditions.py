@@ -19,6 +19,16 @@ def create_mock_civcom():
     civcom.tiles = {}
     civcom.unit_classes = {}
     civcom.map_info = {'width': 80, 'height': 50}
+    civcom.all_players = []
+    civcom.diplomatic_states = {}
+    civcom.diplomacy_meetings = {}
+    civcom.DS_WAR = CivCom.DS_WAR
+    civcom.DS_ARMISTICE = CivCom.DS_ARMISTICE
+    civcom.DS_CEASEFIRE = CivCom.DS_CEASEFIRE
+    civcom.DS_PEACE = CivCom.DS_PEACE
+    civcom.DS_ALLIANCE = CivCom.DS_ALLIANCE
+    civcom.DS_NO_CONTACT = CivCom.DS_NO_CONTACT
+    civcom.DS_NAMES = CivCom.DS_NAMES
 
     # Bind the real methods we want to test
     civcom._normalize_to_dict = CivCom._normalize_to_dict.__get__(civcom)
@@ -28,6 +38,8 @@ def create_mock_civcom():
     civcom._get_unit_actions = CivCom._get_unit_actions.__get__(civcom)
     civcom._get_legal_actions_optimized = CivCom._get_legal_actions_optimized.__get__(civcom)
     civcom._is_city_producing_coinage = CivCom._is_city_producing_coinage.__get__(civcom)
+    civcom._get_diplomacy_actions = CivCom._get_diplomacy_actions.__get__(civcom)
+    civcom.get_diplstate = CivCom.get_diplstate.__get__(civcom)
 
     return civcom
 
