@@ -64,6 +64,7 @@ from packet_constants import (
     PACKET_DIPLOMACY_CANCEL_MEETING,  # Diplomatic meeting cancelled (sc)
     PACKET_DIPLOMACY_CREATE_CLAUSE,  # Treaty clause created (sc)
     PACKET_DIPLOMACY_ACCEPT_TREATY,  # Treaty accepted (sc)
+    PACKET_UNIT_DO_ACTION,  # Unit action packet for disbanding
     get_packet_name
 )
 
@@ -2087,6 +2088,76 @@ class CivCom(Thread):
                             logger.debug(
                                 f"Action cache invalidated for {self.username} due to diplomatic state change"
                             )
+
+                    # Auto-disband military units in foreign territory when peace treaty is signed
+                    # Per FreeCiv rules: foreign military units must be removed when peace is established
+                    if self.player_id is not None and self.civserver_messages is not None:
+                        # Determine which player is the foreign one
+                        foreign_player_id = None
+                        if plr1 == self.player_id:
+                            foreign_player_id = plr2
+                        elif plr2 == self.player_id:
+                            foreign_player_id = plr1
+
+                        # Check if transitioning from war-like to peace-like state
+                        if foreign_player_id is not None:
+                            # Get old state if available
+                            old_state = self.diplomatic_states.get((plr1, plr2))
+                            old_type = old_state.get('type') if old_state else None
+
+                            # War-like states: DS_WAR (0), DS_ARMISTICE (1), DS_CEASEFIRE (2)
+                            # Peace-like states: DS_PEACE (3), DS_ALLIANCE (4)
+                            was_war_like = old_type in (self.DS_WAR, self.DS_ARMISTICE, self.DS_CEASEFIRE)
+                            is_peace_like = ds_type in (self.DS_PEACE, self.DS_ALLIANCE)
+
+                            if was_war_like and is_peace_like:
+                                # Peace treaty signed - disband units in foreign territory
+                                logger.info(
+                                    f"Peace treaty signed between {self.username} and player {foreign_player_id}. "
+                                    f"Disbanding units in foreign territory."
+                                )
+
+                                units_to_disband = []
+                                units_dict = self._normalize_to_dict(self.player_units)
+
+                                # Find all units in foreign territory
+                                for unit_id, unit_data in units_dict.items():
+                                    if unit_data is None:
+                                        continue
+
+                                    unit_tile = unit_data.get('tile')
+                                    if unit_tile is None:
+                                        continue
+
+                                    # Check if tile is in foreign player's territory
+                                    # by checking if there's a city owned by foreign player at this tile
+                                    tile_owner = None
+                                    for city in getattr(self, 'other_cities', {}).values():
+                                        if city.get('tile') == unit_tile and city.get('owner') == foreign_player_id:
+                                            tile_owner = foreign_player_id
+                                            break
+
+                                    if tile_owner == foreign_player_id:
+                                        units_to_disband.append(unit_id)
+
+                                # Send disband commands for units in foreign territory
+                                for unit_id in units_to_disband:
+                                    # Create PACKET_UNIT_DO_ACTION packet for disbanding
+                                    packet = {
+                                        'pid': PACKET_UNIT_DO_ACTION,  # pid 74
+                                        'action_type': ACTION_DISBAND_UNIT,
+                                        'actor_id': unit_id,
+                                        'target_id': 0,  # Not used for disband
+                                        'sub_tgt_id': 0,  # Not used for disband
+                                        'sub_target': 0,  # Not used for disband
+                                    }
+                                    message = json.dumps(packet)
+                                    self.civserver_messages.append(message)
+
+                                if units_to_disband:
+                                    logger.info(
+                                        f"Queued {len(units_to_disband)} unit(s) for disbanding: {units_to_disband}"
+                                    )
 
             # DIPLOMACY INIT MEETING packet - server notifies a meeting has been initiated
             elif packet_type == PACKET_DIPLOMACY_INIT_MEETING:
