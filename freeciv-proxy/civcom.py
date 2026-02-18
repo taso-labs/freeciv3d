@@ -2727,11 +2727,18 @@ class CivCom(Thread):
             other_name = other_player.get('name', f'Player{other_id}')
 
             # diplomacy_start_negotiation — available when not currently in a meeting
+            # Per FreeCiv rules: requires establishing contact (via embassy or unit meeting)
             if not in_meeting:
+                # Check if we have contact (not DS_NO_CONTACT)
+                # Contact can be established via:
+                # 1. Units meeting in adjacent tiles
+                # 2. Establishing an embassy through a spy
+                has_contact = ds_type != self.DS_NO_CONTACT
+
                 actions.append({
                     'action': 'diplomacy_start_negotiation',
                     'params': {'player_id': other_id, 'player_name': other_name},
-                    'is_valid': True,
+                    'is_valid': has_contact,
                     'type': 'diplomacy',
                 })
 
@@ -2753,16 +2760,20 @@ class CivCom(Thread):
             })
 
             # Actions that require an active meeting
+            # Contact requirement: all meeting-based actions need established contact
+            has_contact = ds_type != self.DS_NO_CONTACT
+
             if in_meeting:
                 meeting = self.diplomacy_meetings[other_id]
                 has_clauses = len(meeting.get('clauses', [])) > 0
 
                 # Propose treaty clauses (only when in meeting)
+                # Per FreeCiv: can only negotiate if established contact
                 if ds_type in (self.DS_WAR, self.DS_ARMISTICE):
                     actions.append({
                         'action': 'diplomacy_propose_ceasefire',
                         'params': {'player_id': other_id, 'player_name': other_name},
-                        'is_valid': True,
+                        'is_valid': has_contact,
                         'type': 'diplomacy',
                     })
 
@@ -2770,7 +2781,7 @@ class CivCom(Thread):
                     actions.append({
                         'action': 'diplomacy_propose_peace',
                         'params': {'player_id': other_id, 'player_name': other_name},
-                        'is_valid': True,
+                        'is_valid': has_contact,
                         'type': 'diplomacy',
                     })
 
@@ -2778,30 +2789,31 @@ class CivCom(Thread):
                     actions.append({
                         'action': 'diplomacy_propose_alliance',
                         'params': {'player_id': other_id, 'player_name': other_name},
-                        'is_valid': True,
+                        'is_valid': has_contact,
                         'type': 'diplomacy',
                     })
 
-                # Share/withdraw vision
+                # Share/withdraw vision (requires contact)
                 actions.append({
                     'action': 'diplomacy_share_vision',
                     'params': {'player_id': other_id, 'player_name': other_name},
-                    'is_valid': True,
+                    'is_valid': has_contact,
                     'type': 'diplomacy',
                 })
 
                 # Accept/reject treaty (when clauses exist)
+                # Treaty negotiation requires established contact
                 if has_clauses:
                     actions.append({
                         'action': 'diplomacy_accept_treaty',
                         'params': {'player_id': other_id, 'player_name': other_name},
-                        'is_valid': True,
+                        'is_valid': has_contact,
                         'type': 'diplomacy',
                     })
                     actions.append({
                         'action': 'diplomacy_reject_treaty',
                         'params': {'player_id': other_id, 'player_name': other_name},
-                        'is_valid': True,
+                        'is_valid': has_contact,
                         'type': 'diplomacy',
                     })
 
