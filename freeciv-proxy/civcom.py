@@ -63,6 +63,7 @@ from packet_constants import (
     PACKET_DIPLOMACY_INIT_MEETING,  # Diplomatic meeting initiated (sc)
     PACKET_DIPLOMACY_CANCEL_MEETING,  # Diplomatic meeting cancelled (sc)
     PACKET_DIPLOMACY_CREATE_CLAUSE,  # Treaty clause created (sc)
+    PACKET_DIPLOMACY_CREATE_CLAUSE_REQ,  # Request to add treaty clause (cs)
     PACKET_DIPLOMACY_ACCEPT_TREATY,  # Treaty accepted (sc)
     PACKET_UNIT_DO_ACTION,  # Unit action packet for disbanding
     get_packet_name
@@ -2208,6 +2209,32 @@ class CivCom(Thread):
             elif packet_type == PACKET_DIPLOMACY_CANCEL_MEETING:
                 counterpart = packet.get('counterpart')
                 if counterpart is not None and counterpart in self.diplomacy_meetings:
+                    # Before clearing the meeting, check if treaty was accepted and includes peace/alliance
+                    # If so, automatically propose vision sharing per FreeCiv rules
+                    meeting = self.diplomacy_meetings.get(counterpart, {})
+                    if meeting.get('accept_self') and meeting.get('accept_other'):
+                        # Treaty was accepted by both - check if it includes peace/alliance
+                        ds = self.get_diplstate(self.player_id, counterpart)
+                        new_state = ds.get('type')
+                        is_peace_like = new_state in (self.DS_PEACE, self.DS_ALLIANCE)
+
+                        if is_peace_like and self.civserver_messages is not None:
+                            # Automatically enable vision sharing for peace/alliance treaties
+                            # Create diplomacy_share_vision clause proposal
+                            vision_clause = {
+                                'pid': PACKET_DIPLOMACY_CREATE_CLAUSE_REQ,
+                                'counterpart': counterpart,
+                                'giver': self.player_id,
+                                'type': 8,  # Vision-sharing clause type
+                                'value': 0,
+                            }
+                            message = json.dumps(vision_clause)
+                            self.civserver_messages.append(message)
+                            logger.info(
+                                f"Auto-proposing vision sharing with player {counterpart} "
+                                f"due to {self.DS_NAMES.get(new_state, 'unknown')} treaty for {self.username}"
+                            )
+
                     del self.diplomacy_meetings[counterpart]
                     logger.info(f"Diplomacy meeting ended with player {counterpart} for {self.username}")
 
