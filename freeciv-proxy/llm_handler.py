@@ -52,6 +52,10 @@ from packet_constants import (
     PACKET_DIPLOMACY_ACCEPT_TREATY_REQ,
     PACKET_DIPLOMACY_CANCEL_PACT,
     PACKET_CHAT_MSG_REQ,
+    CLAUSE_CEASEFIRE,
+    CLAUSE_PEACE,
+    CLAUSE_ALLIANCE,
+    CLAUSE_VISION,
 )
 from action_constants import *
 from activity_constants import *
@@ -4052,8 +4056,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 'counterpart': action.get('target_player_id', action.get('player_id'))
             }
         elif action_type == 'diplomacy_cancel_pact':
-            # CLAUSE_CEASEFIRE = 5, CLAUSE_PEACE = 6, CLAUSE_ALLIANCE = 7
-            clause_type = action.get('clause_type', 6)  # Default to CLAUSE_PEACE
+            clause_type = action.get('clause_type', CLAUSE_PEACE)
             return {
                 'pid': PACKET_DIPLOMACY_CANCEL_PACT,
                 'other_player_id': action.get('target_player_id', action.get('player_id')),
@@ -4065,14 +4068,14 @@ class LLMWSHandler(websocket.WebSocketHandler):
             return {
                 'pid': PACKET_DIPLOMACY_CANCEL_PACT,
                 'other_player_id': action.get('target_player_id', action.get('player_id')),
-                'clause': 5  # CLAUSE_CEASEFIRE - canceling to declare war
+                'clause': CLAUSE_CEASEFIRE
             }
         elif action_type == 'diplomacy_propose_ceasefire':
             return {
                 'pid': PACKET_DIPLOMACY_CREATE_CLAUSE_REQ,
                 'counterpart': action.get('target_player_id', action.get('player_id')),
                 'giver': action.get('giver', action.get('player_id', -1)),
-                'type': 5,  # CLAUSE_CEASEFIRE
+                'type': CLAUSE_CEASEFIRE,
                 'value': 0
             }
         elif action_type == 'diplomacy_propose_peace':
@@ -4080,7 +4083,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 'pid': PACKET_DIPLOMACY_CREATE_CLAUSE_REQ,
                 'counterpart': action.get('target_player_id', action.get('player_id')),
                 'giver': action.get('giver', action.get('player_id', -1)),
-                'type': 6,  # CLAUSE_PEACE
+                'type': CLAUSE_PEACE,
                 'value': 0
             }
         elif action_type == 'diplomacy_propose_alliance':
@@ -4088,7 +4091,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 'pid': PACKET_DIPLOMACY_CREATE_CLAUSE_REQ,
                 'counterpart': action.get('target_player_id', action.get('player_id')),
                 'giver': action.get('giver', action.get('player_id', -1)),
-                'type': 7,  # CLAUSE_ALLIANCE
+                'type': CLAUSE_ALLIANCE,
                 'value': 0
             }
         elif action_type == 'diplomacy_share_vision':
@@ -4096,7 +4099,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 'pid': PACKET_DIPLOMACY_CREATE_CLAUSE_REQ,
                 'counterpart': action.get('target_player_id', action.get('player_id')),
                 'giver': action.get('giver', action.get('player_id', -1)),
-                'type': 8,  # CLAUSE_VISION
+                'type': CLAUSE_VISION,
                 'value': 0
             }
         elif action_type == 'diplomacy_withdraw_vision':
@@ -4104,7 +4107,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 'pid': PACKET_DIPLOMACY_REMOVE_CLAUSE_REQ,
                 'counterpart': action.get('target_player_id', action.get('player_id')),
                 'giver': action.get('giver', action.get('player_id', -1)),
-                'type': 8,  # CLAUSE_VISION
+                'type': CLAUSE_VISION,
                 'value': 0
             }
         elif action_type == 'diplomacy_reject_treaty':
@@ -4113,7 +4116,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 'counterpart': action.get('target_player_id', action.get('player_id'))
             }
         elif action_type == 'diplomacy_cancel_treaty':
-            clause_type = action.get('clause_type', 6)  # Default to CLAUSE_PEACE
+            clause_type = action.get('clause_type', CLAUSE_PEACE)
             return {
                 'pid': PACKET_DIPLOMACY_CANCEL_PACT,
                 'other_player_id': action.get('target_player_id', action.get('player_id')),

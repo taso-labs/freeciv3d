@@ -3,6 +3,7 @@
 import pytest
 from unittest.mock import Mock, patch
 from civcom import CivCom, A_UNSET, VUT_UTYPE, VUT_IMPROVEMENT
+from packet_constants import DS_WAR, DS_ARMISTICE, DS_CEASEFIRE, DS_PEACE, DS_ALLIANCE, DS_NO_CONTACT, DS_NAMES
 
 
 def create_mock_civcom():
@@ -22,13 +23,7 @@ def create_mock_civcom():
     civcom.all_players = []
     civcom.diplomatic_states = {}
     civcom.diplomacy_meetings = {}
-    civcom.DS_WAR = CivCom.DS_WAR
-    civcom.DS_ARMISTICE = CivCom.DS_ARMISTICE
-    civcom.DS_CEASEFIRE = CivCom.DS_CEASEFIRE
-    civcom.DS_PEACE = CivCom.DS_PEACE
-    civcom.DS_ALLIANCE = CivCom.DS_ALLIANCE
-    civcom.DS_NO_CONTACT = CivCom.DS_NO_CONTACT
-    civcom.DS_NAMES = CivCom.DS_NAMES
+    # DS constants are now module-level in packet_constants (no class-level aliases)
 
     # Bind the real methods we want to test
     civcom._normalize_to_dict = CivCom._normalize_to_dict.__get__(civcom)

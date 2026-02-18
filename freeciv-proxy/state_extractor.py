@@ -53,7 +53,10 @@ from concurrent.futures import ThreadPoolExecutor
 
 from state_cache import StateCache, CacheEntry
 from civcom import CivCom
-from packet_constants import PACKET_PLAYER_PHASE_DONE
+from packet_constants import (
+    PACKET_PLAYER_PHASE_DONE,
+    DS_WAR, DS_ARMISTICE, DS_CEASEFIRE, DS_PEACE, DS_ALLIANCE, DS_NO_CONTACT, DS_NAMES,
+)
 # NOTE: observer_civcom and game_session_manager are imported inside
 # TerminateGameHandler methods to avoid circular imports
 # (observer_civcom imports civcom_registry from this module)
@@ -755,17 +758,27 @@ class StateExtractor:
         return normalized
 
     @staticmethod
-    def _get_tile_owner(civcom, target_index):
+    def _get_tile_owner(civcom, target_index, city_owners=None):
         """Get the owner of the entity (city or unit) at a target tile.
 
         Checks cities first, then units. Returns the owner player_id or None.
         Used by combat and bombard validation to determine diplomatic restrictions.
+
+        Args:
+            city_owners: Optional pre-built {tile_index: owner_id} dict.
+                         When provided, skips the O(n) city scan.
         """
         if civcom is None or target_index is None:
             return None
-        for city in getattr(civcom, 'other_cities', {}).values():
-            if city.get('tile') == target_index:
-                return city.get('owner')
+        # Use pre-built dict if available (avoids O(n) rescan per tile)
+        if city_owners is not None:
+            owner = city_owners.get(target_index)
+            if owner is not None:
+                return owner
+        else:
+            for city in getattr(civcom, 'other_cities', {}).values():
+                if city.get('tile') == target_index:
+                    return city.get('owner')
         for unit in getattr(civcom, 'other_units', {}).values():
             if unit.get('tile') == target_index:
                 return unit.get('owner')
@@ -1135,9 +1148,9 @@ class StateExtractor:
                         ds_type = ds.get('type') if ds else None
 
                         # Only allow movement if at war with target territory owner
-                        if ds_type != civcom.DS_WAR:
+                        if ds_type != DS_WAR:
                             is_valid = False
-                            ds_name = civcom.DS_NAMES.get(ds_type, 'unknown')
+                            ds_name = DS_NAMES.get(ds_type, 'unknown')
                             reason = f"Cannot move into foreign territory - at {ds_name} with player {target_owner}"
 
                 add_action('move', {'direction': direction, 'target': {'x': target_x, 'y': target_y}},
@@ -1280,13 +1293,13 @@ class StateExtractor:
 
                     # Diplomatic state validation: only allow combat if at war
                     if is_valid and civcom and target_index is not None:
-                        target_owner = self._get_tile_owner(civcom, target_index)
+                        target_owner = self._get_tile_owner(civcom, target_index, city_owners=city_owners)
                         if target_owner is not None and target_owner != player_id:
                             ds = civcom.get_diplstate(player_id, target_owner)
                             ds_type = ds.get('type') if ds else None
-                            if ds_type != civcom.DS_WAR:
+                            if ds_type != DS_WAR:
                                 is_valid = False
-                                ds_name = civcom.DS_NAMES.get(ds_type, 'unknown')
+                                ds_name = DS_NAMES.get(ds_type, 'unknown')
                                 reason = f"Cannot attack - at {ds_name} with player {target_owner}"
 
                     add_action(action_name, {
@@ -1308,13 +1321,13 @@ class StateExtractor:
 
                 # Diplomatic state validation: only allow bombard if at war
                 if is_valid and civcom and target_index is not None:
-                    target_owner = self._get_tile_owner(civcom, target_index)
+                    target_owner = self._get_tile_owner(civcom, target_index, city_owners=city_owners)
                     if target_owner is not None and target_owner != player_id:
                         ds = civcom.get_diplstate(player_id, target_owner)
                         ds_type = ds.get('type') if ds else None
-                        if ds_type != civcom.DS_WAR:
+                        if ds_type != DS_WAR:
                             is_valid = False
-                            ds_name = civcom.DS_NAMES.get(ds_type, 'unknown')
+                            ds_name = DS_NAMES.get(ds_type, 'unknown')
                             reason = f"Cannot bombard - at {ds_name} with player {target_owner}"
 
                 add_action('bombard', {
@@ -1385,9 +1398,9 @@ class StateExtractor:
 
                             # Block trade during active conflicts (MAJOR-1 fix)
                             # Per FreeCiv rules: trade only allowed during peace/alliance
-                            if ds_type in (civcom.DS_WAR, civcom.DS_ARMISTICE, civcom.DS_CEASEFIRE):
+                            if ds_type in (DS_WAR, DS_ARMISTICE, DS_CEASEFIRE):
                                 is_valid = False
-                                ds_name = civcom.DS_NAMES.get(ds_type, f'unknown({ds_type})')
+                                ds_name = DS_NAMES.get(ds_type, f'unknown({ds_type})')
                                 reason = f"Cannot trade - {ds_name} with player {dest_owner}"
 
                         add_action('trade_route',
@@ -1469,7 +1482,7 @@ class StateExtractor:
                             ds_type = ds.get('type') if ds else None
 
                             # Block espionage against allies
-                            if ds_type == civcom.DS_ALLIANCE:
+                            if ds_type == DS_ALLIANCE:
                                 is_valid = False
                                 reason = f"Cannot spy on allied player {city_owner}"
 
@@ -1499,7 +1512,7 @@ class StateExtractor:
                             # Check if not allied with this unit's owner
                             ds = civcom.get_diplstate(player_id, unit_owner)
                             ds_type = ds.get('type') if ds else None
-                            if ds_type != civcom.DS_ALLIANCE:
+                            if ds_type != DS_ALLIANCE:
                                 adjacent_hostile_units.append(other_unit)
 
             if can_do_action(ACTION_SPY_BRIBE_UNIT):
@@ -2188,7 +2201,7 @@ class StateExtractor:
                     ds_type = ds.get('type')
                     # Only consider truly hostile units (at war) as threats
                     # Allied/peaceful units are excluded per ZOC alliance exception
-                    if ds_type == self.civcom.DS_WAR:
+                    if ds_type == DS_WAR:
                         enemy_units.append(unit)
         else:
             # BLOCKER-2 Fix: Fallback when civcom unavailable

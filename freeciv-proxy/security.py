@@ -236,9 +236,10 @@ class InputSanitizer:
                 msg = cls.sanitize_string_field(
                     action['message'], 'diplomacy_message', max_length=500
                 )
-                # Strip newlines to prevent multi-line chat injection
+                # Ordering matters: strip newlines FIRST, then leading '/'.
+                # If reversed, a payload like "\n/kick player" would survive slash-stripping
+                # (since '/' isn't leading), then the newline would be replaced leaving "/kick player".
                 msg = msg.replace('\n', ' ').replace('\r', ' ')
-                # Strip leading '/' to prevent FreeCiv server command injection (e.g. /set, /kick)
                 msg = msg.lstrip('/')
                 sanitized['message'] = msg
 

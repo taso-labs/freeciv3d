@@ -43,18 +43,10 @@ def _make_civcom_stub():
     __init__ which requires a websocket connection.
     """
     from civcom import CivCom
-    from packet_constants import (
-        DS_WAR, DS_ARMISTICE, DS_CEASEFIRE, DS_PEACE, DS_ALLIANCE, DS_NO_CONTACT, DS_NAMES,
-    )
+    # DS constants already available at module level via 'from packet_constants import *'
 
     class CivComStub:
-        DS_WAR = DS_WAR
-        DS_ARMISTICE = DS_ARMISTICE
-        DS_CEASEFIRE = DS_CEASEFIRE
-        DS_PEACE = DS_PEACE
-        DS_ALLIANCE = DS_ALLIANCE
-        DS_NO_CONTACT = DS_NO_CONTACT
-        DS_NAMES = DS_NAMES
+        # DS constants are module-level in packet_constants (no class-level aliases needed)
 
         def __init__(self):
             self.diplomatic_states = {}
@@ -82,35 +74,35 @@ class TestDiplomaticStateTracking:
         """Unknown player pair defaults to DS_NO_CONTACT."""
         c = _make_civcom_stub()
         ds = c.get_diplstate(0, 1)
-        assert ds['type'] == c.DS_NO_CONTACT
+        assert ds['type'] == DS_NO_CONTACT
         assert ds['type_name'] == 'no_contact'
 
     def test_get_diplstate_forward_key(self):
         """State stored as (p1, p2) is found with get_diplstate(p1, p2)."""
         c = _make_civcom_stub()
-        c.diplomatic_states[(0, 1)] = {'type': c.DS_WAR, 'turns_left': -1,
+        c.diplomatic_states[(0, 1)] = {'type': DS_WAR, 'turns_left': -1,
                                         'has_reason_to_cancel': 0, 'contact_turns_left': 0}
         ds = c.get_diplstate(0, 1)
-        assert ds['type'] == c.DS_WAR
+        assert ds['type'] == DS_WAR
         assert ds['type_name'] == 'war'
 
     def test_get_diplstate_reverse_key(self):
         """State stored as (p2, p1) is found with get_diplstate(p1, p2)."""
         c = _make_civcom_stub()
-        c.diplomatic_states[(1, 0)] = {'type': c.DS_PEACE, 'turns_left': 0,
+        c.diplomatic_states[(1, 0)] = {'type': DS_PEACE, 'turns_left': 0,
                                         'has_reason_to_cancel': 0, 'contact_turns_left': 0}
         ds = c.get_diplstate(0, 1)
-        assert ds['type'] == c.DS_PEACE
+        assert ds['type'] == DS_PEACE
         assert ds['type_name'] == 'peace'
 
     def test_get_all_diplstates_for_player(self):
         """Returns all relationships for a given player."""
         c = _make_civcom_stub()
-        c.diplomatic_states[(0, 1)] = {'type': c.DS_WAR, 'turns_left': -1,
+        c.diplomatic_states[(0, 1)] = {'type': DS_WAR, 'turns_left': -1,
                                         'has_reason_to_cancel': 0, 'contact_turns_left': 0}
-        c.diplomatic_states[(0, 2)] = {'type': c.DS_PEACE, 'turns_left': 0,
+        c.diplomatic_states[(0, 2)] = {'type': DS_PEACE, 'turns_left': 0,
                                         'has_reason_to_cancel': 0, 'contact_turns_left': 0}
-        c.diplomatic_states[(3, 4)] = {'type': c.DS_ALLIANCE, 'turns_left': 0,
+        c.diplomatic_states[(3, 4)] = {'type': DS_ALLIANCE, 'turns_left': 0,
                                         'has_reason_to_cancel': 0, 'contact_turns_left': 0}
 
         result = c.get_all_diplstates_for_player(0)
@@ -274,7 +266,7 @@ class TestGetAllPlayersWithDiplomacy:
             {'id': 1, 'name': 'Bob'},
         ]
         c.diplomatic_states[(0, 1)] = {
-            'type': c.DS_WAR, 'turns_left': -1,
+            'type': DS_WAR, 'turns_left': -1,
             'has_reason_to_cancel': 0, 'contact_turns_left': 0,
         }
 
@@ -567,7 +559,7 @@ class TestDiplomaticSummaryInStateExtractor:
             {'id': 1, 'name': 'Bob'},
         ]
         civcom.diplomatic_states[(0, 1)] = {
-            'type': civcom.DS_WAR, 'turns_left': -1,
+            'type': DS_WAR, 'turns_left': -1,
             'has_reason_to_cancel': 0, 'contact_turns_left': 0,
         }
 

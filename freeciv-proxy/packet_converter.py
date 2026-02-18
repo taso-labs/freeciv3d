@@ -671,7 +671,7 @@ def _convert_action_to_packet_impl(
         return {
             "pid": PACKET_DIPLOMACY_CREATE_CLAUSE_REQ,
             "counterpart": action["target_player_id"],
-            "giver": action.get("giver", -1),
+            "giver": action.get("giver", action.get("player_id", -1)),
             "type": CLAUSE_CEASEFIRE,
             "value": 0,
         }
@@ -679,7 +679,7 @@ def _convert_action_to_packet_impl(
         return {
             "pid": PACKET_DIPLOMACY_CREATE_CLAUSE_REQ,
             "counterpart": action["target_player_id"],
-            "giver": action.get("giver", -1),
+            "giver": action.get("giver", action.get("player_id", -1)),
             "type": CLAUSE_PEACE,
             "value": 0,
         }
@@ -687,7 +687,7 @@ def _convert_action_to_packet_impl(
         return {
             "pid": PACKET_DIPLOMACY_CREATE_CLAUSE_REQ,
             "counterpart": action["target_player_id"],
-            "giver": action.get("giver", -1),
+            "giver": action.get("giver", action.get("player_id", -1)),
             "type": CLAUSE_ALLIANCE,
             "value": 0,
         }
@@ -695,7 +695,7 @@ def _convert_action_to_packet_impl(
         return {
             "pid": PACKET_DIPLOMACY_CREATE_CLAUSE_REQ,
             "counterpart": action["target_player_id"],
-            "giver": action.get("giver", -1),
+            "giver": action.get("giver", action.get("player_id", -1)),
             "type": CLAUSE_VISION,
             "value": 0,
         }
@@ -703,7 +703,7 @@ def _convert_action_to_packet_impl(
         return {
             "pid": PACKET_DIPLOMACY_REMOVE_CLAUSE_REQ,
             "counterpart": action["target_player_id"],
-            "giver": action.get("giver", -1),
+            "giver": action.get("giver", action.get("player_id", -1)),
             "type": CLAUSE_VISION,
             "value": 0,
         }

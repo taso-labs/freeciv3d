@@ -2093,7 +2093,7 @@ class CivCom(Thread):
                     }
                     logger.debug(
                         f"Diplomatic state: player {plr1} <-> player {plr2}: "
-                        f"{self.DS_NAMES.get(ds_type, f'unknown({ds_type})')}"
+                        f"{DS_NAMES.get(ds_type, f'unknown({ds_type})')}"
                     )
 
                     # Invalidate action cache when diplomatic state actually changes (MAJOR-2 fix)
@@ -2104,13 +2104,13 @@ class CivCom(Thread):
                         if plr1 == self.player_id or plr2 == self.player_id:
                             if old_type != ds_type:
                                 self.invalidate_action_cache()
-                                old_name = self.DS_NAMES.get(old_type, f'unknown({old_type})')
-                                new_name = self.DS_NAMES.get(ds_type, f'unknown({ds_type})')
+                                old_name = DS_NAMES.get(old_type, f'unknown({old_type})')
+                                new_name = DS_NAMES.get(ds_type, f'unknown({ds_type})')
                                 logger.debug(
                                     f"Action cache invalidated for {self.username}: {old_name} -> {new_name}"
                                 )
                             else:
-                                state_name = self.DS_NAMES.get(ds_type, f'unknown({ds_type})')
+                                state_name = DS_NAMES.get(ds_type, f'unknown({ds_type})')
                                 logger.debug(
                                     f"Diplomatic state unchanged for {self.username} with player {plr2 if plr1 == self.player_id else plr1}: {state_name}"
                                 )
@@ -2131,10 +2131,10 @@ class CivCom(Thread):
 
                             # War-like states: DS_WAR (0), DS_ARMISTICE (1), DS_CEASEFIRE (2)
                             # Peace-like states: DS_PEACE (3), DS_ALLIANCE (4)
-                            was_war_like = old_type in (self.DS_WAR, self.DS_ARMISTICE, self.DS_CEASEFIRE)
-                            was_peace_like = old_type in (self.DS_PEACE, self.DS_ALLIANCE)
-                            is_war_like = ds_type in (self.DS_WAR, self.DS_ARMISTICE)
-                            is_peace_like = ds_type in (self.DS_PEACE, self.DS_ALLIANCE)
+                            was_war_like = old_type in (DS_WAR, DS_ARMISTICE, DS_CEASEFIRE)
+                            was_peace_like = old_type in (DS_PEACE, DS_ALLIANCE)
+                            is_war_like = ds_type in (DS_WAR, DS_ARMISTICE)
+                            is_peace_like = ds_type in (DS_PEACE, DS_ALLIANCE)
 
                             # Clear vision sharing record on peace→war so it can be
                             # re-proposed on the next peace transition
@@ -2193,25 +2193,8 @@ class CivCom(Thread):
                                         f"Queued {len(units_to_disband)} unit(s) for disbanding: {units_to_disband}"
                                     )
 
-                            # Auto-propose vision sharing on war→peace/alliance transition
-                            # Triggered here (DIPLSTATE handler) rather than CANCEL_MEETING
-                            # because DIPLSTATE is guaranteed to have the updated state
-                            if was_war_like and is_peace_like:
-                                if self.civserver_messages is not None and foreign_player_id not in self._vision_shared_with:
-                                    vision_clause = {
-                                        'pid': PACKET_DIPLOMACY_CREATE_CLAUSE_REQ,
-                                        'counterpart': foreign_player_id,
-                                        'giver': self.player_id,
-                                        'type': CLAUSE_VISION,
-                                        'value': 0,
-                                    }
-                                    message = json.dumps(vision_clause)
-                                    self.civserver_messages.append(message)
-                                    self._vision_shared_with.add(foreign_player_id)
-                                    logger.info(
-                                        f"Auto-proposing vision sharing with player {foreign_player_id} "
-                                        f"due to {self.DS_NAMES.get(ds_type, 'unknown')} treaty for {self.username}"
-                                    )
+                            # Vision sharing is handled in ACCEPT_TREATY (while meeting is open),
+                            # not here — DIPLSTATE fires after CANCEL_MEETING closes the meeting.
 
             # DIPLOMACY INIT MEETING packet - server notifies a meeting has been initiated
             elif packet_type == PACKET_DIPLOMACY_INIT_MEETING:
@@ -2256,7 +2239,30 @@ class CivCom(Thread):
                         f"Treaty acceptance update: counterpart={counterpart}, "
                         f"i_accepted={i_accepted}, other_accepted={other_accepted}"
                     )
-                    # If both accepted, meeting will be closed by server (cancel_meeting follows)
+                    # If both accepted, auto-propose vision sharing while meeting is still open.
+                    # This must happen here (not in DIPLSTATE) because DIPLSTATE fires after
+                    # CANCEL_MEETING closes the meeting, making CREATE_CLAUSE_REQ invalid.
+                    if i_accepted and other_accepted:
+                        meeting = self.diplomacy_meetings.get(counterpart, {})
+                        has_peace_clause = any(
+                            c.get('type') in (CLAUSE_CEASEFIRE, CLAUSE_PEACE, CLAUSE_ALLIANCE)
+                            for c in meeting.get('clauses', [])
+                        )
+                        if has_peace_clause and counterpart not in self._vision_shared_with:
+                            if self.civserver_messages is not None:
+                                vision_clause = {
+                                    'pid': PACKET_DIPLOMACY_CREATE_CLAUSE_REQ,
+                                    'counterpart': counterpart,
+                                    'giver': self.player_id,
+                                    'type': CLAUSE_VISION,
+                                    'value': 0,
+                                }
+                                self.civserver_messages.append(json.dumps(vision_clause))
+                                self._vision_shared_with.add(counterpart)
+                                logger.info(
+                                    f"Auto-proposing vision sharing with player {counterpart} "
+                                    f"(treaty includes peace/alliance clause) for {self.username}"
+                                )
 
             # DIPLOMACY CANCEL MEETING packet - server notifies meeting was cancelled/completed
             elif packet_type == PACKET_DIPLOMACY_CANCEL_MEETING:
@@ -2284,15 +2290,6 @@ class CivCom(Thread):
 
         except (json.JSONDecodeError, KeyError, TypeError) as e:
             logger.debug(f"Could not parse packet for state storage: {e}")
-
-    # Diplomatic state constants — aliases for module-level constants in packet_constants.py
-    DS_WAR = DS_WAR
-    DS_ARMISTICE = DS_ARMISTICE
-    DS_CEASEFIRE = DS_CEASEFIRE
-    DS_PEACE = DS_PEACE
-    DS_ALLIANCE = DS_ALLIANCE
-    DS_NO_CONTACT = DS_NO_CONTACT
-    DS_NAMES = DS_NAMES
 
     def has_adjacent_foreign_unit(self, tile_index, player_id):
         """Check if a tile has adjacent foreign units.
@@ -2357,10 +2354,10 @@ class CivCom(Thread):
             # Try reverse direction
             state = self.diplomatic_states.get((player2_id, player1_id))
         if state is None:
-            state = {'type': self.DS_NO_CONTACT, 'turns_left': -1, 'has_reason_to_cancel': 0, 'contact_turns_left': 0}
+            state = {'type': DS_NO_CONTACT, 'turns_left': -1, 'has_reason_to_cancel': 0, 'contact_turns_left': 0}
         return {
             **state,
-            'type_name': self.DS_NAMES.get(state['type'], f"unknown({state['type']})"),
+            'type_name': DS_NAMES.get(state['type'], f"unknown({state['type']})"),
         }
 
     def get_all_diplstates_for_player(self, player_id):
@@ -2371,9 +2368,9 @@ class CivCom(Thread):
         result = {}
         for (p1, p2), state in self.diplomatic_states.items():
             if p1 == player_id:
-                result[p2] = {**state, 'type_name': self.DS_NAMES.get(state['type'], f"unknown({state['type']})")}
+                result[p2] = {**state, 'type_name': DS_NAMES.get(state['type'], f"unknown({state['type']})")}
             elif p2 == player_id:
-                result[p1] = {**state, 'type_name': self.DS_NAMES.get(state['type'], f"unknown({state['type']})")}
+                result[p1] = {**state, 'type_name': DS_NAMES.get(state['type'], f"unknown({state['type']})")}
         return result
 
     def get_all_players_with_diplomacy(self, requesting_player_id):
@@ -2794,7 +2791,7 @@ class CivCom(Thread):
                 # Contact can be established via:
                 # 1. Units meeting in adjacent tiles
                 # 2. Establishing an embassy through a spy
-                has_contact = ds_type != self.DS_NO_CONTACT
+                has_contact = ds_type != DS_NO_CONTACT
 
                 actions.append({
                     'action': 'diplomacy_start_negotiation',
@@ -2805,7 +2802,7 @@ class CivCom(Thread):
 
             # diplomacy_declare_war — available when not already at war and have contact
             # Per FreeCiv rules: can't declare war on a player you haven't met
-            if ds_type != self.DS_WAR and ds_type != self.DS_NO_CONTACT:
+            if ds_type != DS_WAR and ds_type != DS_NO_CONTACT:
                 actions.append({
                     'action': 'diplomacy_declare_war',
                     'params': {'player_id': other_id, 'player_name': other_name},
@@ -2823,7 +2820,7 @@ class CivCom(Thread):
 
             # Actions that require an active meeting
             # Contact requirement: all meeting-based actions need established contact
-            has_contact = ds_type != self.DS_NO_CONTACT
+            has_contact = ds_type != DS_NO_CONTACT
 
             if in_meeting:
                 meeting = self.diplomacy_meetings[other_id]
@@ -2831,7 +2828,7 @@ class CivCom(Thread):
 
                 # Propose treaty clauses (only when in meeting)
                 # Per FreeCiv: can only negotiate if established contact
-                if ds_type in (self.DS_WAR, self.DS_ARMISTICE):
+                if ds_type in (DS_WAR, DS_ARMISTICE):
                     actions.append({
                         'action': 'diplomacy_propose_ceasefire',
                         'params': {'player_id': other_id, 'player_name': other_name},
@@ -2839,7 +2836,7 @@ class CivCom(Thread):
                         'type': 'diplomacy',
                     })
 
-                if ds_type != self.DS_PEACE and ds_type != self.DS_ALLIANCE:
+                if ds_type != DS_PEACE and ds_type != DS_ALLIANCE:
                     actions.append({
                         'action': 'diplomacy_propose_peace',
                         'params': {'player_id': other_id, 'player_name': other_name},
@@ -2847,7 +2844,7 @@ class CivCom(Thread):
                         'type': 'diplomacy',
                     })
 
-                if ds_type == self.DS_PEACE:
+                if ds_type == DS_PEACE:
                     actions.append({
                         'action': 'diplomacy_propose_alliance',
                         'params': {'player_id': other_id, 'player_name': other_name},
@@ -2880,7 +2877,7 @@ class CivCom(Thread):
                     })
 
             # Cancel existing treaty (when peace, ceasefire, or alliance is active)
-            if ds_type in (self.DS_CEASEFIRE, self.DS_PEACE, self.DS_ALLIANCE):
+            if ds_type in (DS_CEASEFIRE, DS_PEACE, DS_ALLIANCE):
                 actions.append({
                     'action': 'diplomacy_cancel_treaty',
                     'params': {'player_id': other_id, 'player_name': other_name},
@@ -2889,7 +2886,7 @@ class CivCom(Thread):
                 })
 
             # Withdraw vision (doesn't require a meeting)
-            if ds_type in (self.DS_PEACE, self.DS_ALLIANCE):
+            if ds_type in (DS_PEACE, DS_ALLIANCE):
                 actions.append({
                     'action': 'diplomacy_withdraw_vision',
                     'params': {'player_id': other_id, 'player_name': other_name},
