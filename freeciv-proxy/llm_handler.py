@@ -1507,7 +1507,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 error_response['correlation_id'] = correlation_id
             self.write_message(json.dumps(error_response))
 
-    def _normalize_agent_clash_action(self, action_data: Dict[str, Any]) -> Dict[str, Any]:
+    def _normalize_agent_clash_action(self, action_data: Dict[str, Any], player_id: int = None, game_id: str = None) -> Dict[str, Any]:
         """Normalize agent-clash action format to proxy format.
 
         agent-clash sends:
@@ -1518,6 +1518,8 @@ class LLMWSHandler(websocket.WebSocketHandler):
 
         Args:
             action_data: agent-clash format action dict
+            player_id: Optional player ID for looking up legal_actions (for target inference)
+            game_id: Optional game ID for looking up legal_actions (for target inference)
 
         Returns:
             Normalized action dict for validation
@@ -1676,6 +1678,26 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 elif "params" in action_data and isinstance(action_data["params"], dict):
                     if "player_id" in action_data["params"]:
                         normalized["target_player_id"] = action_data["params"]["player_id"]
+
+            # SMART TARGET INFERENCE: If target still missing, look it up from legal_actions
+            if "target_player_id" not in normalized and player_id is not None and game_id is not None:
+                try:
+                    logger.debug(f"Target missing for {action_type}, attempting inference from legal_actions")
+                    # Get legal actions to find matching diplomacy action with target
+                    civcom = self._get_civcom_for_player(player_id, game_id=game_id)
+                    if civcom:
+                        legal_actions = civcom._get_legal_actions_optimized(player_id)
+                        # Find matching diplomacy action in legal_actions
+                        for legal_action in legal_actions:
+                            if legal_action.get('action') == action_type:
+                                params = legal_action.get('params', {})
+                                if 'player_id' in params:
+                                    inferred_target = params['player_id']
+                                    normalized["target_player_id"] = inferred_target
+                                    logger.info(f"✅ INFERRED target_player_id={inferred_target} from legal_actions for {action_type}")
+                                    break
+                except Exception as e:
+                    logger.warning(f"Failed to infer target from legal_actions: {e}")
 
             # Validate that target_player_id is set and different from actor (player_id)
             target_id = normalized.get("target_player_id")
@@ -1906,7 +1928,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 logger.info(f"📝 NORMALIZATION TRIGGERED: agent-clash format detected")
                 logger.info(f"📝 Original action_data: {action_data}")
                 try:
-                    action_data = self._normalize_agent_clash_action(action_data)
+                    action_data = self._normalize_agent_clash_action(action_data, self.player_id, self.game_id)
                     logger.info(f"✅ NORMALIZATION SUCCESS: {action_data}")
                     logger.info(f"✅ Normalized action has 'type': {'type' in action_data}")
                     logger.info(f"✅ Normalized action has 'tech_name': {'tech_name' in action_data if action_data.get('type') == 'tech_research' else 'N/A'}")
