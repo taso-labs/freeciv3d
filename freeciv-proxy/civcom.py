@@ -2092,14 +2092,15 @@ class CivCom(Thread):
                         if plr1 == self.player_id or plr2 == self.player_id:
                             if old_type != ds_type:
                                 self.invalidate_action_cache()
+                                old_name = self.DS_NAMES.get(old_type, f'unknown({old_type})')
+                                new_name = self.DS_NAMES.get(ds_type, f'unknown({ds_type})')
                                 logger.debug(
-                                    f"Action cache invalidated for {self.username}: "
-                                    f"{self.DS_NAMES.get(old_type, f'unknown({old_type})}')} -> {self.DS_NAMES.get(ds_type, f'unknown({ds_type})')}"
+                                    f"Action cache invalidated for {self.username}: {old_name} -> {new_name}"
                                 )
                             else:
+                                state_name = self.DS_NAMES.get(ds_type, f'unknown({ds_type})')
                                 logger.debug(
-                                    f"Diplomatic state unchanged for {self.username} with player {plr2 if plr1 == self.player_id else plr1}: "
-                                    f"{self.DS_NAMES.get(ds_type, f'unknown({ds_type})')}"
+                                    f"Diplomatic state unchanged for {self.username} with player {plr2 if plr1 == self.player_id else plr1}: {state_name}"
                                 )
 
                     # Auto-disband military units in foreign territory when peace treaty is signed
