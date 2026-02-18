@@ -2191,7 +2191,24 @@ class StateExtractor:
     def _build_tactical_view(self, state: Dict[str, Any], player_id: int) -> Dict[str, Any]:
         """Build tactical layer focusing on immediate military situation"""
         units = [u for u in self._dict_to_list(state.get('units', {})) if u['owner'] == player_id]
-        enemy_units = [u for u in self._dict_to_list(state.get('units', {})) if u['owner'] != player_id]
+        all_other_units = [u for u in self._dict_to_list(state.get('units', {})) if u['owner'] != player_id]
+
+        # Filter to actual hostile units (exclude allies due to ZOC exception)
+        # Per FreeCiv rules: allied units don't impose Zone of Control
+        enemy_units = []
+        if self.civcom:
+            for unit in all_other_units:
+                unit_owner = unit.get('owner')
+                if unit_owner is not None:
+                    ds = self.civcom.get_diplstate(player_id, unit_owner)
+                    ds_type = ds.get('type')
+                    # Only consider truly hostile units (at war) as threats
+                    # Allied/peaceful units are excluded per ZOC alliance exception
+                    if ds_type == self.civcom.DS_WAR:
+                        enemy_units.append(unit)
+        else:
+            # Fallback if civcom not available: treat all as enemies (conservative)
+            enemy_units = all_other_units
 
         # Group similar units
         unit_groups = {}
