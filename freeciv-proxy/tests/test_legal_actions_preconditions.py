@@ -3,6 +3,7 @@
 import pytest
 from unittest.mock import Mock, patch
 from civcom import CivCom, A_UNSET, VUT_UTYPE, VUT_IMPROVEMENT
+from packet_constants import DS_WAR, DS_ARMISTICE, DS_CEASEFIRE, DS_PEACE, DS_ALLIANCE, DS_NO_CONTACT, DS_NAMES
 
 
 def create_mock_civcom():
@@ -19,6 +20,10 @@ def create_mock_civcom():
     civcom.tiles = {}
     civcom.unit_classes = {}
     civcom.map_info = {'width': 80, 'height': 50}
+    civcom.all_players = []
+    civcom.diplomatic_states = {}
+    civcom.diplomacy_meetings = {}
+    # DS constants are now module-level in packet_constants (no class-level aliases)
 
     # Bind the real methods we want to test
     civcom._normalize_to_dict = CivCom._normalize_to_dict.__get__(civcom)
@@ -28,6 +33,8 @@ def create_mock_civcom():
     civcom._get_unit_actions = CivCom._get_unit_actions.__get__(civcom)
     civcom._get_legal_actions_optimized = CivCom._get_legal_actions_optimized.__get__(civcom)
     civcom._is_city_producing_coinage = CivCom._is_city_producing_coinage.__get__(civcom)
+    civcom._get_diplomacy_actions = CivCom._get_diplomacy_actions.__get__(civcom)
+    civcom.get_diplstate = CivCom.get_diplstate.__get__(civcom)
 
     return civcom
 

@@ -512,6 +512,7 @@ class TestOwnershipFilters(unittest.TestCase):
         self.handler.civcom.get_researchable_techs = Mock(return_value=[
             {'id': 1, 'name': 'Pottery', 'cost': 20, 'rule_name': 'Pottery'}
         ])
+        self.handler.civcom._get_diplomacy_actions = Mock(return_value=[])
 
         # Bind methods from the real class
         self.handler._get_fallback_unit_actions = LLMWSHandler._get_fallback_unit_actions.__get__(
@@ -624,6 +625,7 @@ class TestLegalActionsDictFormat(unittest.TestCase):
         # Mock civcom with proper get_researchable_techs return value
         self.handler.civcom = Mock()
         self.handler.civcom.get_researchable_techs = Mock(return_value=[])  # No techs for these tests
+        self.handler.civcom._get_diplomacy_actions = Mock(return_value=[])
         self.handler._get_state_extractor = Mock(return_value=None)  # Use fallback path
 
         # Bind methods
@@ -746,6 +748,7 @@ class TestTechInventionsIntegration(unittest.TestCase):
             {'id': 1, 'name': 'Pottery', 'cost': 20, 'rule_name': 'Pottery'},
             {'id': 2, 'name': 'Bronze Working', 'cost': 30, 'rule_name': 'Bronze_Working'}
         ])
+        handler.civcom._get_diplomacy_actions = Mock(return_value=[])
         handler._get_player_level_actions = LLMWSHandler._get_player_level_actions.__get__(
             handler, LLMWSHandler
         )

@@ -601,11 +601,11 @@ class TestDiplomacyActionConverters:
         """Test diplomacy_start_negotiation uses PACKET_DIPLOMACY_INIT_MEETING_REQ."""
         action = {
             'type': 'diplomacy_start_negotiation',
-            'player_id': 2
+            'target_player_id': 2
         }
-        
+
         result = _convert_action_to_packet(action)
-        
+
         assert result['pid'] == PACKET_DIPLOMACY_INIT_MEETING_REQ
         assert result['counterpart'] == 2
     
@@ -613,7 +613,7 @@ class TestDiplomacyActionConverters:
         """Test diplomacy_cancel_meeting uses PACKET_DIPLOMACY_CANCEL_MEETING_REQ."""
         action = {
             'type': 'diplomacy_cancel_meeting',
-            'player_id': 2
+            'target_player_id': 2
         }
         
         result = _convert_action_to_packet(action)
@@ -625,7 +625,7 @@ class TestDiplomacyActionConverters:
         """Test diplomacy_accept_treaty uses PACKET_DIPLOMACY_ACCEPT_TREATY_REQ."""
         action = {
             'type': 'diplomacy_accept_treaty',
-            'player_id': 2
+            'target_player_id': 2
         }
         
         result = _convert_action_to_packet(action)
@@ -637,7 +637,7 @@ class TestDiplomacyActionConverters:
         """Test diplomacy_cancel_pact uses PACKET_DIPLOMACY_CANCEL_PACT."""
         action = {
             'type': 'diplomacy_cancel_pact',
-            'player_id': 2,
+            'target_player_id': 2,
             'clause_type': 6  # CLAUSE_PEACE
         }
         
@@ -651,7 +651,7 @@ class TestDiplomacyActionConverters:
         """Test diplomacy_declare_war cancels ceasefire."""
         action = {
             'type': 'diplomacy_declare_war',
-            'player_id': 2
+            'target_player_id': 2
         }
         
         result = _convert_action_to_packet(action)
@@ -664,7 +664,7 @@ class TestDiplomacyActionConverters:
         """Test diplomacy_propose_ceasefire uses CREATE_CLAUSE with type 5."""
         action = {
             'type': 'diplomacy_propose_ceasefire',
-            'player_id': 2
+            'target_player_id': 2
         }
         
         result = _convert_action_to_packet(action)
@@ -677,7 +677,7 @@ class TestDiplomacyActionConverters:
         """Test diplomacy_propose_peace uses CREATE_CLAUSE with type 6."""
         action = {
             'type': 'diplomacy_propose_peace',
-            'player_id': 2
+            'target_player_id': 2
         }
         
         result = _convert_action_to_packet(action)
@@ -689,7 +689,7 @@ class TestDiplomacyActionConverters:
         """Test diplomacy_propose_alliance uses CREATE_CLAUSE with type 7."""
         action = {
             'type': 'diplomacy_propose_alliance',
-            'player_id': 2
+            'target_player_id': 2
         }
         
         result = _convert_action_to_packet(action)
@@ -701,7 +701,7 @@ class TestDiplomacyActionConverters:
         """Test diplomacy_share_vision uses CREATE_CLAUSE with type 8."""
         action = {
             'type': 'diplomacy_share_vision',
-            'player_id': 2
+            'target_player_id': 2
         }
         
         result = _convert_action_to_packet(action)
@@ -713,7 +713,7 @@ class TestDiplomacyActionConverters:
         """Test diplomacy_withdraw_vision uses REMOVE_CLAUSE."""
         action = {
             'type': 'diplomacy_withdraw_vision',
-            'player_id': 2
+            'target_player_id': 2
         }
         
         result = _convert_action_to_packet(action)

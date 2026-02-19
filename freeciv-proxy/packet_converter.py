@@ -26,6 +26,11 @@ from packet_constants import (
     PACKET_DIPLOMACY_CREATE_CLAUSE_REQ,
     PACKET_DIPLOMACY_CANCEL_PACT,
     PACKET_DIPLOMACY_REMOVE_CLAUSE_REQ,
+    PACKET_CHAT_MSG_REQ,
+    CLAUSE_CEASEFIRE,
+    CLAUSE_PEACE,
+    CLAUSE_ALLIANCE,
+    CLAUSE_VISION,
 )
 from action_constants import *
 from activity_constants import *
@@ -647,61 +652,80 @@ def _convert_action_to_packet_impl(
 
     # Diplomacy – use numeric packet IDs for these as in existing code
     elif action_type == "diplomacy_start_negotiation":
-        return {"pid": PACKET_DIPLOMACY_INIT_MEETING_REQ, "counterpart": action["player_id"]}
+        return {"pid": PACKET_DIPLOMACY_INIT_MEETING_REQ, "counterpart": action["target_player_id"]}
     elif action_type == "diplomacy_cancel_meeting":
-        return {"pid": PACKET_DIPLOMACY_CANCEL_MEETING_REQ, "counterpart": action["player_id"]}
+        return {"pid": PACKET_DIPLOMACY_CANCEL_MEETING_REQ, "counterpart": action["target_player_id"]}
     elif action_type == "diplomacy_accept_treaty":
         # Accept treaty should use the ACCEPT_TREATY request packet
-        return {"pid": PACKET_DIPLOMACY_ACCEPT_TREATY_REQ, "counterpart": action["player_id"]}
+        return {"pid": PACKET_DIPLOMACY_ACCEPT_TREATY_REQ, "counterpart": action["target_player_id"]}
     elif action_type == "diplomacy_cancel_pact":
-        clause_type = action.get("clause_type", 6)
+        clause_type = action.get("clause_type", CLAUSE_PEACE)
         return {
             "pid": PACKET_DIPLOMACY_CANCEL_PACT,
-            "other_player_id": action["player_id"],
+            "other_player_id": action["target_player_id"],
             "clause": clause_type,
         }
     elif action_type == "diplomacy_declare_war":
-        return {"pid": PACKET_DIPLOMACY_CANCEL_PACT, "other_player_id": action["player_id"], "clause": 5}
+        return {"pid": PACKET_DIPLOMACY_CANCEL_PACT, "other_player_id": action["target_player_id"], "clause": CLAUSE_CEASEFIRE}
     elif action_type == "diplomacy_propose_ceasefire":
         return {
             "pid": PACKET_DIPLOMACY_CREATE_CLAUSE_REQ,
-            "counterpart": action["player_id"],
-            "giver": action.get("giver", -1),
-            "type": 5,
+            "counterpart": action["target_player_id"],
+            "giver": action.get("giver", action.get("player_id", -1)),
+            "type": CLAUSE_CEASEFIRE,
             "value": 0,
         }
     elif action_type == "diplomacy_propose_peace":
         return {
             "pid": PACKET_DIPLOMACY_CREATE_CLAUSE_REQ,
-            "counterpart": action["player_id"],
-            "giver": action.get("giver", -1),
-            "type": 6,
+            "counterpart": action["target_player_id"],
+            "giver": action.get("giver", action.get("player_id", -1)),
+            "type": CLAUSE_PEACE,
             "value": 0,
         }
     elif action_type == "diplomacy_propose_alliance":
         return {
             "pid": PACKET_DIPLOMACY_CREATE_CLAUSE_REQ,
-            "counterpart": action["player_id"],
-            "giver": action.get("giver", -1),
-            "type": 7,
+            "counterpart": action["target_player_id"],
+            "giver": action.get("giver", action.get("player_id", -1)),
+            "type": CLAUSE_ALLIANCE,
             "value": 0,
         }
     elif action_type == "diplomacy_share_vision":
         return {
             "pid": PACKET_DIPLOMACY_CREATE_CLAUSE_REQ,
-            "counterpart": action["player_id"],
-            "giver": action.get("giver", -1),
-            "type": 8,
+            "counterpart": action["target_player_id"],
+            "giver": action.get("giver", action.get("player_id", -1)),
+            "type": CLAUSE_VISION,
             "value": 0,
         }
     elif action_type == "diplomacy_withdraw_vision":
-        # Use REMOVE_CLAUSE request packet (pid 101) for withdrawing vision
         return {
             "pid": PACKET_DIPLOMACY_REMOVE_CLAUSE_REQ,
-            "counterpart": action["player_id"],
-            "giver": action.get("giver", -1),
-            "type": 8,
+            "counterpart": action["target_player_id"],
+            "giver": action.get("giver", action.get("player_id", -1)),
+            "type": CLAUSE_VISION,
             "value": 0,
+        }
+    elif action_type == "diplomacy_reject_treaty":
+        # Rejecting a treaty = cancelling the meeting
+        return {"pid": PACKET_DIPLOMACY_CANCEL_MEETING_REQ, "counterpart": action["target_player_id"]}
+    elif action_type == "diplomacy_cancel_treaty":
+        # Cancel an existing treaty/pact
+        clause_type = action.get("clause_type", CLAUSE_PEACE)
+        return {
+            "pid": PACKET_DIPLOMACY_CANCEL_PACT,
+            "other_player_id": action["target_player_id"],
+            "clause": clause_type,
+        }
+    elif action_type == "diplomacy_message":
+        # Send a diplomatic message via chat
+        # FreeCiv chat protocol: /msg <player_id> <message> sends private message to target player
+        message = action.get("message", "")
+        target_id = action.get("target_player_id", -1)
+        return {
+            "pid": PACKET_CHAT_MSG_REQ,
+            "message": f"/msg {target_id} {message}" if target_id >= 0 else message,
         }
 
     # City actions

@@ -251,6 +251,23 @@ PACKET_DIPLOMACY_ACCEPT_TREATY_REQ = 103  # cs - Request accept treaty
 PACKET_DIPLOMACY_ACCEPT_TREATY = 104  # sc - Treaty accepted
 PACKET_DIPLOMACY_CANCEL_PACT = 105  # cs - Cancel diplomatic pact
 
+# Treaty clause types (used in CREATE_CLAUSE_REQ / REMOVE_CLAUSE_REQ)
+CLAUSE_CEASEFIRE = 5
+CLAUSE_PEACE = 6
+CLAUSE_ALLIANCE = 7
+CLAUSE_VISION = 8
+
+# Diplomatic state types (from PACKET_PLAYER_DIPLSTATE)
+DS_WAR = 0
+DS_ARMISTICE = 1
+DS_CEASEFIRE = 2
+DS_PEACE = 3
+DS_ALLIANCE = 4
+DS_NO_CONTACT = 5
+# Lowercase snake_case names for programmatic use (JSON keys, log messages, agent-clash state payloads).
+# FreeCiv UI uses "No Contact" etc. but our API surfaces these as machine-readable identifiers.
+DS_NAMES = {0: 'war', 1: 'armistice', 2: 'ceasefire', 3: 'peace', 4: 'alliance', 5: 'no_contact'}
+
 
 # =============================================================================
 # CONNECTION AND HEALTH PACKETS

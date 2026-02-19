@@ -51,6 +51,11 @@ from packet_constants import (
     PACKET_DIPLOMACY_REMOVE_CLAUSE_REQ,
     PACKET_DIPLOMACY_ACCEPT_TREATY_REQ,
     PACKET_DIPLOMACY_CANCEL_PACT,
+    PACKET_CHAT_MSG_REQ,
+    CLAUSE_CEASEFIRE,
+    CLAUSE_PEACE,
+    CLAUSE_ALLIANCE,
+    CLAUSE_VISION,
 )
 from action_constants import *
 from activity_constants import *
@@ -1506,7 +1511,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 error_response['correlation_id'] = correlation_id
             self.write_message(json.dumps(error_response))
 
-    def _normalize_agent_clash_action(self, action_data: Dict[str, Any]) -> Dict[str, Any]:
+    def _normalize_agent_clash_action(self, action_data: Dict[str, Any], player_id: int = None, game_id: str = None) -> Dict[str, Any]:
         """Normalize agent-clash action format to proxy format.
 
         agent-clash sends:
@@ -1517,6 +1522,8 @@ class LLMWSHandler(websocket.WebSocketHandler):
 
         Args:
             action_data: agent-clash format action dict
+            player_id: Optional player ID for looking up legal_actions (for target inference)
+            game_id: Optional game ID for looking up legal_actions (for target inference)
 
         Returns:
             Normalized action dict for validation
@@ -1553,7 +1560,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                     normalized["unit_id"] = action_data["actor_id"]
                 elif action_type.startswith("city_"):
                     normalized["city_id"] = action_data["actor_id"]
-                elif action_type in ("tech_research", "end_turn", "diplomacy_message"):
+                elif action_type in ("tech_research", "end_turn") or action_type.startswith("diplomacy_"):
                     normalized["player_id"] = action_data["actor_id"]
                 else:
                     # Fallback: if unknown action type, leave as player_id to be conservative
@@ -1656,6 +1663,68 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 normalized["target_unit_id"] = action_data["target_unit_id"]
             if "target_city_id" in action_data:
                 normalized["target_city_id"] = action_data["target_city_id"]
+
+        elif action_type.startswith("diplomacy_"):
+            # Diplomacy actions use different structure than unit/city actions
+            # They require target_player_id (for validation) and message (for diplomacy_message)
+            # Target dict contains {'player_id': int, 'player_name': str, 'message': str (optional)}
+            target = action_data.get("target", {})
+            if isinstance(target, dict):
+                if "player_id" in target:
+                    normalized["target_player_id"] = target["player_id"]
+                if "message" in target:
+                    normalized["message"] = target["message"]
+
+            # Also check for target_player_id directly in action_data or params
+            if "target_player_id" not in normalized:
+                if "target_player_id" in action_data:
+                    normalized["target_player_id"] = action_data["target_player_id"]
+                elif "params" in action_data and isinstance(action_data["params"], dict):
+                    if "player_id" in action_data["params"]:
+                        normalized["target_player_id"] = action_data["params"]["player_id"]
+
+            # SMART TARGET INFERENCE: If target still missing, look it up from legal_actions
+            if "target_player_id" not in normalized and player_id is not None and game_id is not None:
+                try:
+                    logger.info(f"🔎 TARGET INFERENCE: Attempting for {action_type}, player={player_id}, game={game_id}")
+                    # Get civcom from registry (not from self, which doesn't have the method)
+                    civcom = civcom_registry.get_civcom(game_id, self.agent_id)
+                    if civcom:
+                        legal_actions = civcom._get_legal_actions_optimized(player_id)
+                        logger.info(f"   Found {len(legal_actions)} legal_actions, searching for {action_type}")
+                        # Collect all matching targets to detect ambiguity
+                        matching_targets = []
+                        for legal_action in legal_actions:
+                            if legal_action.get('action') == action_type:
+                                params = legal_action.get('params', {})
+                                if 'player_id' in params:
+                                    matching_targets.append(params['player_id'])
+                        # Deduplicate (same action type can appear multiple times for same target)
+                        unique_targets = list(dict.fromkeys(matching_targets))
+                        if len(unique_targets) == 1:
+                            normalized["target_player_id"] = unique_targets[0]
+                            logger.info(f"✅ INFERRED target_player_id={unique_targets[0]}")
+                        elif len(unique_targets) > 1:
+                            logger.warning(
+                                f"   Ambiguous inference for {action_type}: {len(unique_targets)} "
+                                f"valid targets {unique_targets} — skipping inference"
+                            )
+                        else:
+                            logger.warning(f"   No {action_type} found in legal_actions")
+                    else:
+                        logger.warning(f"   civcom is None from registry for game={game_id}")
+                except Exception as e:
+                    logger.warning(f"Target inference failed: {e}", exc_info=True)
+
+            # Validate that target_player_id is set and different from actor (player_id)
+            target_id = normalized.get("target_player_id")
+            actor_id = normalized.get("player_id")
+            if target_id is None:
+                logger.warning(f"Diplomacy action missing target_player_id: {action_type}")
+            elif target_id == actor_id:
+                logger.warning(f"Diplomacy action {action_type} targets self (actor={actor_id}, target={target_id})")
+
+            logger.info(f"Normalized diplomacy action: {action_type} targeting player {normalized.get('target_player_id')}")
 
         elif action_type == "end_turn":
             # end_turn is simple - just needs player_id (already mapped above)
@@ -1876,7 +1945,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 logger.info(f"📝 NORMALIZATION TRIGGERED: agent-clash format detected")
                 logger.info(f"📝 Original action_data: {action_data}")
                 try:
-                    action_data = self._normalize_agent_clash_action(action_data)
+                    action_data = self._normalize_agent_clash_action(action_data, self.player_id, self.game_id)
                     logger.info(f"✅ NORMALIZATION SUCCESS: {action_data}")
                     logger.info(f"✅ Normalized action has 'type': {'type' in action_data}")
                     logger.info(f"✅ Normalized action has 'tech_name': {'tech_name' in action_data if action_data.get('type') == 'tech_research' else 'N/A'}")
@@ -3281,6 +3350,21 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 except (ValueError, TypeError):
                     continue
 
+        # Diplomacy actions - generated from civcom's diplomatic state
+        # Note: _get_diplomacy_actions is also called in civcom._get_legal_actions_optimized()
+        # for state query responses. Both calls are intentional: this one formats for LLM prompt
+        # generation, while the civcom call provides raw legal_actions in state payloads.
+        if self.civcom:
+            diplomacy_actions = self.civcom._get_diplomacy_actions(self.player_id)
+            for da in diplomacy_actions:
+                action_entry = {
+                    'action_type': da['action'],
+                    'actor_id': self.player_id or 0,
+                    'target': da.get('params', {}),
+                    'is_valid': da.get('is_valid', True),
+                }
+                actions.append(action_entry)
+
         # ALWAYS add end_turn action - critical for game progression
         actions.append({
             'action_type': 'end_turn',
@@ -3959,72 +4043,92 @@ class LLMWSHandler(websocket.WebSocketHandler):
         elif action_type == 'diplomacy_start_negotiation':
             return {
                 'pid': PACKET_DIPLOMACY_INIT_MEETING_REQ,
-                'counterpart': action['player_id']
+                'counterpart': action.get('target_player_id', action.get('player_id'))
             }
         elif action_type == 'diplomacy_cancel_meeting':
             return {
                 'pid': PACKET_DIPLOMACY_CANCEL_MEETING_REQ,
-                'counterpart': action['player_id']
+                'counterpart': action.get('target_player_id', action.get('player_id'))
             }
         elif action_type == 'diplomacy_accept_treaty':
             return {
                 'pid': PACKET_DIPLOMACY_ACCEPT_TREATY_REQ,
-                'counterpart': action['player_id']
+                'counterpart': action.get('target_player_id', action.get('player_id'))
             }
         elif action_type == 'diplomacy_cancel_pact':
-            # CLAUSE_CEASEFIRE = 5, CLAUSE_PEACE = 6, CLAUSE_ALLIANCE = 7
-            clause_type = action.get('clause_type', 6)  # Default to CLAUSE_PEACE
+            clause_type = action.get('clause_type', CLAUSE_PEACE)
             return {
                 'pid': PACKET_DIPLOMACY_CANCEL_PACT,
-                'other_player_id': action['player_id'],
+                'other_player_id': action.get('target_player_id', action.get('player_id')),
                 'clause': clause_type
             }
         elif action_type == 'diplomacy_declare_war':
             # Cancel all peace clauses to declare war
+            # Use target_player_id (set by normalization) not player_id
             return {
                 'pid': PACKET_DIPLOMACY_CANCEL_PACT,
-                'other_player_id': action['player_id'],
-                'clause': 5  # CLAUSE_CEASEFIRE - canceling to declare war
+                'other_player_id': action.get('target_player_id', action.get('player_id')),
+                'clause': CLAUSE_CEASEFIRE
             }
         elif action_type == 'diplomacy_propose_ceasefire':
             return {
                 'pid': PACKET_DIPLOMACY_CREATE_CLAUSE_REQ,
-                'counterpart': action['player_id'],
-                'giver': action.get('giver', -1),  # Player giving the clause
-                'type': 5,  # CLAUSE_CEASEFIRE
+                'counterpart': action.get('target_player_id', action.get('player_id')),
+                'giver': action.get('giver', action.get('player_id', -1)),
+                'type': CLAUSE_CEASEFIRE,
                 'value': 0
             }
         elif action_type == 'diplomacy_propose_peace':
             return {
                 'pid': PACKET_DIPLOMACY_CREATE_CLAUSE_REQ,
-                'counterpart': action['player_id'],
-                'giver': action.get('giver', -1),
-                'type': 6,  # CLAUSE_PEACE
+                'counterpart': action.get('target_player_id', action.get('player_id')),
+                'giver': action.get('giver', action.get('player_id', -1)),
+                'type': CLAUSE_PEACE,
                 'value': 0
             }
         elif action_type == 'diplomacy_propose_alliance':
             return {
                 'pid': PACKET_DIPLOMACY_CREATE_CLAUSE_REQ,
-                'counterpart': action['player_id'],
-                'giver': action.get('giver', -1),
-                'type': 7,  # CLAUSE_ALLIANCE
+                'counterpart': action.get('target_player_id', action.get('player_id')),
+                'giver': action.get('giver', action.get('player_id', -1)),
+                'type': CLAUSE_ALLIANCE,
                 'value': 0
             }
         elif action_type == 'diplomacy_share_vision':
             return {
                 'pid': PACKET_DIPLOMACY_CREATE_CLAUSE_REQ,
-                'counterpart': action['player_id'],
-                'giver': action.get('giver', -1),
-                'type': 8,  # CLAUSE_VISION
+                'counterpart': action.get('target_player_id', action.get('player_id')),
+                'giver': action.get('giver', action.get('player_id', -1)),
+                'type': CLAUSE_VISION,
                 'value': 0
             }
         elif action_type == 'diplomacy_withdraw_vision':
             return {
                 'pid': PACKET_DIPLOMACY_REMOVE_CLAUSE_REQ,
-                'counterpart': action['player_id'],
-                'giver': action.get('giver', -1),
-                'type': 8,  # CLAUSE_VISION
+                'counterpart': action.get('target_player_id', action.get('player_id')),
+                'giver': action.get('giver', action.get('player_id', -1)),
+                'type': CLAUSE_VISION,
                 'value': 0
+            }
+        elif action_type == 'diplomacy_reject_treaty':
+            return {
+                'pid': PACKET_DIPLOMACY_CANCEL_MEETING_REQ,
+                'counterpart': action.get('target_player_id', action.get('player_id'))
+            }
+        elif action_type == 'diplomacy_cancel_treaty':
+            clause_type = action.get('clause_type', CLAUSE_PEACE)
+            return {
+                'pid': PACKET_DIPLOMACY_CANCEL_PACT,
+                'other_player_id': action.get('target_player_id', action.get('player_id')),
+                'clause': clause_type
+            }
+        elif action_type == 'diplomacy_message':
+            message = action.get('message', '')
+            target_player = action.get('target_player_id', -1)
+            # FreeCiv chat protocol: /msg <player_id> <message> sends private message to target player
+            return {
+                'pid': PACKET_CHAT_MSG_REQ,
+                'message': f"/msg {target_player} {message}" if target_player >= 0 else message,
             }
 
         # =================================================================
