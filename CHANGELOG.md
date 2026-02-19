@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.57](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.56...freeciv3d-v0.3.57) (2026-02-19)
+
+
+### Features
+
+* **AGE-400:** expose all interactive/multi-player actions to LLM agents ([#159](https://github.com/taso-ventures/freeciv3d/issues/159)) ([b09517a](https://github.com/taso-ventures/freeciv3d/commit/b09517af087be8b3664dd3b149f1e43dc42d7637))
+
 ## [0.3.56](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.55...freeciv3d-v0.3.56) (2026-02-18)
 
 
