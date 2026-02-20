@@ -718,9 +718,7 @@ function compute_wrapped_spread_and_centroid(positions)
   }
 
   distances.sort(function(a, b) { return a - b; });
-  var coverage = (typeof TERRITORY_COVERAGE_RATIO !== 'undefined') ? TERRITORY_COVERAGE_RATIO : 0.85;
-  var percentile_index = Math.min(Math.floor(distances.length * coverage), distances.length - 1);
-  var effective_radius = distances[percentile_index];
+  var effective_radius = find_outlier_cutoff_radius(distances);
 
   return {
     centroid_x: centroid_x,
@@ -876,8 +874,8 @@ function get_player_territory_centroid_and_spread(player_id)
 }
 
 // Territory observer zoom configuration
-// Uses effective_radius (85th-percentile Chebyshev distance from centroid)
-// to compute camera height, ignoring distant outlier units.
+// Uses effective_radius (gap-based outlier detection from centroid)
+// to compute camera height, trimming only genuinely distant outliers.
 //
 // Calibrated for the FreeCiv3D WebGL viewport at 1920x1080:
 // - Single city (radius ~0): dy=250 gives a close overhead view of the city area
@@ -888,16 +886,57 @@ var TERRITORY_BASE_DY = 250;
 var TERRITORY_DY_PER_TILE = 28;
 var TERRITORY_MIN_ZOOM_DY = 200;
 var TERRITORY_MAX_ZOOM_DY = 900;
-// 85th percentile: includes the main empire cluster while excluding the ~15% most
-// distant units (scouts, expeditionary forces) that would otherwise over-zoom.
-var TERRITORY_COVERAGE_RATIO = 0.85;
+// Gap-based outlier detection: only trim positions that are separated from the
+// main cluster by a significant gap (>80% of the core radius). This adapts to
+// the actual territory shape rather than always cutting a fixed percentage.
+var OUTLIER_GAP_RATIO = 0.8;          // Gap must exceed 80% of core radius to trigger cutoff
+var OUTLIER_MIN_CORE_RATIO = 0.6;     // At least 60% of positions must be in the core cluster
+
+/****************************************************************************
+  Find the effective radius from a sorted array of distances by detecting
+  the largest gap that separates the main cluster from distant outliers.
+
+  Algorithm:
+  1. Scan from the 60% mark to the end of the sorted distances
+  2. Find the largest gap between consecutive distances
+  3. If that gap exceeds 80% of the core radius at that point, cut there
+  4. If no significant gap exists, include everything
+
+  This adapts to actual territory shape: a tight cluster with 1 distant
+  scout gets trimmed, but a genuinely spread-out empire is shown in full.
+****************************************************************************/
+function find_outlier_cutoff_radius(distances)
+{
+  if (distances.length === 0) return 0;
+  if (distances.length <= 2) return distances[distances.length - 1];
+
+  var min_core_index = Math.floor(distances.length * OUTLIER_MIN_CORE_RATIO);
+  var best_gap = 0;
+  var cutoff_index = distances.length - 1;
+
+  for (var i = min_core_index; i < distances.length - 1; i++) {
+    var gap = distances[i + 1] - distances[i];
+    if (gap > best_gap) {
+      best_gap = gap;
+      cutoff_index = i;
+    }
+  }
+
+  // Only cut if the gap is significant relative to the core radius
+  var core_radius = distances[cutoff_index];
+  if (core_radius > 0 && best_gap > core_radius * OUTLIER_GAP_RATIO) {
+    return distances[cutoff_index];
+  }
+
+  // No significant gap — include everything
+  return distances[distances.length - 1];
+}
 
 /****************************************************************************
   Calculate camera height (zoom) based on territory effective radius.
   Uses a simple linear formula: dy = BASE + radius * DY_PER_TILE,
-  clamped to [MIN, MAX]. The effective radius is the 85th-percentile
-  Chebyshev distance from centroid, which naturally excludes distant
-  outlier units while keeping the full city cluster in view.
+  clamped to [MIN, MAX]. The effective radius uses gap-based outlier
+  detection to exclude only genuinely distant positions.
 ****************************************************************************/
 function calculate_zoom_for_territory_spread(effective_radius)
 {

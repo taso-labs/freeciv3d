@@ -426,9 +426,7 @@ global.compute_wrapped_spread_and_centroid = function(positions) {
   }
 
   distances.sort(function(a, b) { return a - b; });
-  var coverage = (typeof global.TERRITORY_COVERAGE_RATIO !== 'undefined') ? global.TERRITORY_COVERAGE_RATIO : 0.85;
-  var percentile_index = Math.min(Math.floor(distances.length * coverage), distances.length - 1);
-  var effective_radius = distances[percentile_index];
+  var effective_radius = find_outlier_cutoff_radius(distances);
 
   return {
     centroid_x: centroid_x,
@@ -490,6 +488,35 @@ global.get_player_territory_centroid_and_spread = function(player_id) {
     count: result.total_weight,
     tile: { x: result.centroid_x, y: result.centroid_y }
   };
+};
+
+/**
+ * Find the effective radius from sorted distances using gap-based outlier detection.
+ * Scans from the 60% mark for the largest gap; if it exceeds 80% of the core radius,
+ * cuts there. Otherwise includes everything.
+ */
+global.find_outlier_cutoff_radius = function(distances) {
+  if (distances.length === 0) return 0;
+  if (distances.length <= 2) return distances[distances.length - 1];
+
+  var min_core_index = Math.floor(distances.length * global.OUTLIER_MIN_CORE_RATIO);
+  var best_gap = 0;
+  var cutoff_index = distances.length - 1;
+
+  for (var i = min_core_index; i < distances.length - 1; i++) {
+    var gap = distances[i + 1] - distances[i];
+    if (gap > best_gap) {
+      best_gap = gap;
+      cutoff_index = i;
+    }
+  }
+
+  var core_radius = distances[cutoff_index];
+  if (core_radius > 0 && best_gap > core_radius * global.OUTLIER_GAP_RATIO) {
+    return distances[cutoff_index];
+  }
+
+  return distances[distances.length - 1];
 };
 
 /**
@@ -1169,7 +1196,8 @@ global.TERRITORY_BASE_DY = 250;
 global.TERRITORY_DY_PER_TILE = 28;
 global.TERRITORY_MIN_ZOOM_DY = 200;
 global.TERRITORY_MAX_ZOOM_DY = 900;
-global.TERRITORY_COVERAGE_RATIO = 0.85;
+global.OUTLIER_GAP_RATIO = 0.8;
+global.OUTLIER_MIN_CORE_RATIO = 0.6;
 
 // Constants
 global.CAPITAL_PRIMARY = 1;
