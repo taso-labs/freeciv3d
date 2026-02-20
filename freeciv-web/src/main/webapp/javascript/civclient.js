@@ -74,6 +74,9 @@ var MIN_AUTOCENTER_MS = 1000;             // Minimum autocenter interval (1 seco
 var MAX_AUTOCENTER_MS = 60000;            // Maximum autocenter interval (60 seconds)
 var MAX_INITIAL_CENTER_ATTEMPTS = 20;     // Max polling attempts for initial center (20 * 500ms = 10 seconds)
 var INITIAL_CENTER_POLL_INTERVAL_MS = 500; // Polling interval for initial center (500ms)
+var observer_user_interaction_time = 0;    // Timestamp of last user camera interaction
+var OBSERVER_INTERACTION_COOLDOWN_MS = 45000; // Suppress auto-center for 45s after user interaction
+var observer_interaction_listeners_attached = false; // Guard to prevent duplicate event listeners
 var embed_mode = false;                   // Embed mode for iframe viewing
 var keyboard_input_enabled = true;        // Keyboard input enabled flag
 
@@ -251,6 +254,43 @@ function notify_observer_centered_fallback(reason, extra_data)
 }
 
 /****************************************************************************
+  Mark that the user has interacted with the camera (mouse/touch/scroll).
+  Suppresses auto-centering for OBSERVER_INTERACTION_COOLDOWN_MS so the
+  user's custom view is not immediately overridden.
+****************************************************************************/
+function observer_mark_user_interaction()
+{
+  observer_user_interaction_time = Date.now();
+}
+
+/****************************************************************************
+  Check if user interaction cooldown is active.
+  Returns true if the user recently interacted with the camera and
+  auto-centering should be suppressed.
+****************************************************************************/
+function observer_is_interaction_cooldown_active()
+{
+  if (observer_user_interaction_time === 0) return false;
+  return (Date.now() - observer_user_interaction_time) < OBSERVER_INTERACTION_COOLDOWN_MS;
+}
+
+/****************************************************************************
+  Set up event listeners on the map canvas to detect user camera interaction.
+  Called once during observer initialization.
+****************************************************************************/
+function init_observer_interaction_detection()
+{
+  if (observer_interaction_listeners_attached) return;
+  var canvas = document.getElementById('mapcanvas');
+  if (!canvas) return;
+
+  canvas.addEventListener('mousedown', observer_mark_user_interaction);
+  canvas.addEventListener('wheel', observer_mark_user_interaction);
+  canvas.addEventListener('touchstart', observer_mark_user_interaction, { passive: true });
+  observer_interaction_listeners_attached = true;
+}
+
+/****************************************************************************
   Initialize observer follow mode from URL parameter.
   Parses ?follow=player_name and sets up auto-centering on that player.
 ****************************************************************************/
@@ -263,6 +303,9 @@ function init_observer_follow_mode()
   register_observer_cleanup_handler();
 
   if (!observing) return;
+
+  // Set up user interaction detection for cooldown
+  init_observer_interaction_detection();
 
   // Parse autocenter interval with bounds checking to prevent DoS
   var autocenter_param = $.getUrlVar('autocenter');
@@ -536,6 +579,12 @@ function observer_center_on_followed_player()
     return;
   }
 
+  // Skip auto-center if user recently interacted with the camera.
+  // This lets users explore a custom view without it snapping back.
+  if (observer_is_interaction_cooldown_active()) {
+    return;
+  }
+
   // After initial center: use territory-aware centering with dynamic zoom
   var territory_data = center_on_player_territory_with_zoom(observer_follow_player);
   if (territory_data) {
@@ -669,9 +718,7 @@ function compute_wrapped_spread_and_centroid(positions)
   }
 
   distances.sort(function(a, b) { return a - b; });
-  var coverage = (typeof TERRITORY_COVERAGE_RATIO !== 'undefined') ? TERRITORY_COVERAGE_RATIO : 0.85;
-  var percentile_index = Math.min(Math.floor(distances.length * coverage), distances.length - 1);
-  var effective_radius = distances[percentile_index];
+  var effective_radius = find_outlier_cutoff_radius(distances);
 
   return {
     centroid_x: centroid_x,
@@ -827,28 +874,82 @@ function get_player_territory_centroid_and_spread(player_id)
 }
 
 // Territory observer zoom configuration
-// Uses effective_radius (85th-percentile Chebyshev distance from centroid)
-// to compute camera height, ignoring distant outlier units.
+// Uses effective_radius (gap-based outlier detection from centroid)
+// to compute camera height, trimming only genuinely distant outliers.
 //
 // Calibrated for the FreeCiv3D WebGL viewport at 1920x1080:
 // - Single city (radius ~0): dy=250 gives a close overhead view of the city area
 // - Mid-game empire (~10 tile radius): dy=530 keeps 2-3 cities in frame
 // - Late-game continental empire (~20+ tiles): dy=810+ shows the full territory
-// - DY_PER_TILE=28 was chosen so the zoom transition feels smooth across these stages
+// - DY_PER_TILE=35 gives enough zoom-out to keep full territory in view
 var TERRITORY_BASE_DY = 250;
-var TERRITORY_DY_PER_TILE = 28;
+var TERRITORY_DY_PER_TILE = 35;
 var TERRITORY_MIN_ZOOM_DY = 200;
-var TERRITORY_MAX_ZOOM_DY = 900;
-// 85th percentile: includes the main empire cluster while excluding the ~15% most
-// distant units (scouts, expeditionary forces) that would otherwise over-zoom.
-var TERRITORY_COVERAGE_RATIO = 0.85;
+var TERRITORY_MAX_ZOOM_DY = 1200;
+// Gap-based outlier detection: only trim positions that are genuinely distant
+// outliers causing excessive zoom-out. Two conditions must both be met:
+// 1. A significant gap exists (>80% of core radius)
+// 2. The outlier would cause excessive zoom-out (>4x the core radius)
+// This ensures nearby spread (e.g. radius 2→7) is included while truly
+// distant outliers (e.g. radius 7→80) are excluded.
+var OUTLIER_GAP_RATIO = 0.8;          // Gap must exceed 80% of core radius to trigger cutoff
+var OUTLIER_MIN_CORE_RATIO = 0.6;     // At least 60% of positions must be in the core cluster
+var OUTLIER_ZOOM_IMPACT_RATIO = 4.0;  // Outlier must be >4x core radius to justify cutting
+
+/****************************************************************************
+  Find the effective radius from a sorted array of distances by detecting
+  the largest gap that separates the main cluster from distant outliers.
+
+  Algorithm:
+  1. Scan from the 60% mark to the end of the sorted distances
+  2. Find the largest gap between consecutive distances
+  3. Cut ONLY if both conditions are met:
+     a. The gap exceeds 80% of the core radius (significant relative gap)
+     b. The outermost distance exceeds 4x the core radius (excessive zoom)
+  4. If either condition fails, include everything
+
+  Examples:
+  - [2,2,2,2,2,2,2,6,7]   → core=2, max=7, 7/2=3.5x < 4x → include all
+  - [2,2,2,2,2,2,2,6,7,80] → core=7, max=80, 80/7=11.4x > 4x → cut at 7
+****************************************************************************/
+function find_outlier_cutoff_radius(distances)
+{
+  if (distances.length === 0) return 0;
+  if (distances.length <= 2) return distances[distances.length - 1];
+
+  var min_core_index = Math.floor(distances.length * OUTLIER_MIN_CORE_RATIO);
+  var best_gap = 0;
+  var cutoff_index = distances.length - 1;
+
+  for (var i = min_core_index; i < distances.length - 1; i++) {
+    var gap = distances[i + 1] - distances[i];
+    if (gap > best_gap) {
+      best_gap = gap;
+      cutoff_index = i;
+    }
+  }
+
+  var core_radius = distances[cutoff_index];
+  var max_distance = distances[distances.length - 1];
+
+  // Both conditions must be true to cut:
+  // 1. The gap is significant relative to the core cluster
+  // 2. Including the outlier would cause excessive zoom-out
+  if (core_radius > 0 &&
+      best_gap > core_radius * OUTLIER_GAP_RATIO &&
+      max_distance > core_radius * OUTLIER_ZOOM_IMPACT_RATIO) {
+    return distances[cutoff_index];
+  }
+
+  // Either no significant gap or zoom impact is acceptable — include everything
+  return distances[distances.length - 1];
+}
 
 /****************************************************************************
   Calculate camera height (zoom) based on territory effective radius.
   Uses a simple linear formula: dy = BASE + radius * DY_PER_TILE,
-  clamped to [MIN, MAX]. The effective radius is the 85th-percentile
-  Chebyshev distance from centroid, which naturally excludes distant
-  outlier units while keeping the full city cluster in view.
+  clamped to [MIN, MAX]. The effective radius uses gap-based outlier
+  detection to exclude only genuinely distant positions.
 ****************************************************************************/
 function calculate_zoom_for_territory_spread(effective_radius)
 {
@@ -1023,6 +1124,12 @@ function center_on_all_players_with_zoom()
 ****************************************************************************/
 function observer_center_global_view()
 {
+  // Skip auto-center if user recently interacted with the camera
+  // (but always allow initial centering so the view isn't blank)
+  if (observer_centered_notified && observer_is_interaction_cooldown_active()) {
+    return;
+  }
+
   // Try to center on all players' units with dynamic zoom
   // center_on_all_players_with_zoom() returns unit_data on success, null on failure
   var unit_data = center_on_all_players_with_zoom();
@@ -1150,6 +1257,18 @@ function cleanup_observer_follow_mode()
   observer_last_unit_spread = null;
   observer_last_territory_radius = null;
   observer_last_global_spread = null;
+  observer_user_interaction_time = 0;
+
+  // Remove interaction event listeners to prevent stacking on re-init
+  if (observer_interaction_listeners_attached) {
+    var canvas = document.getElementById('mapcanvas');
+    if (canvas) {
+      canvas.removeEventListener('mousedown', observer_mark_user_interaction);
+      canvas.removeEventListener('wheel', observer_mark_user_interaction);
+      canvas.removeEventListener('touchstart', observer_mark_user_interaction);
+    }
+  }
+  observer_interaction_listeners_attached = false;
 }
 
 /****************************************************************************
