@@ -57,17 +57,8 @@ describe('find_outlier_cutoff_radius()', () => {
       expect(global.find_outlier_cutoff_radius([2, 2, 2, 2, 2, 2, 2, 6, 7])).toBe(7);
     });
 
-    test('zoom impact is high but gap is not significant', () => {
-      // [1, 2, 3, 4, 5, 6, 7, 8, 9, 50]
-      // Gradual increase from 1-9, then jump to 50
-      // min_core_index = floor(10 * 0.6) = 6
-      // Gaps from index 6: 8-7=1, 9-8=1, 50-9=41
-      // Best gap: 41 at index 8, core_radius=9
-      // Gap check: 41 > 9*0.8=7.2 ✓
-      // Zoom check: 50 > 9*4.0=36 ✓ → CUTS
-      // Actually this WILL cut. Let me design a better test.
-      // [1, 3, 5, 7, 9, 11, 13, 15, 17, 19]
-      // Uniform 2-step, no significant gap
+    test('no significant gap in uniformly spaced distances', () => {
+      // [1, 3, 5, 7, 9, 11, 13, 15, 17, 19] — uniform 2-step spacing, no outlier gap
       expect(global.find_outlier_cutoff_radius([1, 3, 5, 7, 9, 11, 13, 15, 17, 19])).toBe(19);
     });
   });
