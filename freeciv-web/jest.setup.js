@@ -244,7 +244,10 @@ global.observer_follow_player = null;
 global.observer_auto_center_interval = null;
 global.observer_initial_center_interval = null;
 global.observer_player_search_interval = null;
-global.OBSERVER_AUTO_CENTER_MS = 5000;
+global.OBSERVER_AUTO_CENTER_MS = 10000;
+global.observer_user_interaction_time = 0;
+global.OBSERVER_INTERACTION_COOLDOWN_MS = 45000;
+global.observer_interaction_listeners_attached = false;
 global.embed_mode = false;
 
 // Parent iframe notification state flags
@@ -277,6 +280,38 @@ global.player_capital = function(player) {
 };
 
 /**
+ * Mark that the user has interacted with the camera.
+ * Suppresses auto-centering for OBSERVER_INTERACTION_COOLDOWN_MS.
+ * Ignored in embed mode where camera controls are disabled.
+ */
+global.observer_mark_user_interaction = function() {
+  if (global.embed_mode) return;
+  global.observer_user_interaction_time = Date.now();
+};
+
+/**
+ * Check if user interaction cooldown is active.
+ * Returns true if auto-centering should be suppressed.
+ */
+global.observer_is_interaction_cooldown_active = function() {
+  if (global.observer_user_interaction_time === 0) return false;
+  return (Date.now() - global.observer_user_interaction_time) < global.OBSERVER_INTERACTION_COOLDOWN_MS;
+};
+
+/**
+ * Set up event listeners on the map canvas to detect user camera interaction.
+ */
+global.init_observer_interaction_detection = function() {
+  if (global.observer_interaction_listeners_attached) return;
+  var canvas = document.getElementById('mapcanvas');
+  if (!canvas) return;
+  canvas.addEventListener('mousedown', global.observer_mark_user_interaction);
+  canvas.addEventListener('wheel', global.observer_mark_user_interaction);
+  canvas.addEventListener('touchstart', global.observer_mark_user_interaction, { passive: true });
+  global.observer_interaction_listeners_attached = true;
+};
+
+/**
  * Initialize observer follow mode from URL parameter.
  * Parses ?follow=player_name and sets up auto-centering.
  */
@@ -295,7 +330,7 @@ global.init_observer_follow_mode = function() {
       global.OBSERVER_AUTO_CENTER_MS = parsed;
     }
   } else {
-    global.OBSERVER_AUTO_CENTER_MS = 5000; // Reset to default
+    global.OBSERVER_AUTO_CENTER_MS = 10000; // Reset to default
   }
 
   // Find player by name, username, or playerno
@@ -632,6 +667,11 @@ global.observer_center_on_followed_player = function() {
     return;
   }
 
+  // Skip auto-center if user recently interacted with the camera
+  if (global.observer_is_interaction_cooldown_active()) {
+    return;
+  }
+
   // After initial center: territory-aware centering with dynamic zoom
   var territory_data = global.center_on_player_territory_with_zoom(global.observer_follow_player);
   if (territory_data) {
@@ -685,7 +725,103 @@ global.cleanup_observer_follow_mode = function() {
   global.observer_last_unit_spread = null;
   global.observer_last_territory_radius = null;
   global.observer_last_global_spread = null;
+  global.observer_user_interaction_time = 0;
 };
+
+/**
+ * Get centroid and spread of all non-barbarian alive players' units.
+ * Mirrors production get_all_players_units_centroid_and_spread().
+ */
+global.get_all_players_units_centroid_and_spread = function() {
+  var positions = [];
+  var players_with_units = {};
+
+  for (var unit_id in global.units) {
+    var punit = global.units[unit_id];
+    var owner_id = punit['owner'];
+    if (global.is_barbarian_player && global.is_barbarian_player(owner_id)) continue;
+    var player = global.players[owner_id];
+    if (!player || !player['is_alive']) continue;
+    var ptile = global.index_to_tile(punit['tile']);
+    if (ptile) {
+      positions.push({ x: ptile['x'], y: ptile['y'], weight: 1 });
+      players_with_units[owner_id] = true;
+    }
+  }
+
+  var result = global.compute_wrapped_spread_and_centroid(positions);
+  if (!result) return null;
+
+  return {
+    centroid: { x: result.centroid_x, y: result.centroid_y },
+    spread: result.spread,
+    count: positions.length,
+    player_count: Object.keys(players_with_units).length,
+    tile: { x: result.centroid_x, y: result.centroid_y }
+  };
+};
+
+/**
+ * Center on all players' units with dynamic zoom.
+ * Mirrors production center_on_all_players_with_zoom().
+ */
+global.center_on_all_players_with_zoom = function() {
+  var unit_data = global.get_all_players_units_centroid_and_spread();
+  if (!unit_data) return null;
+  global.center_tile_mapcanvas(unit_data.tile);
+  return unit_data;
+};
+
+/**
+ * Global observer view centering.
+ * Mirrors production observer_center_global_view().
+ */
+global.observer_center_global_view = function() {
+  if (global.observer_centered_notified && global.observer_is_interaction_cooldown_active()) {
+    return;
+  }
+
+  var unit_data = global.center_on_all_players_with_zoom();
+  if (unit_data) {
+    if (!global.observer_centered_notified) {
+      global.observer_centered_notified = true;
+      global.observer_parent_notified = true;
+      global.notify_parent_iframe('observer_centered', {
+        center_type: 'global_units',
+        player_count: unit_data.player_count,
+        unit_count: unit_data.count,
+        spread: unit_data.spread
+      });
+    }
+    return;
+  }
+
+  var explored_tile = global.find_first_explored_tile();
+  if (explored_tile) {
+    global.center_tile_mapcanvas(explored_tile);
+    if (!global.observer_centered_notified) {
+      global.observer_centered_notified = true;
+      global.observer_parent_notified = true;
+      global.notify_parent_iframe('observer_centered', {
+        center_type: 'fallback_explored',
+        reason: 'no_player_units',
+        location: { x: explored_tile['x'], y: explored_tile['y'] }
+      });
+    }
+    return;
+  }
+
+  if (!global.observer_parent_notified) {
+    global.observer_parent_notified = true;
+    global.notify_parent_iframe('observer_centered', {
+      center_type: 'none',
+      reason: 'no_visible_content'
+    });
+  }
+};
+
+// Barbarian player check (defaults to false for tests)
+global.is_barbarian_player = jest.fn(() => false);
 
 // =============================================================================
 // EMBED MODE SYSTEM (from civclient.js)
@@ -1128,7 +1264,9 @@ global.resetAllMocks = () => {
     clearInterval(global.observer_player_search_interval);
   }
   global.observer_player_search_interval = null;
-  global.OBSERVER_AUTO_CENTER_MS = 5000;
+  global.OBSERVER_AUTO_CENTER_MS = 10000;
+  global.observer_user_interaction_time = 0;
+  global.observer_interaction_listeners_attached = false;
   global.embed_mode = false;
   global.players = {};
   global.cities = {};

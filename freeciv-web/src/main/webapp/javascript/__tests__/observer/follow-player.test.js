@@ -70,8 +70,8 @@ describe('Follow Player System', () => {
       expect(typeof observer_auto_center_interval).not.toBe('undefined');
     });
 
-    test('OBSERVER_AUTO_CENTER_MS should default to 5000', () => {
-      expect(OBSERVER_AUTO_CENTER_MS).toBe(5000);
+    test('OBSERVER_AUTO_CENTER_MS should default to 10000', () => {
+      expect(OBSERVER_AUTO_CENTER_MS).toBe(10000);
     });
 
     test('observer_last_territory_radius should be defined and null', () => {
@@ -186,7 +186,7 @@ describe('Follow Player System', () => {
       expect(OBSERVER_AUTO_CENTER_MS).toBe(3000);
     });
 
-    test('should use default 5000ms when autocenter param is missing', () => {
+    test('should use default 10000ms when autocenter param is missing', () => {
       // Reset to non-default value first
       global.OBSERVER_AUTO_CENTER_MS = 1000;
 
@@ -195,7 +195,7 @@ describe('Follow Player System', () => {
       init_observer_follow_mode();
 
       // Should stay at default or be reset to default
-      expect(OBSERVER_AUTO_CENTER_MS).toBe(5000);
+      expect(OBSERVER_AUTO_CENTER_MS).toBe(10000);
     });
 
     test('should handle invalid autocenter value gracefully', () => {
@@ -203,7 +203,7 @@ describe('Follow Player System', () => {
 
       expect(() => init_observer_follow_mode()).not.toThrow();
       // Should fall back to default
-      expect(OBSERVER_AUTO_CENTER_MS).toBe(5000);
+      expect(OBSERVER_AUTO_CENTER_MS).toBe(10000);
     });
   });
 
@@ -422,6 +422,143 @@ describe('Follow Player System', () => {
       global.observer_follow_player = null;
 
       expect(() => cleanup_observer_follow_mode()).not.toThrow();
+    });
+
+    test('should reset observer_user_interaction_time to 0', () => {
+      global.observer_user_interaction_time = Date.now();
+
+      cleanup_observer_follow_mode();
+
+      expect(global.observer_user_interaction_time).toBe(0);
+    });
+  });
+
+  // ===========================================================================
+  // User Interaction Cooldown Tests
+  // ===========================================================================
+
+  describe('user interaction cooldown', () => {
+    test('observer_mark_user_interaction should be defined', () => {
+      expect(typeof observer_mark_user_interaction).toBe('function');
+    });
+
+    test('observer_is_interaction_cooldown_active should be defined', () => {
+      expect(typeof observer_is_interaction_cooldown_active).toBe('function');
+    });
+
+    test('cooldown should not be active initially', () => {
+      expect(observer_is_interaction_cooldown_active()).toBe(false);
+    });
+
+    test('marking interaction should activate cooldown', () => {
+      observer_mark_user_interaction();
+
+      expect(observer_is_interaction_cooldown_active()).toBe(true);
+    });
+
+    test('marking interaction should not activate cooldown in embed mode', () => {
+      global.embed_mode = true;
+
+      observer_mark_user_interaction();
+
+      expect(observer_is_interaction_cooldown_active()).toBe(false);
+    });
+
+    test('cooldown should expire after OBSERVER_INTERACTION_COOLDOWN_MS', () => {
+      jest.useFakeTimers();
+
+      observer_mark_user_interaction();
+      expect(observer_is_interaction_cooldown_active()).toBe(true);
+
+      jest.advanceTimersByTime(OBSERVER_INTERACTION_COOLDOWN_MS + 1);
+      expect(observer_is_interaction_cooldown_active()).toBe(false);
+
+      jest.useRealTimers();
+    });
+
+    test('should suppress auto-centering during cooldown', () => {
+      global.observer_follow_player = 0;
+      global.observer_centered_notified = true; // past initial center
+
+      // Mark user interaction to activate cooldown
+      observer_mark_user_interaction();
+
+      // Try to auto-center — should be suppressed
+      center_tile_mapcanvas.mockClear();
+      observer_center_on_followed_player();
+
+      expect(center_tile_mapcanvas).not.toHaveBeenCalled();
+    });
+
+    test('should NOT suppress initial centering during cooldown', () => {
+      global.observer_follow_player = 0;
+      global.observer_centered_notified = false; // initial center not yet done
+
+      // Mark user interaction
+      observer_mark_user_interaction();
+
+      // Initial center should still work
+      observer_center_on_followed_player();
+
+      expect(center_tile_mapcanvas).toHaveBeenCalled();
+    });
+
+    test('should resume auto-centering after cooldown expires', () => {
+      jest.useFakeTimers();
+      global.observer_follow_player = 0;
+      global.observer_centered_notified = true;
+
+      // Mark user interaction
+      observer_mark_user_interaction();
+
+      // During cooldown — suppressed
+      center_tile_mapcanvas.mockClear();
+      observer_center_on_followed_player();
+      expect(center_tile_mapcanvas).not.toHaveBeenCalled();
+
+      // After cooldown — resumes
+      jest.advanceTimersByTime(OBSERVER_INTERACTION_COOLDOWN_MS + 1);
+      observer_center_on_followed_player();
+      expect(center_tile_mapcanvas).toHaveBeenCalled();
+
+      jest.useRealTimers();
+    });
+
+    test('should suppress global view auto-centering during cooldown', () => {
+      // Set up units so global view has something to center on
+      global.index_to_tile.mockReturnValue({ x: 10, y: 10 });
+      global.units = {
+        1: createMockUnit({ id: 1, owner: 0, tile: 100 }),
+      };
+      // Simulate initial center already done
+      global.observer_centered_notified = true;
+
+      // Mark user interaction to activate cooldown
+      observer_mark_user_interaction();
+
+      // Try to global-center — should be suppressed
+      center_tile_mapcanvas.mockClear();
+      observer_center_global_view();
+
+      expect(center_tile_mapcanvas).not.toHaveBeenCalled();
+    });
+
+    test('should NOT suppress global view initial centering during cooldown', () => {
+      // Set up units so global view has something to center on
+      global.index_to_tile.mockReturnValue({ x: 10, y: 10 });
+      global.units = {
+        1: createMockUnit({ id: 1, owner: 0, tile: 100 }),
+      };
+      // Initial center not yet done
+      global.observer_centered_notified = false;
+
+      // Mark user interaction
+      observer_mark_user_interaction();
+
+      // Initial global center should still work
+      observer_center_global_view();
+
+      expect(center_tile_mapcanvas).toHaveBeenCalled();
     });
   });
 

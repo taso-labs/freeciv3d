@@ -69,11 +69,14 @@ var observer_follow_player = null;        // Player ID to follow, or null for gl
 var observer_auto_center_interval = null; // Interval timer ID for periodic re-centering
 var observer_initial_center_interval = null; // Interval timer ID for initial center polling
 var observer_player_search_interval = null; // Interval timer ID for player search polling
-var OBSERVER_AUTO_CENTER_MS = 5000;       // Default re-center interval (5 seconds)
+var OBSERVER_AUTO_CENTER_MS = 10000;      // Default re-center interval (10 seconds)
 var MIN_AUTOCENTER_MS = 1000;             // Minimum autocenter interval (1 second)
 var MAX_AUTOCENTER_MS = 60000;            // Maximum autocenter interval (60 seconds)
 var MAX_INITIAL_CENTER_ATTEMPTS = 20;     // Max polling attempts for initial center (20 * 500ms = 10 seconds)
 var INITIAL_CENTER_POLL_INTERVAL_MS = 500; // Polling interval for initial center (500ms)
+var observer_user_interaction_time = 0;    // Timestamp of last user camera interaction
+var OBSERVER_INTERACTION_COOLDOWN_MS = 45000; // Suppress auto-center for 45s after user interaction
+var observer_interaction_listeners_attached = false; // Guard to prevent duplicate event listeners
 var embed_mode = false;                   // Embed mode for iframe viewing
 var keyboard_input_enabled = true;        // Keyboard input enabled flag
 
@@ -251,6 +254,45 @@ function notify_observer_centered_fallback(reason, extra_data)
 }
 
 /****************************************************************************
+  Mark that the user has interacted with the camera (mouse/touch/scroll).
+  Suppresses auto-centering for OBSERVER_INTERACTION_COOLDOWN_MS so the
+  user's custom view is not immediately overridden.
+  Ignored in embed mode where camera controls are disabled.
+****************************************************************************/
+function observer_mark_user_interaction()
+{
+  if (embed_mode) return;
+  observer_user_interaction_time = Date.now();
+}
+
+/****************************************************************************
+  Check if user interaction cooldown is active.
+  Returns true if the user recently interacted with the camera and
+  auto-centering should be suppressed.
+****************************************************************************/
+function observer_is_interaction_cooldown_active()
+{
+  if (observer_user_interaction_time === 0) return false;
+  return (Date.now() - observer_user_interaction_time) < OBSERVER_INTERACTION_COOLDOWN_MS;
+}
+
+/****************************************************************************
+  Set up event listeners on the map canvas to detect user camera interaction.
+  Called once during observer initialization.
+****************************************************************************/
+function init_observer_interaction_detection()
+{
+  if (observer_interaction_listeners_attached) return;
+  var canvas = document.getElementById('mapcanvas');
+  if (!canvas) return;
+
+  canvas.addEventListener('mousedown', observer_mark_user_interaction);
+  canvas.addEventListener('wheel', observer_mark_user_interaction);
+  canvas.addEventListener('touchstart', observer_mark_user_interaction, { passive: true });
+  observer_interaction_listeners_attached = true;
+}
+
+/****************************************************************************
   Initialize observer follow mode from URL parameter.
   Parses ?follow=player_name and sets up auto-centering on that player.
 ****************************************************************************/
@@ -263,6 +305,9 @@ function init_observer_follow_mode()
   register_observer_cleanup_handler();
 
   if (!observing) return;
+
+  // Set up user interaction detection for cooldown
+  init_observer_interaction_detection();
 
   // Parse autocenter interval with bounds checking to prevent DoS
   var autocenter_param = $.getUrlVar('autocenter');
@@ -533,6 +578,12 @@ function observer_center_on_followed_player()
         player_id: observer_follow_player
       });
     }
+    return;
+  }
+
+  // Skip auto-center if user recently interacted with the camera.
+  // This lets users explore a custom view without it snapping back.
+  if (observer_is_interaction_cooldown_active()) {
     return;
   }
 
@@ -1023,6 +1074,12 @@ function center_on_all_players_with_zoom()
 ****************************************************************************/
 function observer_center_global_view()
 {
+  // Skip auto-center if user recently interacted with the camera
+  // (but always allow initial centering so the view isn't blank)
+  if (observer_centered_notified && observer_is_interaction_cooldown_active()) {
+    return;
+  }
+
   // Try to center on all players' units with dynamic zoom
   // center_on_all_players_with_zoom() returns unit_data on success, null on failure
   var unit_data = center_on_all_players_with_zoom();
@@ -1150,6 +1207,7 @@ function cleanup_observer_follow_mode()
   observer_last_unit_spread = null;
   observer_last_territory_radius = null;
   observer_last_global_spread = null;
+  observer_user_interaction_time = 0;
 }
 
 /****************************************************************************
