@@ -70,8 +70,8 @@ describe('Follow Player System', () => {
       expect(typeof observer_auto_center_interval).not.toBe('undefined');
     });
 
-    test('OBSERVER_AUTO_CENTER_MS should default to 10000', () => {
-      expect(OBSERVER_AUTO_CENTER_MS).toBe(10000);
+    test('OBSERVER_AUTO_CENTER_MS should default to 5000', () => {
+      expect(OBSERVER_AUTO_CENTER_MS).toBe(5000);
     });
 
     test('observer_last_territory_radius should be defined and null', () => {
@@ -186,7 +186,7 @@ describe('Follow Player System', () => {
       expect(OBSERVER_AUTO_CENTER_MS).toBe(3000);
     });
 
-    test('should use default 10000ms when autocenter param is missing', () => {
+    test('should use default 5000ms when autocenter param is missing', () => {
       // Reset to non-default value first
       global.OBSERVER_AUTO_CENTER_MS = 1000;
 
@@ -195,7 +195,7 @@ describe('Follow Player System', () => {
       init_observer_follow_mode();
 
       // Should stay at default or be reset to default
-      expect(OBSERVER_AUTO_CENTER_MS).toBe(10000);
+      expect(OBSERVER_AUTO_CENTER_MS).toBe(5000);
     });
 
     test('should handle invalid autocenter value gracefully', () => {
@@ -203,7 +203,7 @@ describe('Follow Player System', () => {
 
       expect(() => init_observer_follow_mode()).not.toThrow();
       // Should fall back to default
-      expect(OBSERVER_AUTO_CENTER_MS).toBe(10000);
+      expect(OBSERVER_AUTO_CENTER_MS).toBe(5000);
     });
   });
 

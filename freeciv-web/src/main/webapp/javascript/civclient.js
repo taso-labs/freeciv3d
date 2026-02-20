@@ -69,7 +69,7 @@ var observer_follow_player = null;        // Player ID to follow, or null for gl
 var observer_auto_center_interval = null; // Interval timer ID for periodic re-centering
 var observer_initial_center_interval = null; // Interval timer ID for initial center polling
 var observer_player_search_interval = null; // Interval timer ID for player search polling
-var OBSERVER_AUTO_CENTER_MS = 10000;      // Default re-center interval (10 seconds)
+var OBSERVER_AUTO_CENTER_MS = 5000;       // Default re-center interval (5 seconds)
 var MIN_AUTOCENTER_MS = 1000;             // Minimum autocenter interval (1 second)
 var MAX_AUTOCENTER_MS = 60000;            // Maximum autocenter interval (60 seconds)
 var MAX_INITIAL_CENTER_ATTEMPTS = 20;     // Max polling attempts for initial center (20 * 500ms = 10 seconds)

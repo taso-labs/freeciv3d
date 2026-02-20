@@ -244,7 +244,7 @@ global.observer_follow_player = null;
 global.observer_auto_center_interval = null;
 global.observer_initial_center_interval = null;
 global.observer_player_search_interval = null;
-global.OBSERVER_AUTO_CENTER_MS = 10000;
+global.OBSERVER_AUTO_CENTER_MS = 5000;
 global.observer_user_interaction_time = 0;
 global.OBSERVER_INTERACTION_COOLDOWN_MS = 45000;
 global.observer_interaction_listeners_attached = false;
@@ -330,7 +330,7 @@ global.init_observer_follow_mode = function() {
       global.OBSERVER_AUTO_CENTER_MS = parsed;
     }
   } else {
-    global.OBSERVER_AUTO_CENTER_MS = 10000; // Reset to default
+    global.OBSERVER_AUTO_CENTER_MS = 5000; // Reset to default
   }
 
   // Find player by name, username, or playerno
@@ -1264,7 +1264,7 @@ global.resetAllMocks = () => {
     clearInterval(global.observer_player_search_interval);
   }
   global.observer_player_search_interval = null;
-  global.OBSERVER_AUTO_CENTER_MS = 10000;
+  global.OBSERVER_AUTO_CENTER_MS = 5000;
   global.observer_user_interaction_time = 0;
   global.observer_interaction_listeners_attached = false;
   global.embed_mode = false;
