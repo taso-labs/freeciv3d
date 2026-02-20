@@ -282,10 +282,8 @@ global.player_capital = function(player) {
 /**
  * Mark that the user has interacted with the camera.
  * Suppresses auto-centering for OBSERVER_INTERACTION_COOLDOWN_MS.
- * Ignored in embed mode where camera controls are disabled.
  */
 global.observer_mark_user_interaction = function() {
-  if (global.embed_mode) return;
   global.observer_user_interaction_time = Date.now();
 };
 

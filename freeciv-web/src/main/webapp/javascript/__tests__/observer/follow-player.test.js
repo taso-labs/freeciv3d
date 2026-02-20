@@ -456,12 +456,12 @@ describe('Follow Player System', () => {
       expect(observer_is_interaction_cooldown_active()).toBe(true);
     });
 
-    test('marking interaction should not activate cooldown in embed mode', () => {
+    test('marking interaction should activate cooldown even in embed mode', () => {
       global.embed_mode = true;
 
       observer_mark_user_interaction();
 
-      expect(observer_is_interaction_cooldown_active()).toBe(false);
+      expect(observer_is_interaction_cooldown_active()).toBe(true);
     });
 
     test('cooldown should expire after OBSERVER_INTERACTION_COOLDOWN_MS', () => {

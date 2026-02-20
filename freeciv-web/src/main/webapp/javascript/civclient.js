@@ -1206,6 +1206,7 @@ function cleanup_observer_follow_mode()
   observer_last_territory_radius = null;
   observer_last_global_spread = null;
   observer_user_interaction_time = 0;
+  observer_interaction_listeners_attached = false;
 }
 
 /****************************************************************************
