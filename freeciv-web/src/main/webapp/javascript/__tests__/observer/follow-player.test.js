@@ -355,8 +355,8 @@ describe('Follow Player System', () => {
       observer_center_on_followed_player();
 
       // 2 cities 20 tiles apart, centroid at (20,10), both at distance 10
-      // effective_radius=10 → dy = floor(250 + 10*28) = 530
-      expect(global.camera_dy).toBe(530);
+      // effective_radius=10 → dy = floor(250 + 10*35) = 600
+      expect(global.camera_dy).toBe(600);
     });
   });
 

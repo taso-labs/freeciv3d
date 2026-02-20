@@ -881,11 +881,11 @@ function get_player_territory_centroid_and_spread(player_id)
 // - Single city (radius ~0): dy=250 gives a close overhead view of the city area
 // - Mid-game empire (~10 tile radius): dy=530 keeps 2-3 cities in frame
 // - Late-game continental empire (~20+ tiles): dy=810+ shows the full territory
-// - DY_PER_TILE=28 was chosen so the zoom transition feels smooth across these stages
+// - DY_PER_TILE=35 gives enough zoom-out to keep full territory in view
 var TERRITORY_BASE_DY = 250;
-var TERRITORY_DY_PER_TILE = 28;
+var TERRITORY_DY_PER_TILE = 35;
 var TERRITORY_MIN_ZOOM_DY = 200;
-var TERRITORY_MAX_ZOOM_DY = 900;
+var TERRITORY_MAX_ZOOM_DY = 1200;
 // Gap-based outlier detection: only trim positions that are genuinely distant
 // outliers causing excessive zoom-out. Two conditions must both be met:
 // 1. A significant gap exists (>80% of core radius)

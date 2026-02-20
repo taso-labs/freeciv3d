@@ -368,8 +368,8 @@ describe('Unit Centering System', () => {
       expect(territory_data.spread).toBe(1);
 
       // effective_radius = 0.5 (both units equidistant from centroid)
-      // zoom = floor(250 + 0.5*28) = 264
-      expect(global.calculate_zoom_for_territory_spread(territory_data.effective_radius)).toBe(264);
+      // zoom = floor(250 + 0.5*35) = 267
+      expect(global.calculate_zoom_for_territory_spread(territory_data.effective_radius)).toBe(267);
     });
   });
 });
@@ -517,24 +517,24 @@ describe('Territory Centering System', () => {
     });
 
     test('should compute linearly for small radius', () => {
-      // radius 5: floor(250 + 5*28) = floor(390) = 390
-      expect(global.calculate_zoom_for_territory_spread(5)).toBe(390);
+      // radius 5: floor(250 + 5*35) = floor(425) = 425
+      expect(global.calculate_zoom_for_territory_spread(5)).toBe(425);
     });
 
     test('should compute linearly for medium radius', () => {
-      // radius 10: floor(250 + 10*28) = floor(530) = 530
-      expect(global.calculate_zoom_for_territory_spread(10)).toBe(530);
+      // radius 10: floor(250 + 10*35) = floor(600) = 600
+      expect(global.calculate_zoom_for_territory_spread(10)).toBe(600);
     });
 
     test('should compute linearly for large radius', () => {
-      // radius 20: floor(250 + 20*28) = floor(810) = 810
-      expect(global.calculate_zoom_for_territory_spread(20)).toBe(810);
+      // radius 20: floor(250 + 20*35) = floor(950) = 950
+      expect(global.calculate_zoom_for_territory_spread(20)).toBe(950);
     });
 
-    test('should clamp to MAX (900) for very large radius', () => {
-      // radius 30: floor(250 + 30*28) = 1090 -> clamped to 900
-      expect(global.calculate_zoom_for_territory_spread(30)).toBe(900);
-      expect(global.calculate_zoom_for_territory_spread(100)).toBe(900);
+    test('should clamp to MAX (1200) for very large radius', () => {
+      // radius 30: floor(250 + 30*35) = 1300 -> clamped to 1200
+      expect(global.calculate_zoom_for_territory_spread(30)).toBe(1200);
+      expect(global.calculate_zoom_for_territory_spread(100)).toBe(1200);
     });
 
     test('should clamp to MIN (200) for negative radius', () => {
@@ -584,14 +584,14 @@ describe('Territory Centering System', () => {
 
       // 2 cities weight 3 each: centroid at (20, 10)
       // Chebyshev distances: city(10,10)=10 x3, city(30,10)=10 x3 → all 10
-      // effective_radius = 10 → dy = floor(250 + 10*28) = 530
-      expect(global.camera_dy).toBe(530);
+      // effective_radius = 10 → dy = floor(250 + 10*35) = 600
+      expect(global.camera_dy).toBe(600);
       expect(global.observer_last_territory_radius).toBe(10);
     });
 
     test('should NOT update zoom when effective radius changes by < threshold (2 tiles)', () => {
       global.observer_last_territory_radius = 10;
-      global.camera_dy = 530;
+      global.camera_dy = 600;
 
       global.city_tile.mockImplementation((city) => {
         const positions = {
@@ -609,13 +609,13 @@ describe('Territory Centering System', () => {
 
       // centroid at (20.5, 10), distances all ~10.5
       // effective_radius ≈ 10.5, diff from 10 = 0.5 < threshold 2
-      expect(global.camera_dy).toBe(530);
+      expect(global.camera_dy).toBe(600);
       expect(global.observer_last_territory_radius).toBe(10); // Not updated
     });
 
     test('should update zoom when effective radius changes by >= threshold (2 tiles)', () => {
       global.observer_last_territory_radius = 10;
-      global.camera_dy = 530;
+      global.camera_dy = 600;
 
       global.city_tile.mockImplementation((city) => {
         const positions = {
@@ -633,8 +633,8 @@ describe('Territory Centering System', () => {
 
       // centroid at (25, 10), distances all 15
       // effective_radius = 15, diff from 10 = 5 >= threshold 2
-      // dy = floor(250 + 15*28) = 670
-      expect(global.camera_dy).toBe(670);
+      // dy = floor(250 + 15*35) = 775
+      expect(global.camera_dy).toBe(775);
       expect(global.observer_last_territory_radius).toBe(15);
     });
   });
