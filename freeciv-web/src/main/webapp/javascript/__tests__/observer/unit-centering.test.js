@@ -510,7 +510,7 @@ describe('Territory Centering System', () => {
 
   describe('calculate_zoom_for_territory_spread()', () => {
     // Linear formula: dy = floor(max(MIN, min(MAX, BASE + radius * DY_PER_TILE)))
-    // BASE=250, DY_PER_TILE=28, MIN=200, MAX=900
+    // BASE=250, DY_PER_TILE=35, MIN=200, MAX=1200
 
     test('should return BASE (250) for radius 0', () => {
       expect(global.calculate_zoom_for_territory_spread(0)).toBe(250);

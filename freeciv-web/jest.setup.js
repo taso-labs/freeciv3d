@@ -1,6 +1,11 @@
 /**
  * Jest Setup File for FreeCiv-web Tests
  *
+ * WARNING: Observer-related mocks in this file (follow mode, cooldown,
+ * interaction detection, outlier detection, zoom calculations) must stay
+ * in sync with the production implementations in civclient.js.
+ * When updating production code, update the corresponding mocks here.
+ *
  * This file runs before each test file and sets up:
  * - Global mocks for browser APIs
  * - Mock implementations for game globals
@@ -306,6 +311,7 @@ global.init_observer_interaction_detection = function() {
   canvas.addEventListener('mousedown', global.observer_mark_user_interaction);
   canvas.addEventListener('wheel', global.observer_mark_user_interaction);
   canvas.addEventListener('touchstart', global.observer_mark_user_interaction, { passive: true });
+  canvas.addEventListener('keydown', global.observer_mark_user_interaction);
   global.observer_interaction_listeners_attached = true;
 };
 
@@ -755,6 +761,18 @@ global.cleanup_observer_follow_mode = function() {
   global.observer_last_territory_radius = null;
   global.observer_last_global_spread = null;
   global.observer_user_interaction_time = 0;
+
+  // Remove interaction event listeners to prevent stacking on re-init
+  if (global.observer_interaction_listeners_attached) {
+    var canvas = document.getElementById('mapcanvas');
+    if (canvas) {
+      canvas.removeEventListener('mousedown', global.observer_mark_user_interaction);
+      canvas.removeEventListener('wheel', global.observer_mark_user_interaction);
+      canvas.removeEventListener('touchstart', global.observer_mark_user_interaction);
+      canvas.removeEventListener('keydown', global.observer_mark_user_interaction);
+    }
+  }
+  global.observer_interaction_listeners_attached = false;
 };
 
 /**
