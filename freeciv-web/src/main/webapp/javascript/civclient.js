@@ -257,11 +257,9 @@ function notify_observer_centered_fallback(reason, extra_data)
   Mark that the user has interacted with the camera (mouse/touch/scroll).
   Suppresses auto-centering for OBSERVER_INTERACTION_COOLDOWN_MS so the
   user's custom view is not immediately overridden.
-  Ignored in embed mode where camera controls are disabled.
 ****************************************************************************/
 function observer_mark_user_interaction()
 {
-  if (embed_mode) return;
   observer_user_interaction_time = Date.now();
 }
 
