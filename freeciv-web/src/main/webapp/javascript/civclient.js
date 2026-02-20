@@ -287,7 +287,6 @@ function init_observer_interaction_detection()
   canvas.addEventListener('mousedown', observer_mark_user_interaction);
   canvas.addEventListener('wheel', observer_mark_user_interaction);
   canvas.addEventListener('touchstart', observer_mark_user_interaction, { passive: true });
-  canvas.addEventListener('keydown', observer_mark_user_interaction);
   observer_interaction_listeners_attached = true;
 }
 
@@ -1267,7 +1266,6 @@ function cleanup_observer_follow_mode()
       canvas.removeEventListener('mousedown', observer_mark_user_interaction);
       canvas.removeEventListener('wheel', observer_mark_user_interaction);
       canvas.removeEventListener('touchstart', observer_mark_user_interaction);
-      canvas.removeEventListener('keydown', observer_mark_user_interaction);
     }
   }
   observer_interaction_listeners_attached = false;
