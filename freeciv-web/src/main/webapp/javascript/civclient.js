@@ -886,11 +886,15 @@ var TERRITORY_BASE_DY = 250;
 var TERRITORY_DY_PER_TILE = 28;
 var TERRITORY_MIN_ZOOM_DY = 200;
 var TERRITORY_MAX_ZOOM_DY = 900;
-// Gap-based outlier detection: only trim positions that are separated from the
-// main cluster by a significant gap (>80% of the core radius). This adapts to
-// the actual territory shape rather than always cutting a fixed percentage.
+// Gap-based outlier detection: only trim positions that are genuinely distant
+// outliers causing excessive zoom-out. Two conditions must both be met:
+// 1. A significant gap exists (>80% of core radius)
+// 2. The outlier would cause excessive zoom-out (>4x the core radius)
+// This ensures nearby spread (e.g. radius 2→7) is included while truly
+// distant outliers (e.g. radius 7→80) are excluded.
 var OUTLIER_GAP_RATIO = 0.8;          // Gap must exceed 80% of core radius to trigger cutoff
 var OUTLIER_MIN_CORE_RATIO = 0.6;     // At least 60% of positions must be in the core cluster
+var OUTLIER_ZOOM_IMPACT_RATIO = 4.0;  // Outlier must be >4x core radius to justify cutting
 
 /****************************************************************************
   Find the effective radius from a sorted array of distances by detecting
@@ -899,11 +903,14 @@ var OUTLIER_MIN_CORE_RATIO = 0.6;     // At least 60% of positions must be in th
   Algorithm:
   1. Scan from the 60% mark to the end of the sorted distances
   2. Find the largest gap between consecutive distances
-  3. If that gap exceeds 80% of the core radius at that point, cut there
-  4. If no significant gap exists, include everything
+  3. Cut ONLY if both conditions are met:
+     a. The gap exceeds 80% of the core radius (significant relative gap)
+     b. The outermost distance exceeds 4x the core radius (excessive zoom)
+  4. If either condition fails, include everything
 
-  This adapts to actual territory shape: a tight cluster with 1 distant
-  scout gets trimmed, but a genuinely spread-out empire is shown in full.
+  Examples:
+  - [2,2,2,2,2,2,2,6,7]   → core=2, max=7, 7/2=3.5x < 4x → include all
+  - [2,2,2,2,2,2,2,6,7,80] → core=7, max=80, 80/7=11.4x > 4x → cut at 7
 ****************************************************************************/
 function find_outlier_cutoff_radius(distances)
 {
@@ -922,13 +929,19 @@ function find_outlier_cutoff_radius(distances)
     }
   }
 
-  // Only cut if the gap is significant relative to the core radius
   var core_radius = distances[cutoff_index];
-  if (core_radius > 0 && best_gap > core_radius * OUTLIER_GAP_RATIO) {
+  var max_distance = distances[distances.length - 1];
+
+  // Both conditions must be true to cut:
+  // 1. The gap is significant relative to the core cluster
+  // 2. Including the outlier would cause excessive zoom-out
+  if (core_radius > 0 &&
+      best_gap > core_radius * OUTLIER_GAP_RATIO &&
+      max_distance > core_radius * OUTLIER_ZOOM_IMPACT_RATIO) {
     return distances[cutoff_index];
   }
 
-  // No significant gap — include everything
+  // Either no significant gap or zoom impact is acceptable — include everything
   return distances[distances.length - 1];
 }
 

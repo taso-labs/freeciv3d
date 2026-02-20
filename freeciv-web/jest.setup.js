@@ -492,8 +492,8 @@ global.get_player_territory_centroid_and_spread = function(player_id) {
 
 /**
  * Find the effective radius from sorted distances using gap-based outlier detection.
- * Scans from the 60% mark for the largest gap; if it exceeds 80% of the core radius,
- * cuts there. Otherwise includes everything.
+ * Cuts only when both: a significant gap exists AND the outlier would cause
+ * excessive zoom-out (>4x the core radius). Otherwise includes everything.
  */
 global.find_outlier_cutoff_radius = function(distances) {
   if (distances.length === 0) return 0;
@@ -512,7 +512,11 @@ global.find_outlier_cutoff_radius = function(distances) {
   }
 
   var core_radius = distances[cutoff_index];
-  if (core_radius > 0 && best_gap > core_radius * global.OUTLIER_GAP_RATIO) {
+  var max_distance = distances[distances.length - 1];
+
+  if (core_radius > 0 &&
+      best_gap > core_radius * global.OUTLIER_GAP_RATIO &&
+      max_distance > core_radius * global.OUTLIER_ZOOM_IMPACT_RATIO) {
     return distances[cutoff_index];
   }
 
@@ -1198,6 +1202,7 @@ global.TERRITORY_MIN_ZOOM_DY = 200;
 global.TERRITORY_MAX_ZOOM_DY = 900;
 global.OUTLIER_GAP_RATIO = 0.8;
 global.OUTLIER_MIN_CORE_RATIO = 0.6;
+global.OUTLIER_ZOOM_IMPACT_RATIO = 4.0;
 
 // Constants
 global.CAPITAL_PRIMARY = 1;
