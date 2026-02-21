@@ -738,15 +738,17 @@ class LLMWSHandler(websocket.WebSocketHandler):
                                 self._connect_to_civserver(civserver_port, game_id)
 
                                 # Wait for retry handshake
+                                retry_timed_out = False
                                 try:
                                     await asyncio.wait_for(
                                         asyncio.to_thread(self.civcom.handshake_complete.wait),
                                         timeout=STALE_CONN_HANDSHAKE_WAIT_SEC
                                     )
                                 except asyncio.TimeoutError:
+                                    retry_timed_out = True
                                     logger.warning(f"Retry handshake timeout for {self.agent_id} (attempt {attempt + 1})")
 
-                                if not self.civcom.join_rejected:
+                                if not retry_timed_out and not self.civcom.join_rejected:
                                     retry_succeeded = True
                                     logger.info(f"✅ Retry succeeded for {self.agent_id} — stale connection cleared")
                                     break
