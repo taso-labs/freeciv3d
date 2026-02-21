@@ -2971,7 +2971,7 @@ class TerminateGameHandler(web.RequestHandler):
         # Deferred imports to avoid circular dependency
         # (observer_civcom imports civcom_registry from this module)
         from observer_civcom import stop_observer_civcom
-        from game_session_manager import game_session_manager, GamePhase
+        from game_session_manager import game_session_manager
 
         all_civcoms = civcom_registry.get_all_for_game(game_id)
         agents_closed = 0
@@ -2983,11 +2983,7 @@ class TerminateGameHandler(web.RequestHandler):
         # triggered by CivCom teardown will skip pausing and allow port release
         game_session = game_session_manager.sessions.get(game_id)
         if game_session:
-            with game_session._players_lock:
-                game_session.game_is_over = True
-                game_session.game_ended_at = time.time()
-                game_session.phase = GamePhase.ENDED
-            logger.info(f"GAME_SESSION_MARKED_ENDED game_id={game_id} port={game_session.civserver_port} reason=hard_terminate")
+            game_session.mark_game_over(reason="hard_terminate")
 
         # Close each CivCom and unregister from registry
         for (gid, agent_id), cc in list(all_civcoms.items()):

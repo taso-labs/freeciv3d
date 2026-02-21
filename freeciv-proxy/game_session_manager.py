@@ -136,6 +136,29 @@ class GameSession:
         self._port_releasing: bool = False
         self._port_releasing_since: Optional[float] = None  # Timestamp for timeout safety net
 
+    def mark_game_over(self, reason: str) -> None:
+        """Mark this game session as ended, allowing immediate port release.
+
+        Thread-safe: acquires _players_lock to ensure atomic visibility of
+        all three fields across the CivCom thread and Tornado IO thread.
+
+        Called from:
+        - civcom.py: when PACKET_ENDGAME_REPORT arrives from the C server
+        - state_extractor.py: when admin sends hard terminate via API
+        - llm_handler.py: belt-and-suspenders propagation from civcom.game_is_over
+
+        Args:
+            reason: Why the game ended (for structured logging)
+        """
+        with self._players_lock:
+            self.game_is_over = True
+            self.game_ended_at = time.time()
+            self.phase = GamePhase.ENDED
+        logger.info(
+            f"GAME_SESSION_MARKED_ENDED game_id={self.game_id} "
+            f"port={self.civserver_port} reason={reason}"
+        )
+
     def reset_port_releasing_flag(self, reason: str) -> None:
         """Reset the _port_releasing flag after release attempt completes.
 
@@ -1211,8 +1234,8 @@ class GameSessionManager:
                         continue
                     session._port_releasing = True
                     session._port_releasing_since = now
-                    ended_at = getattr(session, 'game_ended_at', None) or session.created_at
-                    candidates.append((game_id, session.civserver_port, now - ended_at))
+                    ended_at = session.game_ended_at or session.created_at
+                    candidates.append((game_id, session.civserver_port, now - ended_at, "game_over"))
 
             for game_id, session in list(self.sessions.items()):
                 if not session.is_paused:
@@ -1253,11 +1276,11 @@ class GameSessionManager:
 
                     session._port_releasing = True
                     session._port_releasing_since = now
-                    candidates.append((game_id, session.civserver_port, paused_for))
+                    candidates.append((game_id, session.civserver_port, paused_for, "stale_paused"))
 
         # Release outside lock — _port_releasing guards per-session safety,
         # so we don't need to hold the sweep lock during slow HTTP calls.
-        for game_id, port, paused_for in candidates:
+        for game_id, port, elapsed_secs, cleanup_reason in candidates:
             try:
                 released = await self.release_civserver_port(game_id, port)
             except Exception as e:
@@ -1270,24 +1293,25 @@ class GameSessionManager:
             if not target_session:
                 continue
 
+            label = "game-over session" if cleanup_reason == "game_over" else "stale paused session"
             if released:
                 if target_session._port_releasing:
                     target_session.reset_port_releasing_flag(
-                        "stale paused-session cleanup complete"
+                        f"{label} cleanup complete"
                     )
                 self.sessions.pop(game_id, None)
                 cleaned_count += 1
                 logger.info(
-                    f"Game {game_id}: cleaned stale paused session after {paused_for:.0f}s "
+                    f"Game {game_id}: cleaned {label} after {elapsed_secs:.0f}s "
                     f"(released port {port})"
                 )
             else:
                 if target_session._port_releasing:
                     target_session.reset_port_releasing_flag(
-                        "stale paused-session cleanup release failed; will retry on next sweep"
+                        f"{label} cleanup release failed; will retry on next sweep"
                     )
                 logger.warning(
-                    f"Game {game_id}: stale paused session not cleaned (port {port} release failed)"
+                    f"Game {game_id}: {label} not cleaned (port {port} release failed)"
                 )
 
         return cleaned_count

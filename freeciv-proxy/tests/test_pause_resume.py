@@ -821,21 +821,31 @@ class TestGameOverPortRelease(unittest.TestCase):
             game_session.pause_game.assert_not_called()
 
     def test_stale_cleanup_immediate_for_game_over(self):
-        """Game-over sessions should be cleaned without waiting for timeout."""
+        """Game-over sessions should be cleaned immediately; paused sessions should not."""
         import asyncio
         from unittest.mock import AsyncMock
 
-        gs = GameSession(game_id="ended-game", civserver_port=6002, min_players=2)
-        gs.game_is_over = True
-        gs.game_ended_at = 1000.0  # Long ago
-        gs.is_paused = False
-        # No players remaining
-        gs.players = {}
+        # Game-over session — should be cleaned by the fast-path
+        gs_ended = GameSession(game_id="ended-game", civserver_port=6002, min_players=2)
+        gs_ended.game_is_over = True
+        gs_ended.game_ended_at = 1000.0  # Long ago
+        gs_ended.is_paused = False
+        gs_ended.players = {}
+
+        # Regular paused session — should NOT be cleaned (timeout=999999)
+        gs_paused = GameSession(game_id="paused-game", civserver_port=6003, min_players=2)
+        gs_paused.is_paused = True
+        gs_paused.paused_at = gs_paused.created_at  # Just paused
+        gs_paused.players = {}
 
         manager = GameSessionManager()
-        manager.sessions = {"ended-game": gs}
+        manager.sessions = {
+            "ended-game": gs_ended,
+            "paused-game": gs_paused,
+        }
 
-        # Use a very large timeout - game-over fast-path shouldn't need it
+        # Use a very large timeout - game-over fast-path shouldn't need it,
+        # and the paused session should survive because it hasn't exceeded timeout
         mock_release = AsyncMock(return_value=True)
         with patch.object(manager, 'release_civserver_port', mock_release):
             loop = asyncio.new_event_loop()
@@ -848,6 +858,9 @@ class TestGameOverPortRelease(unittest.TestCase):
 
         self.assertEqual(cleaned, 1)
         self.assertNotIn("ended-game", manager.sessions)
+        # Regular paused session must survive — the fast-path is selective
+        self.assertIn("paused-game", manager.sessions)
+        self.assertFalse(gs_paused._port_releasing)
 
     def test_pause_still_works_when_game_not_over(self):
         """Regression: mid-game disconnects should still pause correctly."""

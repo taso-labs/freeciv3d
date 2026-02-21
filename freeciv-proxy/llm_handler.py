@@ -26,7 +26,7 @@ from security import InputSanitizer, SecurityError, SecurityLogger
 from rate_limiter import DistributedRateLimiter
 from session_manager import session_manager, SessionState, start_periodic_cleanup
 from error_handler import error_handler, ErrorSeverity, ErrorCategory
-from game_session_manager import game_session_manager, GamePhase
+from game_session_manager import game_session_manager
 from ruleset_mapper import RulesetMapper
 from typing import Dict, Any, Optional, List
 from packet_constants import (
@@ -4829,10 +4829,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
             )
             # Propagate civcom flag to session if needed (belt-and-suspenders)
             if game_is_over and game_session and not game_session.game_is_over:
-                with game_session._players_lock:
-                    game_session.game_is_over = True
-                    game_session.game_ended_at = time.time()
-                    game_session.phase = GamePhase.ENDED
+                game_session.mark_game_over(reason="civcom_propagation")
 
             if game_is_over:
                 logger.info(
