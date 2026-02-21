@@ -48,7 +48,7 @@ services:
       #
       # Recommended relationship:
       #   STALE_ALLOCATION_THRESHOLD > typical game pause duration
-      #   STALE_ALLOCATION_THRESHOLD < SESSION_SUSPENSION_TIMEOUT_SECS/60 (allow reconnect before cleanup)
+      #   STALE_ALLOCATION_THRESHOLD > SESSION_SUSPENSION_TIMEOUT_SECS/60 (Java defers to Python's smarter cleanup)
       #   STALE_ALLOCATION_THRESHOLD < SESSION_TIMEOUT (allow reconnect before cleanup)
       # ──────────────────────────────────────────────────────────────────────
       - SESSION_TIMEOUT_SECONDS=${SESSION_TIMEOUT_SECONDS:-3600}

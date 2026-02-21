@@ -151,6 +151,8 @@ class GameSession:
             reason: Why the game ended (for structured logging)
         """
         with self._players_lock:
+            if self.game_is_over:
+                return  # already marked, no-op
             self.game_is_over = True
             self.game_ended_at = time.time()
             self.phase = GamePhase.ENDED
@@ -1240,7 +1242,7 @@ class GameSessionManager:
             for game_id, session in list(self.sessions.items()):
                 if not session.is_paused:
                     continue
-                # Skip sessions already claimed by the game-over fast-path above
+                # Game-over sessions are handled by the fast-path above — skip here to avoid double-release
                 if session.game_is_over:
                     continue
 
@@ -1301,10 +1303,16 @@ class GameSessionManager:
                     )
                 self.sessions.pop(game_id, None)
                 cleaned_count += 1
-                logger.info(
-                    f"Game {game_id}: cleaned {label} after {elapsed_secs:.0f}s "
-                    f"(released port {port})"
-                )
+                if cleanup_reason == "game_over":
+                    logger.info(
+                        f"GAME_OVER_PORT_RELEASE: Game {game_id}: released port {port} "
+                        f"immediately after game ended {elapsed_secs:.0f}s ago"
+                    )
+                else:
+                    logger.info(
+                        f"Game {game_id}: cleaned {label} after {elapsed_secs:.0f}s "
+                        f"(released port {port})"
+                    )
             else:
                 if target_session._port_releasing:
                     target_session.reset_port_releasing_flag(
