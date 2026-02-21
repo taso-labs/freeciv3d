@@ -2020,6 +2020,22 @@ class CivCom(Thread):
                     f"   Received PACKET_ENDGAME_REPORT, game has ended.\n"
                     f"   Waiting for PACKET_ENDGAME_PLAYER packets with winner info."
                 )
+                # Propagate game-over to GameSession so on_close() can skip pause
+                # and allow immediate port release instead of holding for 24h
+                try:
+                    from game_session_manager import game_session_manager, GamePhase
+                    handler = getattr(self, 'civwebserver', None)
+                    game_id = getattr(handler, 'game_id', None) if handler else None
+                    if game_id:
+                        gs = game_session_manager.sessions.get(game_id)
+                        if gs:
+                            with gs._players_lock:
+                                gs.game_is_over = True
+                                gs.game_ended_at = time.time()
+                                gs.phase = GamePhase.ENDED
+                            logger.info(f"GAME_SESSION_MARKED_ENDED game_id={game_id} port={gs.civserver_port}")
+                except Exception as e:
+                    logger.warning(f"Failed to propagate game_is_over to GameSession: {e}")
 
             # ENDGAME PLAYER packet - contains per-player endgame stats
             # Includes winner boolean, score, and category_scores for each player

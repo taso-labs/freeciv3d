@@ -125,6 +125,11 @@ class GameSession:
         self.resume_count: int = 0  # Number of times game has been resumed (recovery tracking)
         self.autotoggle_disabled: bool = False  # Track if autotoggle was disabled during pause
 
+        # Game-over state - propagated from CivCom when PACKET_ENDGAME_REPORT arrives
+        # When True, on_close() skips pausing and allows immediate port release
+        self.game_is_over: bool = False
+        self.game_ended_at: Optional[float] = None
+
         # Port release flag - prevents TOCTOU race in on_close()
         # Set True atomically with should_release decision while holding _players_lock
         # Checked in add_player() to reject connections during port release
@@ -1174,7 +1179,7 @@ class GameSessionManager:
             Number of stale paused sessions successfully cleaned up.
         """
         if suspension_timeout_secs is None:
-            suspension_timeout_secs = int(os.getenv('SESSION_SUSPENSION_TIMEOUT_SECS', '86400'))
+            suspension_timeout_secs = int(os.getenv('SESSION_SUSPENSION_TIMEOUT_SECS', '1800'))
 
         if suspension_timeout_secs <= 0:
             logger.warning(
@@ -1196,8 +1201,24 @@ class GameSessionManager:
         # selecting the same sessions. The _port_releasing flag provides
         # per-session mutual exclusion for the actual release calls.
         async with self._paused_cleanup_lock:
+            # Fast-path: clean up game-over sessions immediately (no timeout needed)
+            # Games that received ENDGAME_REPORT have no reason to hold their port
+            for game_id, session in list(self.sessions.items()):
+                if not session.game_is_over:
+                    continue
+                with session._players_lock:
+                    if len(session.players) > 0 or session._port_releasing:
+                        continue
+                    session._port_releasing = True
+                    session._port_releasing_since = now
+                    ended_at = getattr(session, 'game_ended_at', None) or session.created_at
+                    candidates.append((game_id, session.civserver_port, now - ended_at))
+
             for game_id, session in list(self.sessions.items()):
                 if not session.is_paused:
+                    continue
+                # Skip sessions already claimed by the game-over fast-path above
+                if session.game_is_over:
                     continue
 
                 paused_since = session.paused_at if session.paused_at is not None else session.created_at

@@ -26,7 +26,7 @@ from security import InputSanitizer, SecurityError, SecurityLogger
 from rate_limiter import DistributedRateLimiter
 from session_manager import session_manager, SessionState, start_periodic_cleanup
 from error_handler import error_handler, ErrorSeverity, ErrorCategory
-from game_session_manager import game_session_manager
+from game_session_manager import game_session_manager, GamePhase
 from ruleset_mapper import RulesetMapper
 from typing import Dict, Any, Optional, List
 from packet_constants import (
@@ -4821,7 +4821,24 @@ class LLMWSHandler(websocket.WebSocketHandler):
         # Try to pause even if our civcom is stopped - use partner's civcom as fallback
         if self.game_id:
             game_session = game_session_manager.sessions.get(self.game_id)
-            if game_session and game_session.game_started and not game_session.is_paused:
+
+            # Check if game has ended (ENDGAME_REPORT received) — skip pause if so
+            game_is_over = (
+                (game_session and game_session.game_is_over)
+                or (self.civcom and getattr(self.civcom, 'game_is_over', False))
+            )
+            # Propagate civcom flag to session if needed (belt-and-suspenders)
+            if game_is_over and game_session and not game_session.game_is_over:
+                with game_session._players_lock:
+                    game_session.game_is_over = True
+                    game_session.game_ended_at = time.time()
+                    game_session.phase = GamePhase.ENDED
+
+            if game_is_over:
+                logger.info(
+                    f"SKIP_PAUSE_GAME_OVER game_id={self.game_id} agent_id={self.agent_id}"
+                )
+            elif game_session and game_session.game_started and not game_session.is_paused:
                 # Try our civcom first
                 civcom_to_use = None
                 if self.civcom and not self.civcom.stopped:
@@ -4921,7 +4938,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                         # Make the decision while still holding the lock
                         # If paused for reconnect, skip release and let stale cleanup
                         # enforce SESSION_SUSPENSION_TIMEOUT_SECS.
-                        if remaining_players == 0 and not game_session.is_paused:
+                        if remaining_players == 0 and (not game_session.is_paused or game_session.game_is_over):
                             should_release = True
                             # CRITICAL: Set port_releasing flag while still holding lock
                             # This prevents add_player() from accepting new connections
@@ -4953,7 +4970,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                     except Exception as e:
                         logger.error(f"Failed to schedule port release: {e}")
                 elif game_session:
-                    if remaining_players == 0 and game_session.is_paused:
+                    if remaining_players == 0 and game_session.is_paused and not game_session.game_is_over:
                         logger.info(
                             f"PORT_RELEASE_SKIPPED game_id={self.game_id} agent_id={self.agent_id} "
                             f"port={civserver_port} reason=game_paused_for_reconnect"
