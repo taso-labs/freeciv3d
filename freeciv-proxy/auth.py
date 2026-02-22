@@ -196,17 +196,22 @@ class SimpleAuthenticator:
                            session_id: Optional[str] = None,
                            required_permission: str = 'state_read') -> Tuple[bool, Optional[int], Optional[str]]:
         """
-        Authenticate a request using API key or session
+        Authenticate a request using API key, LLM token, or session
 
         Returns:
             tuple: (authenticated: bool, player_id: Optional[int], game_id: Optional[str])
         """
-        # Try API key authentication first
+        # Try HMAC API key authentication first
         if api_key:
             valid, player_id, game_id = self.validate_api_key(api_key)
             if valid:
                 logger.debug(f"API key authentication successful for player {player_id}")
                 return True, player_id, game_id
+
+            # Fallback: try as plain LLM_API_TOKEN (used by gateway/agent-clash)
+            if self._validate_llm_token(api_key):
+                logger.info("Authenticated via LLM API token (gateway/admin)")
+                return True, None, None
 
         # Try session authentication
         if session_id:
@@ -216,6 +221,20 @@ class SimpleAuthenticator:
                 return True, session.player_id, session.game_id
 
         return False, None, None
+
+    def _validate_llm_token(self, token: str) -> bool:
+        """Validate token against LLM_API_TOKENS (plain Bearer tokens used by gateway).
+
+        SECURITY: LLM tokens grant admin-level access — authenticated requests
+        will have player_id=None and game_id=None, bypassing per-player authorization.
+        These tokens MUST be treated as privileged secrets.
+        """
+        try:
+            from config_loader import llm_config
+            return llm_config.validate_token(token)
+        except Exception as e:
+            logger.warning(f"LLM token validation failed: {e}")
+            return False
 
     def _cleanup_expired_sessions(self):
         """Remove expired sessions"""
