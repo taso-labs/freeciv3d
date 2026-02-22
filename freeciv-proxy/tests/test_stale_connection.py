@@ -253,7 +253,8 @@ class TestCivComRegistryThreadSafety(unittest.TestCase):
         import threading
 
         registry = CivComRegistry()
-        self.assertIsInstance(registry._lock, threading.Lock)
+        # threading.Lock() returns a factory instance, not a class — use type() for isinstance
+        self.assertIsInstance(registry._lock, type(threading.Lock()))
 
     def test_get_all_for_game_returns_snapshot(self):
         """get_all_for_game should return a safe copy, not a live view."""
