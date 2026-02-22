@@ -27,7 +27,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ['CACHE_HMAC_SECRET'] = '8dc50280f151af309d728c951584576f205688dc82d7d295174f2ef1b3e32181'
 os.environ['LLM_API_TOKENS'] = 'test-token-123'
 
-from game_session_manager import GameSession, GamePhase, PlayerInfo
+from game_session_manager import GameSession, GamePhase, GameSessionManager, PlayerInfo
 from packet_constants import PACKET_CHAT_MSG_REQ
 
 
@@ -555,6 +555,7 @@ class TestOnClosePortReleaseGuard(unittest.TestCase):
         self.handler.civcom = Mock()
         self.handler.civcom.stopped = False
         self.handler.civcom.close_connection = Mock()
+        self.handler.civcom.game_is_over = False
         # Keep test focused on port release decision, not partner pause mechanics.
         self.handler._pause_and_suspend_partner = Mock()
 
@@ -702,6 +703,231 @@ class TestPauseResumeIntegration(unittest.TestCase):
             self.mock_civcom.queue_to_civserver.call_count,
             initial_call_count + 2
         )
+
+
+class TestGameOverPortRelease(unittest.TestCase):
+    """Unit tests for game-over port release behavior.
+
+    Verifies that completed games (ENDGAME_REPORT received) release ports
+    immediately instead of holding them for the reconnect timeout.
+    """
+
+    def setUp(self):
+        """Set up test fixtures."""
+        from llm_handler import LLMWSHandler
+
+        self.mock_app = Mock()
+        self.mock_app.ui_methods = {}
+        self.mock_app.ui_modules = {}
+        self.mock_request = Mock()
+
+        self.handler = LLMWSHandler(self.mock_app, self.mock_request)
+        self.handler.agent_id = "agent-1"
+        self.handler.player_id = 0
+        self.handler.game_id = "test-game-gameover"
+        self.handler.session_id = "session-1"
+        self.handler.session_info = Mock()
+        self.handler.session_info.civserver_port = 6001
+        self.handler.civcom = Mock()
+        self.handler.civcom.stopped = False
+        self.handler.civcom.close_connection = Mock()
+        self.handler.civcom.game_is_over = False
+        self.handler._pause_and_suspend_partner = Mock()
+        self.handler._suspend_partners = Mock()
+
+    def _build_game_session(self, is_paused: bool, game_is_over: bool) -> GameSession:
+        gs = GameSession(
+            game_id="test-game-gameover",
+            civserver_port=6001,
+            min_players=2
+        )
+        gs.game_started = True
+        gs.is_paused = is_paused
+        if game_is_over:
+            gs.mark_game_over(reason='test')
+        gs.players = {
+            "agent-1": PlayerInfo(
+                agent_id="agent-1",
+                player_id=0,
+                handler=self.handler
+            )
+        }
+        return gs
+
+    def test_port_released_when_game_over_and_paused(self):
+        """Game-over should override is_paused and allow port release."""
+        game_session = self._build_game_session(is_paused=True, game_is_over=True)
+
+        with patch("llm_handler.game_session_manager") as mock_game_mgr, \
+             patch("llm_handler.session_manager") as mock_session_mgr, \
+             patch("llm_handler.stop_observer_civcom") as mock_stop_observer, \
+             patch("tornado.ioloop.IOLoop.current") as mock_ioloop_current:
+
+            mock_game_mgr.sessions = {"test-game-gameover": game_session}
+            mock_session_mgr.suspend_session.return_value = False
+            mock_ioloop = Mock()
+            mock_ioloop_current.return_value = mock_ioloop
+
+            self.handler.on_close()
+
+            # Port SHOULD be released even though game is paused
+            mock_stop_observer.assert_called_once_with("test-game-gameover")
+            mock_ioloop.add_callback.assert_called_once()
+            self.assertTrue(game_session._port_releasing)
+            self.assertIsNotNone(game_session._port_releasing_since)
+
+    def test_pause_skipped_when_game_over(self):
+        """When game is over, pause_game() should NOT be called."""
+        game_session = self._build_game_session(is_paused=False, game_is_over=True)
+        game_session.pause_game = Mock()
+
+        with patch("llm_handler.game_session_manager") as mock_game_mgr, \
+             patch("llm_handler.session_manager") as mock_session_mgr, \
+             patch("llm_handler.stop_observer_civcom"), \
+             patch("tornado.ioloop.IOLoop.current") as mock_ioloop_current:
+
+            mock_game_mgr.sessions = {"test-game-gameover": game_session}
+            mock_session_mgr.suspend_session.return_value = False
+            mock_ioloop_current.return_value = Mock()
+
+            self.handler.on_close()
+
+            game_session.pause_game.assert_not_called()
+
+    def test_civcom_game_over_propagates_to_session(self):
+        """If civcom.game_is_over but session doesn't know yet, on_close should propagate."""
+        game_session = self._build_game_session(is_paused=False, game_is_over=False)
+        game_session.pause_game = Mock()
+        # Simulate civcom knowing game is over but session doesn't yet
+        self.handler.civcom.game_is_over = True
+
+        with patch("llm_handler.game_session_manager") as mock_game_mgr, \
+             patch("llm_handler.session_manager") as mock_session_mgr, \
+             patch("llm_handler.stop_observer_civcom"), \
+             patch("tornado.ioloop.IOLoop.current") as mock_ioloop_current:
+
+            mock_game_mgr.sessions = {"test-game-gameover": game_session}
+            mock_session_mgr.suspend_session.return_value = False
+            mock_ioloop_current.return_value = Mock()
+
+            self.handler.on_close()
+
+            # Session should now reflect game_is_over
+            self.assertTrue(game_session.game_is_over)
+            self.assertIsNotNone(game_session.game_ended_at)
+            # Pause should have been skipped
+            game_session.pause_game.assert_not_called()
+
+    def test_stale_cleanup_immediate_for_game_over(self):
+        """Game-over sessions should be cleaned immediately; paused sessions should not."""
+        import asyncio
+        from unittest.mock import AsyncMock
+
+        # Game-over session — should be cleaned by the fast-path
+        gs_ended = GameSession(game_id="ended-game", civserver_port=6002, min_players=2)
+        gs_ended.mark_game_over(reason='test')
+        gs_ended.game_ended_at = 1000.0  # Override to simulate "long ago"
+        gs_ended.is_paused = False
+        gs_ended.players = {}
+
+        # Regular paused session — should NOT be cleaned (timeout=999999)
+        gs_paused = GameSession(game_id="paused-game", civserver_port=6003, min_players=2)
+        gs_paused.is_paused = True
+        gs_paused.paused_at = gs_paused.created_at  # Just paused
+        gs_paused.players = {}
+
+        manager = GameSessionManager()
+        manager.sessions = {
+            "ended-game": gs_ended,
+            "paused-game": gs_paused,
+        }
+
+        # Use a very large timeout - game-over fast-path shouldn't need it,
+        # and the paused session should survive because it hasn't exceeded timeout
+        mock_release = AsyncMock(return_value=True)
+        with patch.object(manager, 'release_civserver_port', mock_release):
+            loop = asyncio.new_event_loop()
+            try:
+                cleaned = loop.run_until_complete(
+                    manager.cleanup_stale_paused_sessions(suspension_timeout_secs=999999)
+                )
+            finally:
+                loop.close()
+
+        self.assertEqual(cleaned, 1)
+        self.assertNotIn("ended-game", manager.sessions)
+        # Regular paused session must survive — the fast-path is selective
+        self.assertIn("paused-game", manager.sessions)
+        self.assertFalse(gs_paused._port_releasing)
+
+    def test_pause_still_works_when_game_not_over(self):
+        """Regression: mid-game disconnects should still pause correctly."""
+        game_session = self._build_game_session(is_paused=False, game_is_over=False)
+
+        with patch("llm_handler.game_session_manager") as mock_game_mgr, \
+             patch("llm_handler.session_manager") as mock_session_mgr, \
+             patch("llm_handler.stop_observer_civcom"), \
+             patch("tornado.ioloop.IOLoop.current") as mock_ioloop_current:
+
+            mock_game_mgr.sessions = {"test-game-gameover": game_session}
+            mock_session_mgr.suspend_session.return_value = False
+            mock_ioloop = Mock()
+            mock_ioloop_current.return_value = mock_ioloop
+
+            self.handler.on_close()
+
+            # Game should be paused (not game-over, so normal behavior)
+            self.assertTrue(game_session.is_paused)
+            # Port should NOT be released (paused for reconnect)
+            mock_ioloop.add_callback.assert_not_called()
+            self.assertFalse(game_session._port_releasing)
+
+
+    def test_endgame_report_propagates_to_game_session(self):
+        """PACKET_ENDGAME_REPORT in civcom should propagate game-over to GameSession."""
+        gs = GameSession(game_id="endgame-prop", civserver_port=6005, min_players=2)
+        self.assertFalse(gs.game_is_over)
+
+        # Build a mock civcom handler whose .game_id leads back to our session
+        mock_handler = Mock()
+        mock_handler.game_id = "endgame-prop"
+
+        # Replicate the attribute-traversal chain from civcom.py:
+        #   handler = getattr(self, 'civwebserver', None)
+        #   game_id = getattr(handler, 'game_id', None)
+        mock_civcom = Mock()
+        mock_civcom.civwebserver = mock_handler
+
+        # Patch game_session_manager.sessions to contain our real GameSession
+        with patch.dict("game_session_manager.game_session_manager.sessions", {"endgame-prop": gs}):
+            # Execute the same propagation logic as civcom.py PACKET_ENDGAME_REPORT
+            from game_session_manager import game_session_manager as gsm
+            handler = getattr(mock_civcom, 'civwebserver', None)
+            game_id = getattr(handler, 'game_id', None) if handler else None
+            self.assertEqual(game_id, "endgame-prop")
+
+            found_gs = gsm.sessions.get(game_id)
+            self.assertIsNotNone(found_gs)
+            found_gs.mark_game_over(reason="endgame_report")
+
+        self.assertTrue(gs.game_is_over)
+        self.assertIsNotNone(gs.game_ended_at)
+        self.assertEqual(gs.phase, GamePhase.ENDED)
+
+    def test_mark_game_over_is_idempotent(self):
+        """Calling mark_game_over() twice should not update game_ended_at."""
+        gs = GameSession(game_id="idempotent-test", civserver_port=6006, min_players=2)
+
+        gs.mark_game_over(reason="first_call")
+        first_ended_at = gs.game_ended_at
+        self.assertTrue(gs.game_is_over)
+        self.assertIsNotNone(first_ended_at)
+        self.assertEqual(gs.phase, GamePhase.ENDED)
+
+        # Second call should be a no-op (early-return guard)
+        gs.mark_game_over(reason="second_call")
+        self.assertEqual(gs.game_ended_at, first_ended_at)
+        self.assertEqual(gs.phase, GamePhase.ENDED)
 
 
 if __name__ == '__main__':

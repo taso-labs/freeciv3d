@@ -2979,6 +2979,12 @@ class TerminateGameHandler(web.RequestHandler):
             f"TERMINATE_REQUEST mode=hard game_id={game_id} civcoms_found={len(all_civcoms)}"
         )
 
+        # Mark game as over BEFORE closing connections so that any on_close()
+        # triggered by CivCom teardown will skip pausing and allow port release
+        game_session = game_session_manager.sessions.get(game_id)
+        if game_session:
+            game_session.mark_game_over(reason="hard_terminate")
+
         # Close each CivCom and unregister from registry
         for (gid, agent_id), cc in list(all_civcoms.items()):
             if agent_id == "__observer__":

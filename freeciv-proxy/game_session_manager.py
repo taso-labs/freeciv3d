@@ -125,11 +125,41 @@ class GameSession:
         self.resume_count: int = 0  # Number of times game has been resumed (recovery tracking)
         self.autotoggle_disabled: bool = False  # Track if autotoggle was disabled during pause
 
+        # Game-over state - propagated from CivCom when PACKET_ENDGAME_REPORT arrives
+        # When True, on_close() skips pausing and allows immediate port release
+        self.game_is_over: bool = False
+        self.game_ended_at: Optional[float] = None
+
         # Port release flag - prevents TOCTOU race in on_close()
         # Set True atomically with should_release decision while holding _players_lock
         # Checked in add_player() to reject connections during port release
         self._port_releasing: bool = False
         self._port_releasing_since: Optional[float] = None  # Timestamp for timeout safety net
+
+    def mark_game_over(self, reason: str) -> None:
+        """Mark this game session as ended, allowing immediate port release.
+
+        Thread-safe: acquires _players_lock to ensure atomic visibility of
+        all three fields across the CivCom thread and Tornado IO thread.
+
+        Called from:
+        - civcom.py: when PACKET_ENDGAME_REPORT arrives from the C server
+        - state_extractor.py: when admin sends hard terminate via API
+        - llm_handler.py: belt-and-suspenders propagation from civcom.game_is_over
+
+        Args:
+            reason: Why the game ended (for structured logging)
+        """
+        with self._players_lock:
+            if self.game_is_over:
+                return  # already marked, no-op
+            self.game_is_over = True
+            self.game_ended_at = time.time()
+            self.phase = GamePhase.ENDED
+        logger.info(
+            f"GAME_SESSION_MARKED_ENDED game_id={self.game_id} "
+            f"port={self.civserver_port} reason={reason}"
+        )
 
     def reset_port_releasing_flag(self, reason: str) -> None:
         """Reset the _port_releasing flag after release attempt completes.
@@ -1163,18 +1193,29 @@ class GameSessionManager:
         return False
 
     async def cleanup_stale_paused_sessions(self, suspension_timeout_secs: Optional[int] = None) -> int:
-        """Release ports for paused sessions that exceeded suspension timeout.
+        """Release ports for sessions that no longer need their civserver port.
 
-        A session is eligible when:
-        - `is_paused` is True
-        - paused duration exceeds `SESSION_SUSPENSION_TIMEOUT_SECS`
-        - no active reconnect WebSocket is currently attached
+        Two categories of sessions are cleaned up:
+
+        1. **Game-over (fast-path)**: Sessions where ``mark_game_over()`` has been
+           called (e.g. after ``PACKET_ENDGAME_REPORT``).  These are released
+           immediately regardless of timeout — the game is finished so there is
+           no reconnect scenario.
+
+        2. **Stale-paused (timeout-based)**: Sessions that have been paused longer
+           than *suspension_timeout_secs* with no active reconnect WebSocket.
+           This catches games abandoned mid-match (player crash / network loss).
+
+        Args:
+            suspension_timeout_secs: How long a paused session is kept alive for
+                potential reconnect before its port is reclaimed.  Defaults to
+                the ``SESSION_SUSPENSION_TIMEOUT_SECS`` env-var (3600 s / 60 min).
 
         Returns:
             Number of stale paused sessions successfully cleaned up.
         """
         if suspension_timeout_secs is None:
-            suspension_timeout_secs = int(os.getenv('SESSION_SUSPENSION_TIMEOUT_SECS', '86400'))
+            suspension_timeout_secs = int(os.getenv('SESSION_SUSPENSION_TIMEOUT_SECS', '3600'))
 
         if suspension_timeout_secs <= 0:
             logger.warning(
@@ -1196,8 +1237,28 @@ class GameSessionManager:
         # selecting the same sessions. The _port_releasing flag provides
         # per-session mutual exclusion for the actual release calls.
         async with self._paused_cleanup_lock:
+            # Fast-path: clean up game-over sessions immediately (no timeout needed)
+            # Games that received ENDGAME_REPORT have no reason to hold their port
+            for game_id, session in list(self.sessions.items()):
+                if not session.game_is_over:
+                    continue
+                with session._players_lock:
+                    # If players are still connected, skip — on_close() will
+                    # handle port release when the last player disconnects.
+                    if len(session.players) > 0 or session._port_releasing:
+                        continue
+                    session._port_releasing = True
+                    session._port_releasing_since = now
+                    ended_at = session.game_ended_at or session.created_at
+                    candidates.append((game_id, session.civserver_port, now - ended_at, "game_over"))
+
+            # Note: if mark_game_over() fires between Loop 1 and Loop 2, the
+            # session is missed in both — benign, caught on the next 5-min sweep.
             for game_id, session in list(self.sessions.items()):
                 if not session.is_paused:
+                    continue
+                # Game-over sessions are handled by the fast-path above — skip here to avoid double-release
+                if session.game_is_over:
                     continue
 
                 paused_since = session.paused_at if session.paused_at is not None else session.created_at
@@ -1232,11 +1293,11 @@ class GameSessionManager:
 
                     session._port_releasing = True
                     session._port_releasing_since = now
-                    candidates.append((game_id, session.civserver_port, paused_for))
+                    candidates.append((game_id, session.civserver_port, paused_for, "stale_paused"))
 
         # Release outside lock — _port_releasing guards per-session safety,
         # so we don't need to hold the sweep lock during slow HTTP calls.
-        for game_id, port, paused_for in candidates:
+        for game_id, port, elapsed_secs, cleanup_reason in candidates:
             try:
                 released = await self.release_civserver_port(game_id, port)
             except Exception as e:
@@ -1249,24 +1310,31 @@ class GameSessionManager:
             if not target_session:
                 continue
 
+            label = "game-over session" if cleanup_reason == "game_over" else "stale paused session"
             if released:
                 if target_session._port_releasing:
                     target_session.reset_port_releasing_flag(
-                        "stale paused-session cleanup complete"
+                        f"{label} cleanup complete"
                     )
                 self.sessions.pop(game_id, None)
                 cleaned_count += 1
-                logger.info(
-                    f"Game {game_id}: cleaned stale paused session after {paused_for:.0f}s "
-                    f"(released port {port})"
-                )
+                if cleanup_reason == "game_over":
+                    logger.info(
+                        f"GAME_OVER_PORT_RELEASE: Game {game_id}: released port {port} "
+                        f"immediately after game ended {elapsed_secs:.0f}s ago"
+                    )
+                else:
+                    logger.info(
+                        f"Game {game_id}: cleaned {label} after {elapsed_secs:.0f}s "
+                        f"(released port {port})"
+                    )
             else:
                 if target_session._port_releasing:
                     target_session.reset_port_releasing_flag(
-                        "stale paused-session cleanup release failed; will retry on next sweep"
+                        f"{label} cleanup release failed; will retry on next sweep"
                     )
                 logger.warning(
-                    f"Game {game_id}: stale paused session not cleaned (port {port} release failed)"
+                    f"Game {game_id}: {label} not cleaned (port {port} release failed)"
                 )
 
         return cleaned_count
