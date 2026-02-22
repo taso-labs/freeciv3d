@@ -431,6 +431,11 @@ class AgentWebSocketHandler:
                 # This avoids a double-close race where _forward_to_proxy could
                 # see a non-None but closed proxy_connection between our close()
                 # and the listener's finally block setting it to None.
+                # NOTE: We do not await the cancellation here. The listener's
+                # CancelledError unwinds asynchronously, and handle_connection's
+                # finally block will await _proxy_listener_task. This is safe
+                # because asyncio's single-threaded cooperative scheduler ensures
+                # no interleaving between the cancel signal and the finally cleanup.
                 if self._proxy_listener_task and not self._proxy_listener_task.done():
                     self._proxy_listener_task.cancel()
         except asyncio.CancelledError:

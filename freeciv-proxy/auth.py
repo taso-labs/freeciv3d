@@ -16,6 +16,14 @@ from dataclasses import dataclass
 
 logger = logging.getLogger("freeciv-proxy")
 
+# Import LLM config at module level so import failures surface at startup
+# rather than silently degrading auth on every request.
+try:
+    from config_loader import llm_config as _llm_config
+except ImportError:
+    _llm_config = None
+    logger.warning("config_loader not available — LLM token authentication disabled")
+
 
 @dataclass
 class AuthSession:
@@ -229,11 +237,12 @@ class SimpleAuthenticator:
         will have player_id=None and game_id=None, bypassing per-player authorization.
         These tokens MUST be treated as privileged secrets.
         """
+        if _llm_config is None:
+            return False
         try:
-            from config_loader import llm_config
-            return llm_config.validate_token(token)
+            return _llm_config.validate_token(token)
         except Exception as e:
-            logger.warning(f"LLM token validation failed: {e}")
+            logger.error(f"LLM token validation error: {e}")
             return False
 
     def _cleanup_expired_sessions(self):
