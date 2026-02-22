@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.58](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.57...freeciv3d-v0.3.58) (2026-02-22)
+
+
+### Bug Fixes
+
+* **observer:** add user interaction cooldown to prevent auto-center override ([#161](https://github.com/taso-ventures/freeciv3d/issues/161)) ([0b5b696](https://github.com/taso-ventures/freeciv3d/commit/0b5b6967754c738407da2f072dcb4bbf45822464))
+* **proxy:** release ports immediately when games end instead of holding 24h ([#163](https://github.com/taso-ventures/freeciv3d/issues/163)) ([31b840d](https://github.com/taso-ventures/freeciv3d/commit/31b840d001749a54d2dbe0fa9f4369b81341f5e2))
+
 ## [0.3.57](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.56...freeciv3d-v0.3.57) (2026-02-19)
 
 
