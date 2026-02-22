@@ -743,10 +743,8 @@ class TestGameOverPortRelease(unittest.TestCase):
         )
         gs.game_started = True
         gs.is_paused = is_paused
-        gs.game_is_over = game_is_over
         if game_is_over:
-            import time as _time
-            gs.game_ended_at = _time.time()
+            gs.mark_game_over(reason='test')
         gs.players = {
             "agent-1": PlayerInfo(
                 agent_id="agent-1",
@@ -827,8 +825,8 @@ class TestGameOverPortRelease(unittest.TestCase):
 
         # Game-over session — should be cleaned by the fast-path
         gs_ended = GameSession(game_id="ended-game", civserver_port=6002, min_players=2)
-        gs_ended.game_is_over = True
-        gs_ended.game_ended_at = 1000.0  # Long ago
+        gs_ended.mark_game_over(reason='test')
+        gs_ended.game_ended_at = 1000.0  # Override to simulate "long ago"
         gs_ended.is_paused = False
         gs_ended.players = {}
 
@@ -883,6 +881,53 @@ class TestGameOverPortRelease(unittest.TestCase):
             # Port should NOT be released (paused for reconnect)
             mock_ioloop.add_callback.assert_not_called()
             self.assertFalse(game_session._port_releasing)
+
+
+    def test_endgame_report_propagates_to_game_session(self):
+        """PACKET_ENDGAME_REPORT in civcom should propagate game-over to GameSession."""
+        gs = GameSession(game_id="endgame-prop", civserver_port=6005, min_players=2)
+        self.assertFalse(gs.game_is_over)
+
+        # Build a mock civcom handler whose .game_id leads back to our session
+        mock_handler = Mock()
+        mock_handler.game_id = "endgame-prop"
+
+        # Replicate the attribute-traversal chain from civcom.py:
+        #   handler = getattr(self, 'civwebserver', None)
+        #   game_id = getattr(handler, 'game_id', None)
+        mock_civcom = Mock()
+        mock_civcom.civwebserver = mock_handler
+
+        # Patch game_session_manager.sessions to contain our real GameSession
+        with patch.dict("game_session_manager.game_session_manager.sessions", {"endgame-prop": gs}):
+            # Execute the same propagation logic as civcom.py PACKET_ENDGAME_REPORT
+            from game_session_manager import game_session_manager as gsm
+            handler = getattr(mock_civcom, 'civwebserver', None)
+            game_id = getattr(handler, 'game_id', None) if handler else None
+            self.assertEqual(game_id, "endgame-prop")
+
+            found_gs = gsm.sessions.get(game_id)
+            self.assertIsNotNone(found_gs)
+            found_gs.mark_game_over(reason="endgame_report")
+
+        self.assertTrue(gs.game_is_over)
+        self.assertIsNotNone(gs.game_ended_at)
+        self.assertEqual(gs.phase, GamePhase.ENDED)
+
+    def test_mark_game_over_is_idempotent(self):
+        """Calling mark_game_over() twice should not update game_ended_at."""
+        gs = GameSession(game_id="idempotent-test", civserver_port=6006, min_players=2)
+
+        gs.mark_game_over(reason="first_call")
+        first_ended_at = gs.game_ended_at
+        self.assertTrue(gs.game_is_over)
+        self.assertIsNotNone(first_ended_at)
+        self.assertEqual(gs.phase, GamePhase.ENDED)
+
+        # Second call should be a no-op (early-return guard)
+        gs.mark_game_over(reason="second_call")
+        self.assertEqual(gs.game_ended_at, first_ended_at)
+        self.assertEqual(gs.phase, GamePhase.ENDED)
 
 
 if __name__ == '__main__':

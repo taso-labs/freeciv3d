@@ -1193,18 +1193,29 @@ class GameSessionManager:
         return False
 
     async def cleanup_stale_paused_sessions(self, suspension_timeout_secs: Optional[int] = None) -> int:
-        """Release ports for paused sessions that exceeded suspension timeout.
+        """Release ports for sessions that no longer need their civserver port.
 
-        A session is eligible when:
-        - `is_paused` is True
-        - paused duration exceeds `SESSION_SUSPENSION_TIMEOUT_SECS`
-        - no active reconnect WebSocket is currently attached
+        Two categories of sessions are cleaned up:
+
+        1. **Game-over (fast-path)**: Sessions where ``mark_game_over()`` has been
+           called (e.g. after ``PACKET_ENDGAME_REPORT``).  These are released
+           immediately regardless of timeout — the game is finished so there is
+           no reconnect scenario.
+
+        2. **Stale-paused (timeout-based)**: Sessions that have been paused longer
+           than *suspension_timeout_secs* with no active reconnect WebSocket.
+           This catches games abandoned mid-match (player crash / network loss).
+
+        Args:
+            suspension_timeout_secs: How long a paused session is kept alive for
+                potential reconnect before its port is reclaimed.  Defaults to
+                the ``SESSION_SUSPENSION_TIMEOUT_SECS`` env-var (3600 s / 60 min).
 
         Returns:
             Number of stale paused sessions successfully cleaned up.
         """
         if suspension_timeout_secs is None:
-            suspension_timeout_secs = int(os.getenv('SESSION_SUSPENSION_TIMEOUT_SECS', '1800'))
+            suspension_timeout_secs = int(os.getenv('SESSION_SUSPENSION_TIMEOUT_SECS', '3600'))
 
         if suspension_timeout_secs <= 0:
             logger.warning(
@@ -1232,6 +1243,8 @@ class GameSessionManager:
                 if not session.game_is_over:
                     continue
                 with session._players_lock:
+                    # If players are still connected, skip — on_close() will
+                    # handle port release when the last player disconnects.
                     if len(session.players) > 0 or session._port_releasing:
                         continue
                     session._port_releasing = True
@@ -1239,6 +1252,8 @@ class GameSessionManager:
                     ended_at = session.game_ended_at or session.created_at
                     candidates.append((game_id, session.civserver_port, now - ended_at, "game_over"))
 
+            # Note: if mark_game_over() fires between Loop 1 and Loop 2, the
+            # session is missed in both — benign, caught on the next 5-min sweep.
             for game_id, session in list(self.sessions.items()):
                 if not session.is_paused:
                     continue

@@ -4825,7 +4825,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
             # Check if game has ended (ENDGAME_REPORT received) — skip pause if so
             game_is_over = (
                 (game_session and game_session.game_is_over)
-                or (self.civcom and getattr(self.civcom, 'game_is_over', False))
+                or (self.civcom and self.civcom.game_is_over)
             )
             # Propagate civcom flag to session if needed (belt-and-suspenders)
             if game_is_over and game_session and not game_session.game_is_over:

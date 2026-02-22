@@ -2021,9 +2021,13 @@ class CivCom(Thread):
                     f"   Waiting for PACKET_ENDGAME_PLAYER packets with winner info."
                 )
                 # Propagate game-over to GameSession so on_close() can skip pause
-                # and allow immediate port release instead of holding for 24h
+                # and allow immediate port release instead of holding for 24h.
+                #
+                # Deferred import: game_session_manager imports state_extractor
+                # which imports civcom, so importing at module level would create
+                # a circular dependency chain:
+                #   game_session_manager → state_extractor → civcom
                 try:
-                    # Deferred import to avoid circular dependency at module load
                     from game_session_manager import game_session_manager
                     handler = getattr(self, 'civwebserver', None)
                     game_id = getattr(handler, 'game_id', None) if handler else None
@@ -2031,7 +2035,11 @@ class CivCom(Thread):
                         gs = game_session_manager.sessions.get(game_id)
                         if gs:
                             gs.mark_game_over(reason="endgame_report")
+                except ImportError as e:
+                    logger.error(f"Failed to import game_session_manager for game-over propagation: {e}")
                 except Exception as e:
+                    # Non-fatal: llm_handler.on_close() provides a fallback
+                    # propagation path via civcom.game_is_over → session.mark_game_over()
                     logger.warning(f"Failed to propagate game_is_over to GameSession: {e}")
 
             # ENDGAME PLAYER packet - contains per-player endgame stats
