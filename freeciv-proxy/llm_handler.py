@@ -533,22 +533,24 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 )
             self.game_id = game_id
 
-            # Fallback: Accept player_id from message for late reconnection
-            # This handles the case where session expired but client retained player_id
-            if not is_reconnecting:
-                provided_player_id = msg_data.get('player_id')
-                if provided_player_id is not None:
-                    try:
-                        provided_player_id = int(provided_player_id)
-                        if 0 <= provided_player_id < 512:  # Valid player range (not observer)
-                            previous_player_id = provided_player_id
+            # Fallback: Accept player_id from message when session doesn't have one
+            # Covers two cases:
+            # 1. Session expired but client retained player_id (late reconnection)
+            # 2. Session resumed but player_id was None in MySQL (e.g. stale CivCom was destroyed)
+            provided_player_id = msg_data.get('player_id')
+            if provided_player_id is not None and previous_player_id is None:
+                try:
+                    provided_player_id = int(provided_player_id)
+                    if 0 <= provided_player_id < 512:  # Valid player range (not observer)
+                        previous_player_id = provided_player_id
+                        if not is_reconnecting:
                             is_reconnecting = True
-                            logger.info(
-                                f"🔄 Late reconnection for {self.agent_id} with provided player_id={provided_player_id}\n"
-                                f"   Session expired but client retained player_id for game {game_id}"
-                            )
-                    except (ValueError, TypeError):
-                        logger.warning(f"Invalid player_id provided by {self.agent_id}: {provided_player_id}")
+                        logger.info(
+                            f"🔄 Using client-provided player_id={provided_player_id} for {self.agent_id}\n"
+                            f"   Session {'resumed (player_id missing)' if self.session_id else 'expired'}"
+                        )
+                except (ValueError, TypeError):
+                    logger.warning(f"Invalid player_id provided by {self.agent_id}: {provided_player_id}")
 
             # Create new session if we don't have one from resume
             # Late reconnection (player_id provided, session expired) still needs a
@@ -639,16 +641,25 @@ class LLMWSHandler(websocket.WebSocketHandler):
                     )
 
                     # STATE VERIFICATION: Check if expected_turn matches actual game state
-                    # This catches the case where reconnection went to a different/reset game
-                    # Allow ±TURN_DRIFT_TOLERANCE turn tolerance for reused CivCom: pod restart
-                    # + recovery can take minutes, during which AI players advance turns.
-                    # Session resumption already proves game identity, so the turn check is
-                    # a secondary sanity check here. expected_turn=0 means "client doesn't
-                    # know the turn yet" (pregame only), so skip verification like None.
+                    # With pause-on-disconnect, turns should NOT advance during disconnection.
+                    # Large drift means the civserver was reset (new game on same port).
+                    # Destroy the stale CivCom so the next reconnection attempt won't hit the
+                    # same mismatch (breaks the infinite retry loop).
                     if expected_turn is not None and expected_turn > 0:
                         current_turn = getattr(self.civcom, 'game_turn', 0)
                         turn_drift = abs(current_turn - expected_turn)
                         if turn_drift > TURN_DRIFT_TOLERANCE:
+                            # Destroy stale CivCom BEFORE sending error — this breaks
+                            # the infinite retry loop where the same stale CivCom is reused
+                            logger.warning(
+                                f"Destroying stale CivCom for {self.agent_id} before state mismatch abort "
+                                f"(turn drift {turn_drift}: expected={expected_turn}, actual={current_turn})"
+                            )
+                            self.civcom.stopped = True
+                            self.civcom.close_connection()
+                            civcom_registry.unregister_game(game_id, self.agent_id)
+                            self.civcom = None
+
                             self._abort_with_state_mismatch(
                                 expected_turn, current_turn,
                                 'Game state lost — connected to reset or different civserver instance',
