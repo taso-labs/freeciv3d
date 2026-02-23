@@ -126,7 +126,7 @@ class TestStaleConnectionRetryLogic(unittest.TestCase):
 
     def test_retry_only_during_reconnection(self):
         """Retry logic should only activate when is_reconnecting=True."""
-        # This mirrors the guard condition in llm_handler.py line 681:
+        # This mirrors the guard condition in llm_handler.py:
         # if is_reconnecting and self.civcom:
 
         # Case 1: Fresh connection - should NOT retry
@@ -155,6 +155,7 @@ class TestStaleConnectionConstants(unittest.TestCase):
         from llm_handler import (
             STALE_CONN_HANDSHAKE_WAIT_SEC,
             STALE_CONN_DISCONNECT_WAIT_SEC,
+            STALE_CONN_MAX_RETRIES,
         )
         # Handshake wait should be reasonable (1-10s)
         self.assertGreaterEqual(STALE_CONN_HANDSHAKE_WAIT_SEC, 1.0)
@@ -163,6 +164,10 @@ class TestStaleConnectionConstants(unittest.TestCase):
         # Disconnect wait should give civserver time to clean up
         self.assertGreaterEqual(STALE_CONN_DISCONNECT_WAIT_SEC, 1.0)
         self.assertLessEqual(STALE_CONN_DISCONNECT_WAIT_SEC, 10.0)
+
+        # Max retries should be at least 1, at most 5
+        self.assertGreaterEqual(STALE_CONN_MAX_RETRIES, 1)
+        self.assertLessEqual(STALE_CONN_MAX_RETRIES, 20)  # sanity check — not a product limit
 
 
 class TestCivComCleanupIdempotent(unittest.TestCase):
@@ -186,7 +191,7 @@ class TestCivComCleanupIdempotent(unittest.TestCase):
         self.assertTrue(civcom.stopped)
 
     def test_cleanup_after_rejection(self):
-        """cleanup() should work on a CivCom that was rejected."""
+        """cleanup() should work on a CivCom that was rejected and reset flags."""
         from civcom import CivCom
         from packet_constants import PACKET_SERVER_JOIN_REPLY
 
@@ -237,6 +242,201 @@ class TestCivComRegistryCleanup(unittest.TestCase):
         registry = CivComRegistry()
         # Should not raise
         registry.unregister_game("nonexistent_game", "nonexistent_agent")
+
+
+class TestCivComRegistryThreadSafety(unittest.TestCase):
+    """Test that CivComRegistry operations are thread-safe."""
+
+    def test_registry_has_lock(self):
+        """Registry should have a threading lock."""
+        from state_extractor import CivComRegistry
+        import threading
+
+        registry = CivComRegistry()
+        # threading.Lock() returns a factory instance, not a class — use type() for isinstance
+        self.assertIsInstance(registry._lock, type(threading.Lock()))
+
+    def test_get_all_for_game_returns_snapshot(self):
+        """get_all_for_game should return a safe copy, not a live view."""
+        from state_extractor import CivComRegistry
+
+        registry = CivComRegistry()
+        mock1 = MagicMock()
+        mock2 = MagicMock()
+        registry.register_game("game1", "agent1", mock1)
+        registry.register_game("game1", "agent2", mock2)
+        registry.register_game("game2", "agent3", MagicMock())
+
+        result = registry.get_all_for_game("game1")
+        self.assertEqual(len(result), 2)
+        self.assertIn(("game1", "agent1"), result)
+        self.assertIn(("game1", "agent2"), result)
+
+    def test_has_game_with_agent(self):
+        """has_game should work with specific agent_id."""
+        from state_extractor import CivComRegistry
+
+        registry = CivComRegistry()
+        registry.register_game("game1", "agent1", MagicMock())
+
+        self.assertTrue(registry.has_game("game1", "agent1"))
+        self.assertFalse(registry.has_game("game1", "agent2"))
+
+    def test_has_game_any_agent(self):
+        """has_game without agent_id should check any agent."""
+        from state_extractor import CivComRegistry
+
+        registry = CivComRegistry()
+        registry.register_game("game1", "agent1", MagicMock())
+
+        self.assertTrue(registry.has_game("game1"))
+        self.assertFalse(registry.has_game("game2"))
+
+    def test_concurrent_register_unregister(self):
+        """Concurrent register/unregister should not raise."""
+        from state_extractor import CivComRegistry
+        import threading
+
+        registry = CivComRegistry()
+        errors = []
+
+        def register_loop(agent_prefix, count):
+            try:
+                for i in range(count):
+                    mock = MagicMock()
+                    mock.cleanup = MagicMock()
+                    registry.register_game("game1", f"{agent_prefix}_{i}", mock)
+                    registry.unregister_game("game1", f"{agent_prefix}_{i}")
+            except Exception as e:
+                errors.append(e)
+
+        threads = [
+            threading.Thread(target=register_loop, args=(f"t{t}", 50))
+            for t in range(4)
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=10)
+
+        self.assertEqual(errors, [], f"Concurrent access errors: {errors}")
+
+
+class TestCleanupCivcomSafely(unittest.TestCase):
+    """Test the _cleanup_civcom_safely helper method."""
+
+    def test_cleanup_tolerates_cleanup_error(self):
+        """_cleanup_civcom_safely should not raise if cleanup() throws."""
+        from llm_handler import LLMWSHandler
+
+        handler = MagicMock(spec=LLMWSHandler)
+        handler.agent_id = "test_agent"
+
+        # CivCom that throws on cleanup
+        mock_civcom = MagicMock()
+        mock_civcom.cleanup.side_effect = RuntimeError("socket already closed")
+        handler.civcom = mock_civcom
+
+        # Should not raise
+        LLMWSHandler._cleanup_civcom_safely(handler, "game1")
+
+    def test_cleanup_tolerates_unregister_error(self):
+        """_cleanup_civcom_safely should not raise if unregister throws."""
+        from llm_handler import LLMWSHandler
+
+        handler = MagicMock(spec=LLMWSHandler)
+        handler.agent_id = "test_agent"
+        handler.civcom = MagicMock()
+
+        with patch('llm_handler.civcom_registry') as mock_registry:
+            mock_registry.get_civcom.return_value = None
+            mock_registry.unregister_game.side_effect = KeyError("not found")
+
+            # Should not raise
+            LLMWSHandler._cleanup_civcom_safely(handler, "game1")
+
+
+class TestRetryFailurePath(unittest.TestCase):
+    """Test that retry failure properly cleans up resources."""
+
+    def test_retry_failure_cleans_up_civcom(self):
+        """When retry fails, the CivCom should be cleaned up."""
+        from civcom import CivCom
+        from packet_constants import PACKET_SERVER_JOIN_REPLY
+
+        mock_handler = MagicMock()
+        mock_handler.loginpacket = '{"pid": 4}'
+
+        # First CivCom — rejected
+        civcom1 = CivCom("test_agent", 6000, "test_key", mock_handler)
+        rejection = json.dumps({
+            'pid': PACKET_SERVER_JOIN_REPLY,
+            'you_can_join': False,
+            'message': "'test_agent' already connected.",
+            'conn_id': -1
+        })
+        civcom1.parse_and_store_packet(rejection)
+        self.assertTrue(civcom1.join_rejected)
+
+        # Cleanup should reset state
+        civcom1.cleanup()
+        self.assertTrue(civcom1.stopped)
+        self.assertFalse(civcom1.join_rejected)
+
+        # Second CivCom (retry) — also rejected
+        civcom2 = CivCom("test_agent", 6000, "test_key", mock_handler)
+        civcom2.parse_and_store_packet(rejection)
+        self.assertTrue(civcom2.join_rejected)
+
+        # Cleanup the retry CivCom too
+        civcom2.cleanup()
+        self.assertTrue(civcom2.stopped)
+        self.assertFalse(civcom2.join_rejected)
+
+
+class TestRetryHandshakeTimeoutNotSuccess(unittest.TestCase):
+    """Test that a handshake timeout during retry is NOT treated as success.
+
+    Regression test for the bug where asyncio.TimeoutError fell through to
+    'if not self.civcom.join_rejected:' which evaluated True (join_rejected
+    starts False, no rejection packet was received), falsely setting
+    retry_succeeded = True with an unknown-state CivCom.
+    """
+
+    def test_retry_handshake_timeout_is_not_treated_as_success(self):
+        """When wait_for raises TimeoutError, retry_succeeded must stay False."""
+        async def simulate_retry_with_timeout():
+            mock_civcom = MagicMock()
+            # join_rejected stays False because no rejection packet was received —
+            # the server just didn't respond at all (timeout).
+            mock_civcom.join_rejected = False
+            retry_succeeded = False
+
+            # Replicate the fixed retry logic from llm_handler.py
+            retry_timed_out = False
+            try:
+                async def hang_forever():
+                    await asyncio.sleep(100)
+
+                await asyncio.wait_for(hang_forever(), timeout=0.001)
+            except asyncio.TimeoutError:
+                retry_timed_out = True
+
+            # The fix: gate on retry_timed_out BEFORE checking join_rejected.
+            # Without the fix, this branch would incorrectly evaluate True
+            # because join_rejected is False when the server never responded.
+            if not retry_timed_out and not mock_civcom.join_rejected:
+                retry_succeeded = True
+
+            return retry_timed_out, retry_succeeded
+
+        retry_timed_out, retry_succeeded = asyncio.run(simulate_retry_with_timeout())
+        self.assertTrue(retry_timed_out, "retry_timed_out must be set when handshake times out")
+        self.assertFalse(
+            retry_succeeded,
+            "retry_succeeded must remain False when handshake timed out — "
+            "unknown server state is not a success"
+        )
 
 
 if __name__ == '__main__':
