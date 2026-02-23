@@ -486,6 +486,13 @@ class StateExtractor:
             if civcom:
                 return civcom
 
+        # Fallback: try "default" agent_id for backwards-compatible registrations
+        # (register_game(game_id, civcom) stores with agent_id="default")
+        if not agent_id:
+            civcom = self.registry.get_civcom(game_id, "default")
+            if civcom:
+                return civcom
+
         # Fallback to provided civcom if it exists and has required methods
         if self.civcom and hasattr(self.civcom, 'get_full_state'):
             logger.debug(f"Using fallback civcom for game {game_id}")
@@ -2588,10 +2595,10 @@ class StateExtractorHandler(web.RequestHandler):
             format_str = self.get_argument('format', 'full')
             since_turn = self.get_argument('since_turn', None)
 
-            # Validate format parameter
-            if format_str not in ['full', 'minimal', 'llm']:
+            # Validate format parameter (must match validate_request_parameters accepted formats)
+            if format_str not in ['full', 'delta', 'llm_optimized']:
                 self.set_status(400)
-                self.write({"error": f"Invalid format '{format_str}'. Allowed: full, minimal, llm"})
+                self.write({"error": f"Invalid format '{format_str}'. Allowed: full, delta, llm_optimized"})
                 return
 
             # Validate since_turn parameter if provided
@@ -2755,7 +2762,7 @@ class LegalActionsHandler(web.RequestHandler):
             actions = await self._get_actions_async(validated_game_id, validated_player_id)
 
             self.set_header("Content-Type", "application/json")
-            self.write(actions)
+            self.write({"actions": actions})
 
         except (ConnectionError, OSError, TimeoutError) as e:
             # Network and connection errors

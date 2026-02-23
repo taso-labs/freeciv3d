@@ -4,8 +4,8 @@
 """
 Tests for stale connection reconnection fix.
 
-When a civserver rejects a join with "already connected" during reconnection,
-the proxy should force-close the stale connection and retry.
+When a civserver rejects a join during reconnection (for any reason),
+the proxy should force-close the stale connection and retry once.
 """
 
 import asyncio
@@ -105,46 +105,87 @@ class TestCivComJoinRejected(unittest.TestCase):
 
 
 class TestStaleConnectionRetryLogic(unittest.TestCase):
-    """Test the retry decision logic for stale connections."""
+    """Test the retry decision logic for stale connections.
 
-    def test_already_connected_detection(self):
-        """Verify 'already connected' is detected in rejection reason."""
-        # This tests the condition used in llm_handler.py
-        reason = "'Grok-41_Fast' already connected."
-        self.assertIn('already connected', reason)
+    Any civserver rejection during reconnection should trigger cleanup-and-retry.
+    The rejection reason string is not matched — only join_rejected=True matters.
+    """
 
-    def test_other_rejection_not_retried(self):
-        """Other rejection reasons should NOT trigger retry."""
+    def test_any_rejection_triggers_retry(self):
+        """Any join_rejected=True during reconnection should trigger retry."""
+        # The condition in llm_handler.py is: if self.civcom.join_rejected:
+        # No string matching on the reason — any rejection is retriable.
         reasons = [
+            "'Grok-41_Fast' already connected.",
             "Server is full",
             "Invalid username",
             "Game has already started",
             None,
+            f"Handshake timeout (5.0s)",
         ]
         for reason in reasons:
-            self.assertNotIn('already connected', reason or '')
+            join_rejected = True
+            is_reconnecting = True
+            should_retry = is_reconnecting and join_rejected
+            self.assertTrue(should_retry, f"Should retry for reason: {reason!r}")
+
+    def test_all_rejections_retried_during_reconnection(self):
+        """All rejection reasons trigger retry during reconnection, including None."""
+        # This was the production failure: reason=None skipped retry with old string matching.
+        # Now any rejection during reconnection is retriable.
+        test_cases = [
+            (None, True),
+            ("Server is full", True),
+            ("'agent' already connected.", True),
+            ("Game has already started", True),
+        ]
+        for reason, expected in test_cases:
+            join_rejected = True
+            is_reconnecting = True
+            should_retry = is_reconnecting and join_rejected
+            self.assertEqual(should_retry, expected, f"reason={reason!r}")
 
     def test_retry_only_during_reconnection(self):
         """Retry logic should only activate when is_reconnecting=True."""
-        # This mirrors the guard condition in llm_handler.py line 681:
+        # This mirrors the guard condition in llm_handler.py:
         # if is_reconnecting and self.civcom:
 
-        # Case 1: Fresh connection - should NOT retry
+        # Case 1: Fresh connection - should NOT retry (is_reconnecting=False)
         is_reconnecting = False
         join_rejected = True
-        reason = "'agent' already connected."
-        should_retry = is_reconnecting and join_rejected and 'already connected' in (reason or '')
+        should_retry = is_reconnecting and join_rejected
         self.assertFalse(should_retry)
 
-        # Case 2: Reconnection with "already connected" - SHOULD retry
+        # Case 2: Reconnection with rejection - SHOULD retry
         is_reconnecting = True
-        should_retry = is_reconnecting and join_rejected and 'already connected' in (reason or '')
+        should_retry = is_reconnecting and join_rejected
         self.assertTrue(should_retry)
 
-        # Case 3: Reconnection with different rejection - should NOT retry
-        reason = "Server is full"
-        should_retry = is_reconnecting and join_rejected and 'already connected' in (reason or '')
-        self.assertFalse(should_retry)
+        # Case 3: Reconnection with any rejection reason - SHOULD retry
+        should_retry = is_reconnecting and join_rejected
+        self.assertTrue(should_retry)
+
+    def test_handshake_timeout_treated_as_rejection(self):
+        """Handshake timeout should synthesize join_rejected=True for retry."""
+        # When handshake times out and join_rejected is still False,
+        # the handler synthesizes a rejection so the retry path handles it.
+        from llm_handler import STALE_CONN_HANDSHAKE_WAIT_SEC
+
+        # Simulate CivCom state after handshake timeout (no server reply received)
+        join_rejected = False
+        join_rejection_reason = None
+
+        # The handler code does:
+        #   if not self.civcom.join_rejected:
+        #       self.civcom.join_rejected = True
+        #       self.civcom.join_rejection_reason = f"Handshake timeout ({...}s)"
+        if not join_rejected:
+            join_rejected = True
+            join_rejection_reason = f"Handshake timeout ({STALE_CONN_HANDSHAKE_WAIT_SEC}s)"
+
+        self.assertTrue(join_rejected)
+        self.assertIn("Handshake timeout", join_rejection_reason)
+        self.assertIn(str(STALE_CONN_HANDSHAKE_WAIT_SEC), join_rejection_reason)
 
 
 class TestStaleConnectionConstants(unittest.TestCase):

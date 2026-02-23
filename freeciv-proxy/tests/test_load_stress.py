@@ -238,8 +238,9 @@ class TestLoadAndStress(unittest.TestCase):
         os.environ['CACHE_HMAC_SECRET'] = 'test-secret-that-is-at-least-64-characters-long-for-testing-purposes-only'
         os.environ['AUTH_ENABLED'] = 'false'  # Disable auth for load testing
 
-        # Create mock game environment
+        # Create mock game environment (game_turn must be set to avoid Mock in cache keys)
         cls.mock_civcom = Mock()
+        cls.mock_civcom.game_turn = 100
         cls.mock_civcom.get_full_state.return_value = {
             'turn': 100,
             'phase': 'movement',
@@ -261,6 +262,13 @@ class TestLoadAndStress(unittest.TestCase):
                  'city_id': x // 20 if y == 10 else None}
                 for x in range(0, 80, 5) for y in range(0, 50, 5)
             ]
+        }
+
+        cls.mock_civcom.build_llm_optimized_state.return_value = {
+            'turn': 100,
+            'strategic': {'threats': []},
+            'tactical': {'units': [{'id': i, 'type': 'warrior'} for i in range(5)]},
+            'economic': {'gold': 350},
         }
 
         # Register test games
@@ -386,7 +394,7 @@ class TestLoadAndStress(unittest.TestCase):
     def test_cache_performance_under_load(self):
         """Test cache performance and hit rates under sustained load"""
 
-        cache = StateCache(ttl=300, max_cache_size_mb=20, max_entries=200)
+        cache = StateCache(ttl=300, max_cache_size_mb=20, max_entries=200, max_size_kb=64)
         extractor = StateExtractor(cache=cache, registry=civcom_registry)
 
         # Prime the cache with some requests

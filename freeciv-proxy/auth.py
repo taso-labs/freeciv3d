@@ -117,8 +117,8 @@ class SimpleAuthenticator:
                 hashlib.sha256
             ).hexdigest()  # Use full HMAC signature for security
 
-            # Verify signature
-            if not hmac.compare_digest(provided_signature, expected_signature):
+            # Verify signature (generate_api_key stores first 16 chars of hex digest)
+            if not hmac.compare_digest(provided_signature, expected_signature[:16]):
                 logger.warning(f"Invalid API key signature")
                 return False, None, None
 

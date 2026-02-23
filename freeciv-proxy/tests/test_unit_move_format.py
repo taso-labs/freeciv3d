@@ -99,8 +99,10 @@ class TestUnitMoveFormat(unittest.TestCase):
 
     def test_state_extractor_generates_dest_x_dest_y(self):
         """state_extractor should generate unit_move with dest_x/dest_y"""
+        import os
+        os.environ.setdefault('CACHE_HMAC_SECRET', '8dc50280f151af309d728c951584576f205688dc82d7d295174f2ef1b3e32181')
         from state_extractor import StateExtractor
-        
+
         extractor = StateExtractor()
         
         # Create mock raw state with units
