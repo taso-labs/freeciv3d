@@ -4543,6 +4543,16 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 # Close partner's WebSocket to trigger coordinated reconnection
                 # Use custom close code 4001 to indicate partner-triggered disconnect
                 try:
+                    # Stale handler guard: if partner already reconnected with a new
+                    # handler, don't close the new connection
+                    current_handler = llm_agents.get(agent_id)
+                    if current_handler is not None and current_handler is not partner_handler:
+                        logger.info(
+                            f"Partner {agent_id} already reconnected with new handler — "
+                            f"skipping coordinated close"
+                        )
+                        continue
+
                     # Check if WebSocket is already closing to prevent double-close issues
                     # when both agents disconnect simultaneously
                     ws_conn = getattr(partner_handler, 'ws_connection', None)
@@ -4595,6 +4605,16 @@ class LLMWSHandler(websocket.WebSocketHandler):
 
                 # Close partner's WebSocket
                 try:
+                    # Stale handler guard: if partner already reconnected with a new
+                    # handler, don't close the new connection
+                    current_handler = llm_agents.get(agent_id)
+                    if current_handler is not None and current_handler is not partner_handler:
+                        logger.info(
+                            f"Partner {agent_id} already reconnected with new handler — "
+                            f"skipping coordinated close"
+                        )
+                        continue
+
                     ws_conn = getattr(partner_handler, 'ws_connection', None)
                     is_closing = False
                     if ws_conn:
@@ -4840,6 +4860,13 @@ class LLMWSHandler(websocket.WebSocketHandler):
             if game_is_over:
                 logger.info(
                     f"SKIP_PAUSE_GAME_OVER game_id={self.game_id} agent_id={self.agent_id}"
+                )
+            elif close_code == 4001:
+                # Closed by partner's coordinated disconnect. Game is already paused,
+                # partner already handled coordination. Do NOT re-close partners.
+                logger.info(
+                    f"COORDINATED_CLOSE: {self.agent_id} closed by partner (code=4001) — "
+                    f"skipping partner suspension (avoiding cascade)"
                 )
             elif game_session and game_session.game_started and not game_session.is_paused:
                 # Try our civcom first

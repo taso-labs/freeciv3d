@@ -462,10 +462,13 @@ class MySQLSessionManager:
         try:
             with self._get_connection() as conn:
                 with conn.cursor() as cursor:
+                    # Accept both 'active' and 'suspended' to make suspend idempotent.
+                    # When partner A pre-suspends B's session, B's own on_close() must
+                    # also return True so CivCom is preserved (not destroyed).
                     cursor.execute("""
                         UPDATE agent_sessions
                         SET state = 'suspended', expires_at = NOW() + INTERVAL %s SECOND
-                        WHERE session_id = %s AND state = 'active'
+                        WHERE session_id = %s AND state IN ('active', 'suspended')
                     """, (suspension_timeout, session_id))
                     affected = cursor.rowcount
                     conn.commit()
@@ -967,7 +970,10 @@ class InMemorySessionManager:
         """Suspend a session temporarily"""
         with self._session_lock:
             session = self.sessions.get(session_id)
-            if session and session.state == SessionState.ACTIVE:
+            # Accept both ACTIVE and SUSPENDED to make suspend idempotent.
+            # When partner A pre-suspends B's session, B's own on_close() must
+            # also return True so CivCom is preserved (not destroyed).
+            if session and session.state in (SessionState.ACTIVE, SessionState.SUSPENDED):
                 session.state = SessionState.SUSPENDED
                 suspension_timeout = int(os.getenv('SESSION_SUSPENSION_TIMEOUT_SECS', '86400'))
                 session.expires_at = time.time() + suspension_timeout
