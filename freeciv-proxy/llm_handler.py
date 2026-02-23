@@ -707,7 +707,12 @@ class LLMWSHandler(websocket.WebSocketHandler):
                                 self.civcom.join_rejected = True
                                 self.civcom.join_rejection_reason = f"Handshake timeout ({STALE_CONN_HANDSHAKE_WAIT_SEC}s)"
 
-                        if self.civcom.join_rejected:
+                        # Skip retry for definitively non-retriable rejections
+                        NON_RETRIABLE_REASONS = ('server is full', 'game has already started')
+                        reason_lower = (self.civcom.join_rejection_reason or '').lower()
+                        is_non_retriable = any(r in reason_lower for r in NON_RETRIABLE_REASONS)
+
+                        if self.civcom.join_rejected and not is_non_retriable:
                             logger.warning(
                                 f"🔄 Join rejected during reconnection for {self.agent_id}: "
                                 f"{self.civcom.join_rejection_reason}\n"

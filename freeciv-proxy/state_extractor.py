@@ -485,10 +485,9 @@ class StateExtractor:
             civcom = self.registry.get_civcom(game_id, agent_id)
             if civcom:
                 return civcom
-
-        # Fallback: try "default" agent_id for backwards-compatible registrations
-        # (register_game(game_id, civcom) stores with agent_id="default")
-        if not agent_id:
+        else:
+            # Fallback: try "default" agent_id for backwards-compatible registrations
+            # (register_game(game_id, civcom) stores with agent_id="default")
             civcom = self.registry.get_civcom(game_id, "default")
             if civcom:
                 return civcom

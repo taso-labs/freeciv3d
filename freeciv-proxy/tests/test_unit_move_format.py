@@ -7,7 +7,6 @@ and that packet_converter can handle both formats transparently.
 
 import unittest
 from unittest.mock import Mock
-import secrets
 
 import sys
 import os
@@ -15,8 +14,9 @@ import os
 # Add parent directory to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# Set required environment variable for cache - must be 64+ characters with good entropy
-os.environ['CACHE_HMAC_SECRET'] = secrets.token_hex(32)  # 64 character hex string
+# Set required environment variable for cache — must be present before importing modules
+# that read it at load time (config_loader, civcom).
+os.environ['CACHE_HMAC_SECRET'] = '8dc50280f151af309d728c951584576f205688dc82d7d295174f2ef1b3e32181'
 
 import logging
 logging.disable(logging.CRITICAL)
@@ -99,8 +99,6 @@ class TestUnitMoveFormat(unittest.TestCase):
 
     def test_state_extractor_generates_dest_x_dest_y(self):
         """state_extractor should generate unit_move with dest_x/dest_y"""
-        import os
-        os.environ.setdefault('CACHE_HMAC_SECRET', '8dc50280f151af309d728c951584576f205688dc82d7d295174f2ef1b3e32181')
         from state_extractor import StateExtractor
 
         extractor = StateExtractor()
