@@ -290,6 +290,17 @@ class GameSession:
             logger.debug(f"Game {self.game_id} not paused, nothing to resume")
             return False
 
+        # Debounce: skip if resumed very recently (defense-in-depth against TOCTOU races).
+        # The primary fix is holding _players_lock through the resume call in
+        # _check_and_resume_game(), but this catches any future callers that
+        # might bypass the lock.
+        if self.last_resumed_at and (time.time() - self.last_resumed_at) < 2.0:
+            logger.warning(
+                f"Game {self.game_id}: resume_game debounced — "
+                f"last resumed {time.time() - self.last_resumed_at:.1f}s ago"
+            )
+            return False
+
         if not civcom:
             logger.error(f"Game {self.game_id}: Cannot resume - no civcom connection")
             return False

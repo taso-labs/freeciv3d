@@ -70,6 +70,8 @@ class AgentWebSocketHandler:
         # Without this, reconnection creates duplicate tasks that both call recv(),
         # causing "cannot call recv while another coroutine is already running recv"
         self._proxy_listener_task: Optional[asyncio.Task] = None
+        # Auth timeout watchdog: fires GAME_INIT_FAILED if auth_success not received in time
+        self._auth_timeout_task: Optional[asyncio.Task] = None
 
     async def handle_connection(self):
         """Handle the WebSocket connection lifecycle"""
@@ -145,6 +147,14 @@ class AgentWebSocketHandler:
             logger.error(f"Error in agent connection {self.agent_id}: {e}")
 
         finally:
+            # Cancel auth timeout watchdog if still running
+            if self._auth_timeout_task and not self._auth_timeout_task.done():
+                self._auth_timeout_task.cancel()
+                try:
+                    await self._auth_timeout_task
+                except asyncio.CancelledError:
+                    pass
+
             # Issue #6 Fix: Cancel listener task before closing connection
             if self._proxy_listener_task and not self._proxy_listener_task.done():
                 self._proxy_listener_task.cancel()
@@ -309,6 +319,11 @@ class AgentWebSocketHandler:
     async def _connect_to_proxy_and_forward(self, message: Dict[str, Any], span=None):
         """Connect to proxy LLM handler and forward the connect message"""
         try:
+            # Reset auth state for this (re)connection cycle. On reconnect,
+            # self.authenticated may still be True from the first auth — reset it
+            # so the watchdog provides timeout protection on every auth attempt.
+            self.authenticated = False
+
             # Connect to the freeciv-proxy LLM handler endpoint
             proxy_url = f"ws://{settings.freeciv_proxy_host}:{settings.freeciv_proxy_port}{settings.freeciv_proxy_ws_path}"
             if span:
@@ -349,8 +364,16 @@ class AgentWebSocketHandler:
             await self.proxy_connection.send(json.dumps(proxy_message))
             logger.info(f"Forwarded llm_connect message for agent {self.agent_id}")
 
-            # Mark as authenticated to allow further pass-through
-            self.authenticated = True
+            # NOTE: self.authenticated is NOT set here. It is deferred to
+            # _listen_to_proxy() when auth_success is actually received from
+            # the proxy. This prevents a half-authenticated state where
+            # messages are accepted but player_id is still None.
+
+            # Start auth timeout watchdog — emits GAME_INIT_FAILED if
+            # auth_success is not received within the configured window.
+            if self._auth_timeout_task and not self._auth_timeout_task.done():
+                self._auth_timeout_task.cancel()
+            self._auth_timeout_task = asyncio.create_task(self._auth_timeout_watchdog())
 
             # Extract game_id for connection tracking
             if "data" in message:
@@ -383,6 +406,47 @@ class AgentWebSocketHandler:
                     "can_retry": True
                 }
             )
+
+    async def _auth_timeout_watchdog(self):
+        """Emit GAME_INIT_FAILED if auth_success not received within timeout."""
+        try:
+            await asyncio.sleep(settings.auth_timeout)
+            if not self.authenticated:
+                logger.error(
+                    f"Auth timeout for agent {self.agent_id} — "
+                    f"no auth_success after {settings.auth_timeout}s"
+                )
+                try:
+                    await self._send_error(
+                        "Game initialization failed — server did not respond within timeout",
+                        error_code="E050",
+                        details={
+                            "reason": "auth_timeout",
+                            "timeout_seconds": settings.auth_timeout,
+                            "player_id": None,
+                            "recoverable": False,
+                            "can_retry": False,
+                        }
+                    )
+                except Exception as e:
+                    # Agent may have already disconnected before watchdog fired
+                    logger.debug(
+                        f"Auth timeout watchdog: could not send E050 to {self.agent_id} "
+                        f"(likely already disconnected): {e}"
+                    )
+                # Cancel listener task — its finally block owns connection cleanup.
+                # This avoids a double-close race where _forward_to_proxy could
+                # see a non-None but closed proxy_connection between our close()
+                # and the listener's finally block setting it to None.
+                # NOTE: We do not await the cancellation here. The listener's
+                # CancelledError unwinds asynchronously, and handle_connection's
+                # finally block will await _proxy_listener_task. This is safe
+                # because asyncio's single-threaded cooperative scheduler ensures
+                # no interleaving between the cancel signal and the finally cleanup.
+                if self._proxy_listener_task and not self._proxy_listener_task.done():
+                    self._proxy_listener_task.cancel()
+        except asyncio.CancelledError:
+            pass  # Expected when auth succeeds or connection closes
 
     async def _listen_to_proxy(self):
         """Listen for messages from proxy and forward to agent"""
@@ -459,6 +523,16 @@ class AgentWebSocketHandler:
 
                         # Transform auth_success from proxy to agent format
                         if msg_type == "auth_success":
+                            # NOW it's safe to mark as authenticated
+                            self.authenticated = True
+                            # Cancel auth timeout watchdog — auth succeeded
+                            if self._auth_timeout_task and not self._auth_timeout_task.done():
+                                self._auth_timeout_task.cancel()
+                                try:
+                                    await self._auth_timeout_task
+                                except asyncio.CancelledError:
+                                    pass
+
                             # Extract player_id from auth_success for packet routing
                             self.player_id = msg_data.get('player_id')
 

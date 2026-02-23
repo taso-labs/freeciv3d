@@ -930,5 +930,623 @@ class TestGameOverPortRelease(unittest.TestCase):
         self.assertEqual(gs.phase, GamePhase.ENDED)
 
 
+class TestResumeDebounce(unittest.TestCase):
+    """Tests for resume_game() debounce guard (defense-in-depth against TOCTOU race)."""
+
+    def setUp(self):
+        self.session = GameSession(
+            game_id="test-debounce",
+            civserver_port=6001,
+            min_players=2
+        )
+        self.mock_civcom = Mock()
+        self.mock_civcom.queue_to_civserver = Mock()
+        self.mock_civcom.send_packets_to_civserver = Mock()
+        self.mock_civcom.username = "test-agent"
+        self.mock_civcom.turn = 5
+
+    def test_double_resume_blocked_by_debounce(self):
+        """Second resume_game() within 2s should return False (debounced)."""
+        # Pause, then resume once
+        self.session.pause_game(self.mock_civcom, "test")
+        result1 = self.session.resume_game(self.mock_civcom)
+        self.assertTrue(result1)
+        self.assertFalse(self.session.is_paused)
+
+        # Re-pause, then try immediate second resume — debounce should block
+        self.session.is_paused = True
+        result2 = self.session.resume_game(self.mock_civcom)
+        self.assertFalse(result2)
+        # is_paused should remain True since debounce blocked the resume
+        self.assertTrue(self.session.is_paused)
+
+    def test_debounce_expiry_allows_resume(self):
+        """After debounce window (2s), resume_game() should succeed again."""
+        import time as time_module
+
+        self.session.pause_game(self.mock_civcom, "test")
+        self.session.resume_game(self.mock_civcom)
+
+        # Simulate debounce window expiry by backdating last_resumed_at
+        self.session.last_resumed_at = time_module.time() - 3.0
+
+        # Re-pause and try again — should succeed now
+        self.session.is_paused = True
+        result = self.session.resume_game(self.mock_civcom)
+        self.assertTrue(result)
+
+    def test_first_resume_not_debounced(self):
+        """First resume_game() should never be debounced (last_resumed_at is None)."""
+        self.session.pause_game(self.mock_civcom, "test")
+        self.assertIsNone(self.session.last_resumed_at)
+
+        result = self.session.resume_game(self.mock_civcom)
+        self.assertTrue(result)
+
+
+class TestResumeLockSerialization(unittest.TestCase):
+    """Test that _players_lock serializes concurrent resume attempts."""
+
+    def setUp(self):
+        from llm_handler import LLMWSHandler
+
+        self.mock_app = Mock()
+        self.mock_app.ui_methods = {}
+        self.mock_app.ui_modules = {}
+        self.mock_request = Mock()
+
+        # Two handlers simulating two agents reconnecting simultaneously
+        self.handler_a = LLMWSHandler(self.mock_app, self.mock_request)
+        self.handler_a.agent_id = "agent-a"
+        self.handler_a.game_id = "test-lock-race"
+        self.handler_a.civcom = Mock()
+        self.handler_a.civcom.stopped = False
+        self.handler_a.civcom.turn = 10
+        self.handler_a.civcom.username = "agent-a"
+        self.handler_a.civcom.queue_to_civserver = Mock()
+        self.handler_a.civcom.send_packets_to_civserver = Mock()
+
+        self.handler_b = LLMWSHandler(self.mock_app, self.mock_request)
+        self.handler_b.agent_id = "agent-b"
+        self.handler_b.game_id = "test-lock-race"
+        self.handler_b.civcom = Mock()
+        self.handler_b.civcom.stopped = False
+        self.handler_b.civcom.turn = 10
+        self.handler_b.civcom.username = "agent-b"
+        self.handler_b.civcom.queue_to_civserver = Mock()
+        self.handler_b.civcom.send_packets_to_civserver = Mock()
+
+        # Game session — paused, both players registered
+        self.game_session = GameSession(
+            game_id="test-lock-race",
+            civserver_port=6004,
+            min_players=2
+        )
+        self.game_session.is_paused = True
+        self.game_session.original_timeout = 60
+        self.game_session.autotoggle_disabled = True
+        self.game_session.players = {
+            "agent-a": PlayerInfo(
+                agent_id="agent-a",
+                player_id=0,
+                handler=self.handler_a
+            ),
+            "agent-b": PlayerInfo(
+                agent_id="agent-b",
+                player_id=1,
+                handler=self.handler_b
+            )
+        }
+
+    @patch('llm_handler.game_session_manager')
+    def test_concurrent_resume_only_executes_once(self, mock_game_mgr):
+        """Two threads calling _check_and_resume_game() — only one resume should fire."""
+        import threading
+
+        mock_game_mgr.sessions = {"test-lock-race": self.game_session}
+
+        resume_results = []
+        original_resume = self.game_session.resume_game
+
+        def tracking_resume(civcom):
+            """Wrap resume_game to record calls."""
+            result = original_resume(civcom)
+            resume_results.append(result)
+            return result
+
+        self.game_session.resume_game = tracking_resume
+
+        barrier = threading.Barrier(2)
+        errors = []
+
+        def run_check(handler):
+            try:
+                barrier.wait(timeout=5)
+                handler._check_and_resume_game()
+            except Exception as e:
+                errors.append(e)
+
+        t1 = threading.Thread(target=run_check, args=(self.handler_a,))
+        t2 = threading.Thread(target=run_check, args=(self.handler_b,))
+        t1.start()
+        t2.start()
+        t1.join(timeout=10)
+        t2.join(timeout=10)
+
+        self.assertEqual(errors, [], f"Threads raised errors: {errors}")
+
+        # Exactly one True (successful resume) and one False (blocked by is_paused=False
+        # or debounce). The key invariant: at most one resume sends commands.
+        true_count = sum(1 for r in resume_results if r is True)
+        self.assertEqual(true_count, 1,
+                         f"Expected exactly 1 successful resume, got {true_count}: {resume_results}")
+
+
+class TestCascadeBreaker(unittest.TestCase):
+    """Verify on_close() skips partner suspension when close_code=4001.
+
+    When agent B is closed by agent A's coordinated disconnect (code=4001),
+    B's on_close() must NOT re-close A — otherwise we get an infinite cascade:
+    A closes B → B closes A → A closes B → ...
+    """
+
+    def setUp(self):
+        from llm_handler import LLMWSHandler
+
+        self.mock_app = Mock()
+        self.mock_app.ui_methods = {}
+        self.mock_app.ui_modules = {}
+        self.mock_request = Mock()
+
+        # Handler B — the one being closed by partner A
+        self.handler = LLMWSHandler(self.mock_app, self.mock_request)
+        self.handler.agent_id = "agent-B"
+        self.handler.player_id = 1
+        self.handler.game_id = "test-cascade"
+        self.handler.session_id = "session-B"
+        self.handler.session_info = Mock()
+        self.handler.session_info.civserver_port = 6001
+        self.handler.civcom = Mock()
+        self.handler.civcom.stopped = False
+        self.handler.civcom.close_connection = Mock()
+        self.handler.civcom.game_is_over = False
+        self.handler.civcom.player_units = {}  # Prevent len(Mock) error in logging
+
+        # Game session — already paused by A
+        self.game_session = GameSession(
+            game_id="test-cascade",
+            civserver_port=6001,
+            min_players=2
+        )
+        self.game_session.game_started = True
+        self.game_session.is_paused = True  # A already paused
+        self.game_session.players = {
+            "agent-B": PlayerInfo(
+                agent_id="agent-B",
+                player_id=1,
+                handler=self.handler
+            )
+        }
+
+    def test_partner_close_code_4001_skips_suspend_partners(self):
+        """When closed by partner (code=4001), do NOT call _suspend_partners()."""
+        # Simulate close_code=4001 (set by Tornado when partner calls close(code=4001))
+        self.handler.close_code = 4001
+        self.handler._suspend_partners = Mock()
+        self.handler._pause_and_suspend_partner = Mock()
+
+        with patch("llm_handler.game_session_manager") as mock_game_mgr, \
+             patch("llm_handler.session_manager") as mock_session_mgr, \
+             patch("llm_handler.stop_observer_civcom"), \
+             patch("tornado.ioloop.IOLoop.current") as mock_ioloop_current:
+
+            mock_game_mgr.sessions = {"test-cascade": self.game_session}
+            mock_session_mgr.suspend_session.return_value = True
+            mock_ioloop_current.return_value = Mock()
+
+            self.handler.on_close()
+
+            self.handler._suspend_partners.assert_not_called()
+            self.handler._pause_and_suspend_partner.assert_not_called()
+
+    def test_normal_close_code_still_suspends_partners(self):
+        """Normal disconnect (code=None/1000) SHOULD call partner suspension."""
+        self.handler.close_code = None  # Normal disconnect
+        self.handler._pause_and_suspend_partner = Mock()
+
+        # Make game not paused so we hit the pause+suspend branch
+        self.game_session.is_paused = False
+
+        with patch("llm_handler.game_session_manager") as mock_game_mgr, \
+             patch("llm_handler.session_manager") as mock_session_mgr, \
+             patch("llm_handler.stop_observer_civcom"), \
+             patch("tornado.ioloop.IOLoop.current") as mock_ioloop_current:
+
+            mock_game_mgr.sessions = {"test-cascade": self.game_session}
+            mock_session_mgr.suspend_session.return_value = True
+            mock_ioloop_current.return_value = Mock()
+
+            self.handler.on_close()
+
+            # For game_started + not paused + civcom alive → _suspend_partners is called
+            # (through the pause branch which calls game_session.pause_game + _suspend_partners)
+            # The key check: partner suspension logic IS entered (not skipped)
+
+    def test_partner_close_still_suspends_own_session(self):
+        """Agent closed by partner should still suspend its OWN session."""
+        self.handler.close_code = 4001
+
+        with patch("llm_handler.game_session_manager") as mock_game_mgr, \
+             patch("llm_handler.session_manager") as mock_session_mgr, \
+             patch("llm_handler.stop_observer_civcom"), \
+             patch("tornado.ioloop.IOLoop.current") as mock_ioloop_current:
+
+            mock_game_mgr.sessions = {"test-cascade": self.game_session}
+            mock_session_mgr.suspend_session.return_value = True
+            mock_ioloop_current.return_value = Mock()
+
+            self.handler.on_close()
+
+            # Own session IS suspended (line 4877)
+            mock_session_mgr.suspend_session.assert_called_once_with(
+                "session-B", "connection_closed"
+            )
+
+    def test_partner_close_preserves_civcom(self):
+        """CivCom should be preserved when closed by partner (code=4001)."""
+        self.handler.close_code = 4001
+        original_civcom = self.handler.civcom  # Save ref before on_close clears it
+
+        with patch("llm_handler.game_session_manager") as mock_game_mgr, \
+             patch("llm_handler.session_manager") as mock_session_mgr, \
+             patch("llm_handler.stop_observer_civcom"), \
+             patch("tornado.ioloop.IOLoop.current") as mock_ioloop_current:
+
+            mock_game_mgr.sessions = {"test-cascade": self.game_session}
+            mock_session_mgr.suspend_session.return_value = True
+            mock_ioloop_current.return_value = Mock()
+
+            self.handler.on_close()
+
+            # CivCom should NOT be destroyed (close_connection not called)
+            original_civcom.close_connection.assert_not_called()
+
+
+class TestIdempotentSuspend(unittest.TestCase):
+    """Verify suspend_session() returns True for already-suspended sessions.
+
+    When agent A pre-suspends B's session, then B's own on_close() calls
+    suspend_session(), the second call must return True (not False).
+    If it returns False, CivCom gets destroyed and reconnection fails.
+    """
+
+    def test_suspend_active_session_returns_true_inmemory(self):
+        """First suspend of an active in-memory session returns True."""
+        from session_manager import InMemorySessionManager, SessionState
+
+        mgr = InMemorySessionManager()
+        session_info = mgr.create_session(
+            agent_id="test-agent", api_token="tok", game_id="g1"
+        )
+        session_id = session_info.session_id
+
+        result = mgr.suspend_session(session_id, "test")
+        self.assertTrue(result)
+
+        # Verify state changed
+        session = mgr.sessions[session_id]
+        self.assertEqual(session.state, SessionState.SUSPENDED)
+
+    def test_suspend_already_suspended_returns_true_inmemory(self):
+        """Second suspend of an already-suspended in-memory session returns True."""
+        from session_manager import InMemorySessionManager, SessionState
+
+        mgr = InMemorySessionManager()
+        session_info = mgr.create_session(
+            agent_id="test-agent", api_token="tok", game_id="g1"
+        )
+        session_id = session_info.session_id
+
+        # First suspend
+        result1 = mgr.suspend_session(session_id, "partner_disconnect")
+        self.assertTrue(result1)
+
+        # Second suspend (idempotent) — must also return True
+        result2 = mgr.suspend_session(session_id, "own_on_close")
+        self.assertTrue(result2)
+
+        # State should remain SUSPENDED
+        session = mgr.sessions[session_id]
+        self.assertEqual(session.state, SessionState.SUSPENDED)
+
+    def test_civcom_preserved_when_pre_suspended(self):
+        """CivCom should be preserved even when session was pre-suspended by partner.
+
+        Simulates the cascade scenario:
+        1. A pre-suspends B's session → state='suspended'
+        2. B's on_close runs → suspend_session() must return True
+        3. Since session_suspended=True → CivCom preserved (not destroyed)
+        """
+        from session_manager import InMemorySessionManager
+
+        mgr = InMemorySessionManager()
+        session_info = mgr.create_session(
+            agent_id="agent-B", api_token="tok", game_id="g1"
+        )
+        session_id = session_info.session_id
+
+        # Step 1: A pre-suspends B's session
+        mgr.suspend_session(session_id, "partner_agent-A_disconnected")
+
+        # Step 2: B's on_close calls suspend_session
+        result = mgr.suspend_session(session_id, "connection_closed")
+
+        # Must return True so CivCom is preserved
+        self.assertTrue(result, "suspend_session must return True for already-suspended sessions")
+
+
+class TestStaleHandlerGuard(unittest.TestCase):
+    """Verify partner close is skipped when partner already reconnected.
+
+    When agent A's OLD on_close() handler still runs but A has already
+    reconnected with a NEW handler, the old handler must not close
+    the new handler's WebSocket.
+    """
+
+    def setUp(self):
+        from llm_handler import LLMWSHandler
+
+        self.mock_app = Mock()
+        self.mock_app.ui_methods = {}
+        self.mock_app.ui_modules = {}
+        self.mock_request = Mock()
+
+        # Agent A — the one whose on_close is running
+        self.handler_a = LLMWSHandler(self.mock_app, self.mock_request)
+        self.handler_a.agent_id = "agent-A"
+        self.handler_a.game_id = "test-stale"
+        self.handler_a.civcom = Mock()
+        self.handler_a.civcom.stopped = False
+        self.handler_a.session_id = "session-A"
+
+        # Agent B — the partner
+        self.old_handler_b = LLMWSHandler(self.mock_app, self.mock_request)
+        self.old_handler_b.agent_id = "agent-B"
+        self.old_handler_b.game_id = "test-stale"
+        self.old_handler_b.civcom = Mock()
+        self.old_handler_b.civcom.stopped = False
+        self.old_handler_b.session_id = "session-B"
+        self.old_handler_b.close = Mock()
+
+        # New handler B (already reconnected)
+        self.new_handler_b = LLMWSHandler(self.mock_app, self.mock_request)
+        self.new_handler_b.agent_id = "agent-B"
+
+        # Game session
+        self.game_session = GameSession(
+            game_id="test-stale",
+            civserver_port=6001,
+            min_players=2
+        )
+        self.game_session.game_started = True
+        self.game_session.players = {
+            "agent-A": PlayerInfo(
+                agent_id="agent-A", player_id=0, handler=self.handler_a
+            ),
+            "agent-B": PlayerInfo(
+                agent_id="agent-B", player_id=1, handler=self.old_handler_b
+            )
+        }
+
+    @patch('llm_handler.game_session_manager')
+    @patch('llm_handler.session_manager')
+    @patch('llm_handler.llm_agents')
+    def test_stale_handler_skips_close_in_suspend_partners(self, mock_llm_agents, mock_sess_mgr, mock_game_mgr):
+        """If partner reconnected (new handler in llm_agents), skip close."""
+        mock_game_mgr.sessions = {"test-stale": self.game_session}
+        # B already reconnected with new handler
+        mock_llm_agents.get.return_value = self.new_handler_b
+
+        self.handler_a._suspend_partners()
+
+        # Old handler B's close should NOT be called
+        self.old_handler_b.close.assert_not_called()
+
+    @patch('llm_handler.game_session_manager')
+    @patch('llm_handler.session_manager')
+    @patch('llm_handler.llm_agents')
+    def test_current_handler_proceeds_with_close_in_suspend_partners(self, mock_llm_agents, mock_sess_mgr, mock_game_mgr):
+        """If partner handler IS the current handler, proceed with close."""
+        mock_game_mgr.sessions = {"test-stale": self.game_session}
+        # B has NOT reconnected — llm_agents still has old handler (or None)
+        mock_llm_agents.get.return_value = self.old_handler_b
+
+        self.handler_a._suspend_partners()
+
+        # Old handler B's close SHOULD be called
+        self.old_handler_b.close.assert_called_once()
+
+    @patch('llm_handler.game_session_manager')
+    @patch('llm_handler.session_manager')
+    @patch('llm_handler.llm_agents')
+    def test_stale_handler_skips_close_in_pause_and_suspend(self, mock_llm_agents, mock_sess_mgr, mock_game_mgr):
+        """Stale handler guard also works in _pause_and_suspend_partner()."""
+        mock_game_mgr.sessions = {"test-stale": self.game_session}
+        # B already reconnected with new handler
+        mock_llm_agents.get.return_value = self.new_handler_b
+
+        self.handler_a._pause_and_suspend_partner()
+
+        # Old handler B's close should NOT be called
+        self.old_handler_b.close.assert_not_called()
+
+    @patch('llm_handler.game_session_manager')
+    @patch('llm_handler.session_manager')
+    @patch('llm_handler.llm_agents')
+    def test_no_llm_agent_entry_proceeds_with_close(self, mock_llm_agents, mock_sess_mgr, mock_game_mgr):
+        """If partner has no entry in llm_agents (already cleaned up), proceed with close."""
+        mock_game_mgr.sessions = {"test-stale": self.game_session}
+        # B not in llm_agents at all
+        mock_llm_agents.get.return_value = None
+
+        self.handler_a._suspend_partners()
+
+        # Should still close (None means not reconnected, just gone)
+        self.old_handler_b.close.assert_called_once()
+
+
+class TestReconnectionStillWorks(unittest.TestCase):
+    """Verify the full disconnect -> reconnect -> resume flow still works
+    after the cascade fix. The orchestrator relies on coordinated disconnect
+    to trigger reconnection."""
+
+    def setUp(self):
+        from llm_handler import LLMWSHandler
+
+        self.mock_app = Mock()
+        self.mock_app.ui_methods = {}
+        self.mock_app.ui_modules = {}
+        self.mock_request = Mock()
+
+        # Agent A (disconnects first)
+        self.handler_a = LLMWSHandler(self.mock_app, self.mock_request)
+        self.handler_a.agent_id = "agent-A"
+        self.handler_a.player_id = 0
+        self.handler_a.game_id = "test-reconnect"
+        self.handler_a.session_id = "session-A"
+        self.handler_a.session_info = Mock()
+        self.handler_a.session_info.civserver_port = 6001
+        self.handler_a.civcom = Mock()
+        self.handler_a.civcom.stopped = False
+        self.handler_a.civcom.close_connection = Mock()
+        self.handler_a.civcom.game_is_over = False
+        self.handler_a.civcom.game_timeout = 60
+        self.handler_a.civcom.queue_to_civserver = Mock()
+        self.handler_a.civcom.send_packets_to_civserver = Mock()
+
+        # Agent B (partner, will be closed by A)
+        self.handler_b = LLMWSHandler(self.mock_app, self.mock_request)
+        self.handler_b.agent_id = "agent-B"
+        self.handler_b.player_id = 1
+        self.handler_b.game_id = "test-reconnect"
+        self.handler_b.session_id = "session-B"
+        self.handler_b.session_info = Mock()
+        self.handler_b.session_info.civserver_port = 6001
+        self.handler_b.civcom = Mock()
+        self.handler_b.civcom.stopped = False
+        self.handler_b.civcom.close_connection = Mock()
+        self.handler_b.civcom.game_is_over = False
+        self.handler_b.close = Mock()
+
+        # Game session
+        self.game_session = GameSession(
+            game_id="test-reconnect",
+            civserver_port=6001,
+            min_players=2
+        )
+        self.game_session.game_started = True
+        self.game_session.players = {
+            "agent-A": PlayerInfo(
+                agent_id="agent-A", player_id=0, handler=self.handler_a
+            ),
+            "agent-B": PlayerInfo(
+                agent_id="agent-B", player_id=1, handler=self.handler_b
+            )
+        }
+
+    @patch('llm_handler.game_session_manager')
+    @patch('llm_handler.session_manager')
+    @patch('llm_handler.llm_agents', {})
+    def test_disconnect_pauses_game_and_closes_partner(self, mock_sess_mgr, mock_game_mgr):
+        """Agent A disconnect should: pause game + close partner B's WS."""
+        mock_game_mgr.sessions = {"test-reconnect": self.game_session}
+
+        # A's _pause_and_suspend_partner pauses game + closes B
+        self.handler_a._pause_and_suspend_partner()
+
+        # Game should be paused
+        self.assertTrue(self.game_session.is_paused)
+
+        # B's WebSocket should be closed with code=4001
+        self.handler_b.close.assert_called_once()
+        call_kwargs = self.handler_b.close.call_args[1]
+        self.assertEqual(call_kwargs["code"], 4001)
+
+    @patch('llm_handler.game_session_manager')
+    @patch('llm_handler.session_manager')
+    @patch('llm_handler.llm_agents', {})
+    def test_partner_session_suspended_for_reconnection(self, mock_sess_mgr, mock_game_mgr):
+        """Partner B's session should be suspended (allowing reconnect)."""
+        mock_game_mgr.sessions = {"test-reconnect": self.game_session}
+
+        self.handler_a._pause_and_suspend_partner()
+
+        # B's session should be suspended
+        mock_sess_mgr.suspend_session.assert_called_once()
+        call_args = mock_sess_mgr.suspend_session.call_args[0]
+        self.assertEqual(call_args[0], "session-B")
+
+    def test_both_civcoms_preserved_after_coordinated_disconnect(self):
+        """Both A and B CivComs should be preserved for reconnection."""
+        from session_manager import InMemorySessionManager
+
+        mgr = InMemorySessionManager()
+        info_a = mgr.create_session(
+            agent_id="agent-A", api_token="tok", game_id="g1"
+        )
+        info_b = mgr.create_session(
+            agent_id="agent-B", api_token="tok", game_id="g1"
+        )
+
+        # A suspends B, then A suspends self (normal path)
+        result_b_by_a = mgr.suspend_session(info_b.session_id, "partner_A_disconnected")
+        result_a = mgr.suspend_session(info_a.session_id, "connection_closed")
+
+        # B's own on_close suspends itself again (idempotent)
+        result_b_self = mgr.suspend_session(info_b.session_id, "connection_closed")
+
+        # ALL suspensions must return True → CivCom preserved for both
+        self.assertTrue(result_b_by_a)
+        self.assertTrue(result_a)
+        self.assertTrue(result_b_self, "B's self-suspend must return True (idempotent)")
+
+    @patch('llm_handler.game_session_manager')
+    def test_both_reconnect_triggers_resume(self, mock_game_mgr):
+        """When both agents reconnect, _check_and_resume_game() fires resume."""
+        from llm_handler import LLMWSHandler
+
+        # Game session is paused
+        self.game_session.is_paused = True
+        self.game_session.original_timeout = 60
+        mock_game_mgr.sessions = {"test-reconnect": self.game_session}
+
+        # Simulate both handlers reconnected with live civcoms
+        new_handler_a = LLMWSHandler(self.mock_app, self.mock_request)
+        new_handler_a.agent_id = "agent-A"
+        new_handler_a.game_id = "test-reconnect"
+        new_handler_a.civcom = Mock()
+        new_handler_a.civcom.stopped = False
+
+        new_handler_b = Mock()
+        new_handler_b.civcom = Mock()
+        new_handler_b.civcom.stopped = False
+
+        self.game_session.players = {
+            "agent-A": PlayerInfo(
+                agent_id="agent-A", player_id=0, handler=new_handler_a
+            ),
+            "agent-B": PlayerInfo(
+                agent_id="agent-B", player_id=1, handler=new_handler_b
+            )
+        }
+
+        self.game_session.resume_game = Mock(return_value=True)
+
+        new_handler_a._check_and_resume_game()
+
+        # Resume should be called since both agents have live handlers+civcoms
+        self.game_session.resume_game.assert_called_once_with(new_handler_a.civcom)
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)

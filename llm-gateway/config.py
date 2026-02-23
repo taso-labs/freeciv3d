@@ -69,6 +69,9 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     log_format: str = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 
+    # Auth timeout — max seconds to wait for auth_success from proxy after llm_connect
+    auth_timeout: int = 60  # seconds (10-300 range validated below)
+
     # Connection retry settings
     max_retry_attempts: int = 3
     initial_retry_delay: float = 1.0  # seconds
@@ -154,6 +157,10 @@ def validate_settings() -> bool:
 
         if not (1 <= settings.rate_limit_max_violations <= 10):
             errors.append(f"Invalid rate_limit_max_violations: {settings.rate_limit_max_violations} (must be 1-10)")
+
+        # Validate auth timeout
+        if not (10 <= settings.auth_timeout <= 300):
+            errors.append(f"Invalid auth_timeout: {settings.auth_timeout} (must be 10-300)")
 
         # Validate retry settings
         if not (1 <= settings.max_retry_attempts <= 10):

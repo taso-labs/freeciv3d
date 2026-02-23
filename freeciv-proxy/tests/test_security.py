@@ -725,6 +725,59 @@ class TestAuthenticationBypassPrevention(unittest.TestCase):
             self.assertFalse(result, "Tampered HMAC signature should be rejected")
 
 
+class TestLLMTokenAuthFallback(unittest.TestCase):
+    """Test LLM API token fallback in SimpleAuthenticator.authenticate_request()"""
+
+    def test_valid_llm_token_authenticates(self):
+        """Valid LLM_API_TOKEN should authenticate with player_id=None, game_id=None"""
+        from auth import SimpleAuthenticator
+        auth = SimpleAuthenticator()
+
+        # 'test-token-123' is set in LLM_API_TOKENS env var at module level
+        authenticated, player_id, game_id = auth.authenticate_request(api_key='test-token-123')
+
+        self.assertTrue(authenticated, "Valid LLM token should authenticate")
+        self.assertIsNone(player_id, "LLM token should return player_id=None (admin access)")
+        self.assertIsNone(game_id, "LLM token should return game_id=None (admin access)")
+
+    def test_invalid_llm_token_rejected(self):
+        """Invalid token should not authenticate via LLM fallback"""
+        from auth import SimpleAuthenticator
+        auth = SimpleAuthenticator()
+
+        authenticated, player_id, game_id = auth.authenticate_request(api_key='not-a-valid-token')
+
+        self.assertFalse(authenticated, "Invalid token should be rejected")
+        self.assertIsNone(player_id)
+        self.assertIsNone(game_id)
+
+    def test_llm_fallback_only_after_hmac_fails(self):
+        """LLM token fallback should only be tried when HMAC key validation fails"""
+        from auth import SimpleAuthenticator
+        auth = SimpleAuthenticator()
+
+        # A non-fcv_ prefixed token should skip HMAC, fall through to LLM check
+        with patch.object(auth, '_validate_llm_token', return_value=True) as mock_llm:
+            authenticated, _, _ = auth.authenticate_request(api_key='some-bearer-token')
+            self.assertTrue(authenticated)
+            mock_llm.assert_called_once_with('some-bearer-token')
+
+    def test_llm_config_unavailable_returns_false(self):
+        """When config_loader is unavailable, LLM token validation returns False"""
+        from auth import SimpleAuthenticator
+        auth = SimpleAuthenticator()
+
+        import auth as auth_module
+        original = auth_module._llm_config
+
+        try:
+            auth_module._llm_config = None
+            result = auth._validate_llm_token('test-token-123')
+            self.assertFalse(result, "Should return False when _llm_config is None")
+        finally:
+            auth_module._llm_config = original
+
+
 class TestMalformedRequestHandling(unittest.TestCase):
     """Test handling of malformed and edge case requests"""
 

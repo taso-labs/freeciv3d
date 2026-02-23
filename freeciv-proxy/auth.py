@@ -16,6 +16,14 @@ from dataclasses import dataclass
 
 logger = logging.getLogger("freeciv-proxy")
 
+# Import LLM config at module level so import failures surface at startup
+# rather than silently degrading auth on every request.
+try:
+    from config_loader import llm_config as _llm_config
+except ImportError:
+    _llm_config = None
+    logger.warning("config_loader not available — LLM token authentication disabled")
+
 
 @dataclass
 class AuthSession:
@@ -196,17 +204,33 @@ class SimpleAuthenticator:
                            session_id: Optional[str] = None,
                            required_permission: str = 'state_read') -> Tuple[bool, Optional[int], Optional[str]]:
         """
-        Authenticate a request using API key or session
+        Authenticate a request using API key, LLM token, or session.
+
+        IMPORTANT — permission checking by auth method:
+        - HMAC API keys: bypass required_permission (privileged, carry player scope)
+        - LLM bearer tokens: bypass required_permission (admin-level, no player scope)
+        - Sessions: required_permission IS checked via check_permission()
 
         Returns:
             tuple: (authenticated: bool, player_id: Optional[int], game_id: Optional[str])
         """
-        # Try API key authentication first
+        # Try HMAC API key authentication first
         if api_key:
             valid, player_id, game_id = self.validate_api_key(api_key)
             if valid:
                 logger.debug(f"API key authentication successful for player {player_id}")
                 return True, player_id, game_id
+
+            # Fallback: try as plain LLM_API_TOKEN (used by gateway/agent-clash).
+            # This also runs for fcv_-prefixed keys that failed HMAC validation above —
+            # harmless because LLM tokens never use the fcv_ prefix, so _validate_llm_token
+            # will return False for them too.
+            if self._validate_llm_token(api_key):
+                logger.info(
+                    f"Authenticated via LLM API token (gateway/admin) — "
+                    f"bypassed required_permission={required_permission!r}"
+                )
+                return True, None, None
 
         # Try session authentication
         if session_id:
@@ -216,6 +240,21 @@ class SimpleAuthenticator:
                 return True, session.player_id, session.game_id
 
         return False, None, None
+
+    def _validate_llm_token(self, token: str) -> bool:
+        """Validate token against LLM_API_TOKENS (plain Bearer tokens used by gateway).
+
+        SECURITY: LLM tokens grant admin-level access — authenticated requests
+        will have player_id=None and game_id=None, bypassing per-player authorization.
+        These tokens MUST be treated as privileged secrets.
+        """
+        if _llm_config is None:
+            return False
+        try:
+            return _llm_config.validate_token(token)
+        except Exception as e:
+            logger.error(f"LLM token validation error: {e}")
+            return False
 
     def _cleanup_expired_sessions(self):
         """Remove expired sessions"""
