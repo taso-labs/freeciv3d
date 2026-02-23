@@ -274,6 +274,11 @@ function init_webgl_mapview() {
   add_quality_dependent_objects();
   add_all_objects_to_scene();
 
+  // Apply initial vertex colors immediately so terrain is visible on first render frame.
+  // Without this, the vertColor attribute doesn't exist on the geometry until the
+  // setInterval(update_map_known_tiles, 15) fires, causing black terrain.
+  update_tiles_known_vertex_colors();
+
   benchmark_start = new Date().getTime();
 
 

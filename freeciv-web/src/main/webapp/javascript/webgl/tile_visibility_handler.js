@@ -25,7 +25,7 @@ var map_geometry_dirty = true;
 **************************************************************************/
 function webgl_update_tile_known(old_tile, new_tile)
 {
-  if (new_tile == null || old_tile == null || landGeometry == null) return;
+  if (new_tile == null || old_tile == null) return;
 
   if (new_tile['height'] != old_tile['height']) {
     map_geometry_dirty = true;
@@ -44,6 +44,8 @@ function webgl_update_tile_known(old_tile, new_tile)
 **************************************************************************/
 function update_tiles_known_vertex_colors()
 {
+  if (landGeometry == null || typeof gridY1 === 'undefined' || typeof map === 'undefined'
+      || !map || typeof map.xsize !== 'number') return;
 
   const colors = [];
 
