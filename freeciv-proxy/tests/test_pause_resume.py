@@ -930,5 +930,157 @@ class TestGameOverPortRelease(unittest.TestCase):
         self.assertEqual(gs.phase, GamePhase.ENDED)
 
 
+class TestResumeDebounce(unittest.TestCase):
+    """Tests for resume_game() debounce guard (defense-in-depth against TOCTOU race)."""
+
+    def setUp(self):
+        self.session = GameSession(
+            game_id="test-debounce",
+            civserver_port=6001,
+            min_players=2
+        )
+        self.mock_civcom = Mock()
+        self.mock_civcom.queue_to_civserver = Mock()
+        self.mock_civcom.send_packets_to_civserver = Mock()
+        self.mock_civcom.username = "test-agent"
+        self.mock_civcom.turn = 5
+
+    def test_double_resume_blocked_by_debounce(self):
+        """Second resume_game() within 2s should return False (debounced)."""
+        # Pause, then resume once
+        self.session.pause_game(self.mock_civcom, "test")
+        result1 = self.session.resume_game(self.mock_civcom)
+        self.assertTrue(result1)
+        self.assertFalse(self.session.is_paused)
+
+        # Re-pause, then try immediate second resume — debounce should block
+        self.session.is_paused = True
+        result2 = self.session.resume_game(self.mock_civcom)
+        self.assertFalse(result2)
+        # is_paused should remain True since debounce blocked the resume
+        self.assertTrue(self.session.is_paused)
+
+    def test_debounce_expiry_allows_resume(self):
+        """After debounce window (2s), resume_game() should succeed again."""
+        import time as time_module
+
+        self.session.pause_game(self.mock_civcom, "test")
+        self.session.resume_game(self.mock_civcom)
+
+        # Simulate debounce window expiry by backdating last_resumed_at
+        self.session.last_resumed_at = time_module.time() - 3.0
+
+        # Re-pause and try again — should succeed now
+        self.session.is_paused = True
+        result = self.session.resume_game(self.mock_civcom)
+        self.assertTrue(result)
+
+    def test_first_resume_not_debounced(self):
+        """First resume_game() should never be debounced (last_resumed_at is None)."""
+        self.session.pause_game(self.mock_civcom, "test")
+        self.assertIsNone(self.session.last_resumed_at)
+
+        result = self.session.resume_game(self.mock_civcom)
+        self.assertTrue(result)
+
+
+class TestResumeLockSerialization(unittest.TestCase):
+    """Test that _players_lock serializes concurrent resume attempts."""
+
+    def setUp(self):
+        from llm_handler import LLMWSHandler
+
+        self.mock_app = Mock()
+        self.mock_app.ui_methods = {}
+        self.mock_app.ui_modules = {}
+        self.mock_request = Mock()
+
+        # Two handlers simulating two agents reconnecting simultaneously
+        self.handler_a = LLMWSHandler(self.mock_app, self.mock_request)
+        self.handler_a.agent_id = "agent-a"
+        self.handler_a.game_id = "test-lock-race"
+        self.handler_a.civcom = Mock()
+        self.handler_a.civcom.stopped = False
+        self.handler_a.civcom.turn = 10
+        self.handler_a.civcom.username = "agent-a"
+        self.handler_a.civcom.queue_to_civserver = Mock()
+        self.handler_a.civcom.send_packets_to_civserver = Mock()
+
+        self.handler_b = LLMWSHandler(self.mock_app, self.mock_request)
+        self.handler_b.agent_id = "agent-b"
+        self.handler_b.game_id = "test-lock-race"
+        self.handler_b.civcom = Mock()
+        self.handler_b.civcom.stopped = False
+        self.handler_b.civcom.turn = 10
+        self.handler_b.civcom.username = "agent-b"
+        self.handler_b.civcom.queue_to_civserver = Mock()
+        self.handler_b.civcom.send_packets_to_civserver = Mock()
+
+        # Game session — paused, both players registered
+        self.game_session = GameSession(
+            game_id="test-lock-race",
+            civserver_port=6004,
+            min_players=2
+        )
+        self.game_session.is_paused = True
+        self.game_session.original_timeout = 60
+        self.game_session.autotoggle_disabled = True
+        self.game_session.players = {
+            "agent-a": PlayerInfo(
+                agent_id="agent-a",
+                player_id=0,
+                handler=self.handler_a
+            ),
+            "agent-b": PlayerInfo(
+                agent_id="agent-b",
+                player_id=1,
+                handler=self.handler_b
+            )
+        }
+
+    @patch('llm_handler.game_session_manager')
+    def test_concurrent_resume_only_executes_once(self, mock_game_mgr):
+        """Two threads calling _check_and_resume_game() — only one resume should fire."""
+        import threading
+
+        mock_game_mgr.sessions = {"test-lock-race": self.game_session}
+
+        resume_results = []
+        original_resume = self.game_session.resume_game
+
+        def tracking_resume(civcom):
+            """Wrap resume_game to record calls."""
+            result = original_resume(civcom)
+            resume_results.append(result)
+            return result
+
+        self.game_session.resume_game = tracking_resume
+
+        barrier = threading.Barrier(2)
+        errors = []
+
+        def run_check(handler):
+            try:
+                barrier.wait(timeout=5)
+                handler._check_and_resume_game()
+            except Exception as e:
+                errors.append(e)
+
+        t1 = threading.Thread(target=run_check, args=(self.handler_a,))
+        t2 = threading.Thread(target=run_check, args=(self.handler_b,))
+        t1.start()
+        t2.start()
+        t1.join(timeout=10)
+        t2.join(timeout=10)
+
+        self.assertEqual(errors, [], f"Threads raised errors: {errors}")
+
+        # Exactly one True (successful resume) and one False (blocked by is_paused=False
+        # or debounce). The key invariant: at most one resume sends commands.
+        true_count = sum(1 for r in resume_results if r is True)
+        self.assertEqual(true_count, 1,
+                         f"Expected exactly 1 successful resume, got {true_count}: {resume_results}")
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)
