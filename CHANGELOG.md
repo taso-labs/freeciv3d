@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.59](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.58...freeciv3d-v0.3.59) (2026-02-23)
+
+
+### Bug Fixes
+
+* **gateway,proxy,nginx:** resolve auth deadlock, proxy 401, and .glb caching ([#164](https://github.com/taso-ventures/freeciv3d/issues/164)) ([aa66172](https://github.com/taso-ventures/freeciv3d/commit/aa66172128363459cd46159e5512569300bce0ea))
+
 ## [0.3.58](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.57...freeciv3d-v0.3.58) (2026-02-22)
 
 
