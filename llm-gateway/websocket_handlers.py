@@ -416,17 +416,24 @@ class AgentWebSocketHandler:
                     f"Auth timeout for agent {self.agent_id} — "
                     f"no auth_success after {settings.auth_timeout}s"
                 )
-                await self._send_error(
-                    "Game initialization failed — server did not respond within timeout",
-                    error_code="E050",
-                    details={
-                        "reason": "auth_timeout",
-                        "timeout_seconds": settings.auth_timeout,
-                        "player_id": None,
-                        "recoverable": False,
-                        "can_retry": False,
-                    }
-                )
+                try:
+                    await self._send_error(
+                        "Game initialization failed — server did not respond within timeout",
+                        error_code="E050",
+                        details={
+                            "reason": "auth_timeout",
+                            "timeout_seconds": settings.auth_timeout,
+                            "player_id": None,
+                            "recoverable": False,
+                            "can_retry": False,
+                        }
+                    )
+                except Exception as e:
+                    # Agent may have already disconnected before watchdog fired
+                    logger.debug(
+                        f"Auth timeout watchdog: could not send E050 to {self.agent_id} "
+                        f"(likely already disconnected): {e}"
+                    )
                 # Cancel listener task — its finally block owns connection cleanup.
                 # This avoids a double-close race where _forward_to_proxy could
                 # see a non-None but closed proxy_connection between our close()

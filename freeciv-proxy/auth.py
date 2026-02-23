@@ -204,7 +204,12 @@ class SimpleAuthenticator:
                            session_id: Optional[str] = None,
                            required_permission: str = 'state_read') -> Tuple[bool, Optional[int], Optional[str]]:
         """
-        Authenticate a request using API key, LLM token, or session
+        Authenticate a request using API key, LLM token, or session.
+
+        IMPORTANT — permission checking by auth method:
+        - HMAC API keys: bypass required_permission (privileged, carry player scope)
+        - LLM bearer tokens: bypass required_permission (admin-level, no player scope)
+        - Sessions: required_permission IS checked via check_permission()
 
         Returns:
             tuple: (authenticated: bool, player_id: Optional[int], game_id: Optional[str])
@@ -216,9 +221,15 @@ class SimpleAuthenticator:
                 logger.debug(f"API key authentication successful for player {player_id}")
                 return True, player_id, game_id
 
-            # Fallback: try as plain LLM_API_TOKEN (used by gateway/agent-clash)
+            # Fallback: try as plain LLM_API_TOKEN (used by gateway/agent-clash).
+            # This also runs for fcv_-prefixed keys that failed HMAC validation above —
+            # harmless because LLM tokens never use the fcv_ prefix, so _validate_llm_token
+            # will return False for them too.
             if self._validate_llm_token(api_key):
-                logger.info("Authenticated via LLM API token (gateway/admin)")
+                logger.info(
+                    f"Authenticated via LLM API token (gateway/admin) — "
+                    f"bypassed required_permission={required_permission!r}"
+                )
                 return True, None, None
 
         # Try session authentication
