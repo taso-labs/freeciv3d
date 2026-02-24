@@ -23,7 +23,6 @@ from urllib.parse import quote
 import kubernetes
 from kubernetes.client.rest import ApiException
 
-from config import Settings
 from youtube_client import YouTubeClient
 
 logger = logging.getLogger(__name__)
@@ -40,6 +39,8 @@ MAX_JOB_RETRIES = int(os.environ.get("STREAM_JOB_MAX_RETRIES", "3"))
 JOB_RETRY_DELAY = float(os.environ.get("STREAM_JOB_RETRY_DELAY", "2.0"))
 # Job TTL after completion - default 30 min for debugging and backup upload
 JOB_TTL_AFTER_FINISHED = int(os.environ.get("STREAM_JOB_TTL_SECONDS", "1800"))
+# Worldmap zoom mode for global observer view ('static' or 'dynamic')
+WORLDMAP_ZOOM_MODE = os.environ.get("WORLDMAP_ZOOM_MODE", "dynamic")
 
 # Readiness check configuration
 # Set to 0 to disable readiness checking (jobs will be created but not verified)
@@ -371,7 +372,7 @@ class StreamManager:
 
         # Add zoom_mode for worldmap camera
         if view == "global":
-            worldmap_zoom_mode = Settings().worldmap_zoom_mode
+            worldmap_zoom_mode = WORLDMAP_ZOOM_MODE
             params.append(f"zoom_mode={worldmap_zoom_mode}")
 
         # Add player-specific params for fog-of-war perspective
@@ -1054,7 +1055,7 @@ class LocalStreamManager:
 
         # Add zoom_mode for worldmap camera
         if view == "global":
-            worldmap_zoom_mode = Settings().worldmap_zoom_mode
+            worldmap_zoom_mode = WORLDMAP_ZOOM_MODE
             params.append(f"zoom_mode={worldmap_zoom_mode}")
 
         if view in ("player1", "player2") and player_names:

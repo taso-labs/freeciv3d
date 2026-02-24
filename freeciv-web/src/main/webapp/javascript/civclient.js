@@ -1273,6 +1273,9 @@ var WORLDMAP_MAX_ZOOM_DY = 3000;
 var WORLDMAP_TERRITORY_PADDING_TILES = 5;
 // Fallback tile size in scene units when MAPVIEW_ASPECT_FACTOR is not yet loaded.
 var WORLDMAP_DEFAULT_TILE_SIZE = 35.71;
+// Minimum camera height for static (full-map) mode — higher than dynamic because
+// the entire map must be visible regardless of territory positions.
+var WORLDMAP_STATIC_MIN_ZOOM_DY = 800;
 
 /****************************************************************************
   Calculate the centroid and spread of all territory (cities + units) from
@@ -1395,9 +1398,12 @@ function center_on_all_territories_with_zoom()
   var territory_data = get_all_players_territory_centroid_and_spread();
   if (!territory_data) return null;
 
+  // Use max of per-axis radii for hysteresis since that's what drives the zoom calculation.
+  // effective_radius (Chebyshev with outlier cutoff) can lag behind axis-specific expansion.
+  var current_max_radius = Math.max(territory_data.radius_x, territory_data.radius_y);
   var should_update_zoom = (
     observer_last_worldmap_territory_radius === null ||
-    Math.abs(territory_data.effective_radius - observer_last_worldmap_territory_radius) >= WORLDMAP_TERRITORY_RADIUS_CHANGE_THRESHOLD
+    Math.abs(current_max_radius - observer_last_worldmap_territory_radius) >= WORLDMAP_TERRITORY_RADIUS_CHANGE_THRESHOLD
   );
 
   center_tile_mapcanvas(territory_data.tile);
@@ -1406,7 +1412,7 @@ function center_on_all_territories_with_zoom()
   if (should_update_zoom) {
     var target_dy = calculate_zoom_for_worldmap_territory(territory_data.radius_x, territory_data.radius_y);
     camera_dy = target_dy;
-    observer_last_worldmap_territory_radius = territory_data.effective_radius;
+    observer_last_worldmap_territory_radius = current_max_radius;
     freelog(LOG_DEBUG, '[Observer Worldmap] Territory: centroid=(' + territory_data.centroid.x + ',' +
             territory_data.centroid.y + ') rx=' + Math.round(territory_data.radius_x) +
             ' ry=' + Math.round(territory_data.radius_y) +
@@ -1501,7 +1507,7 @@ function observer_worldmap_fit_entire_map()
   var half_y = (map['ysize'] / 2) * tile_size * padding;
   var dy_for_y = half_y / fov_half_tan;
   var dy_for_x = half_x / (fov_half_tan * aspect);
-  var target_dy = Math.floor(Math.max(800, dy_for_x, dy_for_y));
+  var target_dy = Math.floor(Math.max(WORLDMAP_STATIC_MIN_ZOOM_DY, dy_for_x, dy_for_y));
   camera_dy = target_dy;
   // Keep camera nearly top-down for full map view
   camera_dz = camera_presets['worldmap'].dz;
@@ -1527,7 +1533,8 @@ function observer_worldmap_fit_entire_map()
 ****************************************************************************/
 function start_observer_worldmap_intervals()
 {
-  var zoom_mode = $.getUrlVar('zoom_mode') || 'static';
+  // Default matches Python gateway config (config.py worldmap_zoom_mode default)
+  var zoom_mode = $.getUrlVar('zoom_mode') || 'dynamic';
   observer_worldmap_zoom_mode = zoom_mode;
 
   freelog(LOG_DEBUG, '[Observer Worldmap] Starting with zoom_mode=' + zoom_mode);
