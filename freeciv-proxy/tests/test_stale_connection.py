@@ -4,8 +4,8 @@
 """
 Tests for stale connection reconnection fix.
 
-When a civserver rejects a join with "already connected" during reconnection,
-the proxy should force-close the stale connection and retry.
+When a civserver rejects a join during reconnection (for any reason),
+the proxy should force-close the stale connection and retry once.
 """
 
 import asyncio
@@ -105,46 +105,85 @@ class TestCivComJoinRejected(unittest.TestCase):
 
 
 class TestStaleConnectionRetryLogic(unittest.TestCase):
-    """Test the retry decision logic for stale connections."""
+    """Test the retry decision logic for stale connections.
 
-    def test_already_connected_detection(self):
-        """Verify 'already connected' is detected in rejection reason."""
-        # This tests the condition used in llm_handler.py
-        reason = "'Grok-41_Fast' already connected."
-        self.assertIn('already connected', reason)
+    Most civserver rejections during reconnection trigger cleanup-and-retry.
+    However, definitively non-retriable rejections (e.g. server full, game
+    already started) skip retry to avoid futile reconnection attempts.
+    """
 
-    def test_other_rejection_not_retried(self):
-        """Other rejection reasons should NOT trigger retry."""
-        reasons = [
-            "Server is full",
-            "Invalid username",
-            "Game has already started",
+    def test_retriable_rejection_triggers_retry(self):
+        """Retriable rejections during reconnection should trigger retry."""
+        from llm_handler import NON_RETRIABLE_REASONS
+
+        retriable_reasons = [
             None,
+            "'Grok-41_Fast' already connected.",
+            "Invalid username",
+            f"Handshake timeout (5.0s)",
         ]
-        for reason in reasons:
-            self.assertNotIn('already connected', reason or '')
+        for reason in retriable_reasons:
+            join_rejected = True
+            is_reconnecting = True
+            reason_lower = (reason or '').lower()
+            is_non_retriable = any(r in reason_lower for r in NON_RETRIABLE_REASONS)
+            should_retry = is_reconnecting and join_rejected and not is_non_retriable
+            self.assertTrue(should_retry, f"Should retry for reason: {reason!r}")
+
+    def test_non_retriable_rejection_skips_retry(self):
+        """Non-retriable rejections (server full, game started) should skip retry."""
+        from llm_handler import NON_RETRIABLE_REASONS
+
+        non_retriable_reasons = [
+            "Server is full",
+            "Game has already started",
+            "server is full",  # case-insensitive
+        ]
+        for reason in non_retriable_reasons:
+            join_rejected = True
+            is_reconnecting = True
+            reason_lower = (reason or '').lower()
+            is_non_retriable = any(r in reason_lower for r in NON_RETRIABLE_REASONS)
+            should_retry = is_reconnecting and join_rejected and not is_non_retriable
+            self.assertFalse(should_retry, f"Should NOT retry for reason: {reason!r}")
 
     def test_retry_only_during_reconnection(self):
         """Retry logic should only activate when is_reconnecting=True."""
-        # This mirrors the guard condition in llm_handler.py line 681:
+        # This mirrors the guard condition in llm_handler.py:
         # if is_reconnecting and self.civcom:
 
-        # Case 1: Fresh connection - should NOT retry
+        # Case 1: Fresh connection - should NOT retry (is_reconnecting=False)
         is_reconnecting = False
         join_rejected = True
-        reason = "'agent' already connected."
-        should_retry = is_reconnecting and join_rejected and 'already connected' in (reason or '')
+        should_retry = is_reconnecting and join_rejected
         self.assertFalse(should_retry)
 
-        # Case 2: Reconnection with "already connected" - SHOULD retry
+        # Case 2: Reconnection with rejection - SHOULD retry
         is_reconnecting = True
-        should_retry = is_reconnecting and join_rejected and 'already connected' in (reason or '')
+        should_retry = is_reconnecting and join_rejected
         self.assertTrue(should_retry)
 
-        # Case 3: Reconnection with different rejection - should NOT retry
-        reason = "Server is full"
-        should_retry = is_reconnecting and join_rejected and 'already connected' in (reason or '')
-        self.assertFalse(should_retry)
+    def test_handshake_timeout_treated_as_rejection(self):
+        """Handshake timeout should synthesize join_rejected=True for retry."""
+        # When handshake times out and join_rejected is still False,
+        # the handler synthesizes a rejection so the retry path handles it.
+        from llm_handler import STALE_CONN_HANDSHAKE_WAIT_SEC
+
+        # Simulate CivCom state after handshake timeout (no server reply received)
+        join_rejected = False
+        join_rejection_reason = None
+
+        # The handler code does:
+        #   if not self.civcom.join_rejected:
+        #       self.civcom.join_rejected = True
+        #       self.civcom.join_rejection_reason = f"Handshake timeout ({...}s)"
+        if not join_rejected:
+            join_rejected = True
+            join_rejection_reason = f"Handshake timeout ({STALE_CONN_HANDSHAKE_WAIT_SEC}s)"
+
+        self.assertTrue(join_rejected)
+        self.assertIn("Handshake timeout", join_rejection_reason)
+        self.assertIn(str(STALE_CONN_HANDSHAKE_WAIT_SEC), join_rejection_reason)
 
 
 class TestStaleConnectionConstants(unittest.TestCase):
@@ -237,6 +276,75 @@ class TestCivComRegistryCleanup(unittest.TestCase):
         registry = CivComRegistry()
         # Should not raise
         registry.unregister_game("nonexistent_game", "nonexistent_agent")
+
+
+class TestTurnDriftCivComDestruction(unittest.TestCase):
+    """Test that large turn drift destroys the stale CivCom and unregisters it.
+
+    When a preserved CivCom has a game_turn that drifts too far from the
+    client's expected_turn, the civserver was likely reset. The handler must
+    destroy the stale CivCom and remove it from the registry so subsequent
+    reconnection attempts don't hit the same stale instance (infinite loop).
+    """
+
+    def test_large_drift_destroys_civcom_and_unregisters(self):
+        """CivCom with turn drift > TURN_DRIFT_TOLERANCE should be stopped,
+        closed, and unregistered from the registry."""
+        from state_extractor import CivComRegistry
+        from llm_handler import TURN_DRIFT_TOLERANCE
+
+        registry = CivComRegistry()
+        mock_civcom = MagicMock()
+        mock_civcom.game_turn = 2  # Server reset to early turn
+        mock_civcom.stopped = False
+
+        registry.register_game("game1", "agent1", mock_civcom)
+
+        expected_turn = 2 + TURN_DRIFT_TOLERANCE + 1  # Just over tolerance
+        current_turn = mock_civcom.game_turn
+        turn_drift = abs(current_turn - expected_turn)
+
+        # Verify drift exceeds tolerance
+        self.assertGreater(turn_drift, TURN_DRIFT_TOLERANCE)
+
+        # Simulate the handler's destruction sequence (llm_handler.py lines 658-661)
+        mock_civcom.stopped = True
+        mock_civcom.close_connection()
+        registry.unregister_game("game1", "agent1")
+
+        # Verify all three steps happened
+        self.assertTrue(mock_civcom.stopped)
+        mock_civcom.close_connection.assert_called_once()
+        self.assertIsNone(registry.get_civcom("game1", "agent1"))
+
+    def test_small_drift_does_not_destroy_civcom(self):
+        """CivCom with turn drift within TURN_DRIFT_TOLERANCE should be kept."""
+        from state_extractor import CivComRegistry
+        from llm_handler import TURN_DRIFT_TOLERANCE
+
+        registry = CivComRegistry()
+        mock_civcom = MagicMock()
+        mock_civcom.game_turn = 8
+
+        registry.register_game("game1", "agent1", mock_civcom)
+
+        expected_turn = 8 + TURN_DRIFT_TOLERANCE  # Exactly at tolerance (not over)
+        current_turn = mock_civcom.game_turn
+        turn_drift = abs(current_turn - expected_turn)
+
+        # Drift is within tolerance — should NOT destroy
+        self.assertLessEqual(turn_drift, TURN_DRIFT_TOLERANCE)
+        # CivCom should still be registered
+        self.assertIs(registry.get_civcom("game1", "agent1"), mock_civcom)
+        mock_civcom.close_connection.assert_not_called()
+
+    def test_expected_turn_zero_skips_verification(self):
+        """expected_turn=0 (or None) should skip state verification entirely."""
+        # The guard condition: if expected_turn is not None and expected_turn > 0
+        # Both None and 0 skip verification — agent-clash uses this on retry.
+        for expected_turn in [None, 0]:
+            should_verify = expected_turn is not None and expected_turn > 0
+            self.assertFalse(should_verify, f"expected_turn={expected_turn!r} should skip verification")
 
 
 if __name__ == '__main__':

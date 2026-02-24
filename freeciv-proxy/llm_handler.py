@@ -119,9 +119,10 @@ GAME_INFO_POLL_INTERVAL_SEC = 0.1  # Polling interval
 GAME_INFO_LOG_INTERVAL_SEC = 0.5  # Debug log frequency
 TURN_DRIFT_TOLERANCE = llm_config.get('reconnection.turn_drift_tolerance', 5)  # Max acceptable turn drift during reconnection
 
-# Stale connection retry constants — when civserver rejects join with "already connected"
+# Stale connection retry constants — when civserver rejects join during reconnection
 STALE_CONN_HANDSHAKE_WAIT_SEC = 5.0  # Max wait for handshake reply from civserver
-STALE_CONN_DISCONNECT_WAIT_SEC = 2.0  # Wait after force-closing old connection before retry
+STALE_CONN_DISCONNECT_WAIT_SEC = 3.0  # Wait after force-closing old connection before retry
+NON_RETRIABLE_REASONS = ('server is full', 'game has already started')  # Rejections that should not trigger stale-conn retry
 
 # Connection health monitoring - threshold for marking connection as dead
 # After this many consecutive send failures, the connection is marked dead and game is paused
@@ -533,22 +534,24 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 )
             self.game_id = game_id
 
-            # Fallback: Accept player_id from message for late reconnection
-            # This handles the case where session expired but client retained player_id
-            if not is_reconnecting:
-                provided_player_id = msg_data.get('player_id')
-                if provided_player_id is not None:
-                    try:
-                        provided_player_id = int(provided_player_id)
-                        if 0 <= provided_player_id < 512:  # Valid player range (not observer)
-                            previous_player_id = provided_player_id
+            # Fallback: Accept player_id from message when session doesn't have one
+            # Covers two cases:
+            # 1. Session expired but client retained player_id (late reconnection)
+            # 2. Session resumed but player_id was None in MySQL (e.g. stale CivCom was destroyed)
+            provided_player_id = msg_data.get('player_id')
+            if provided_player_id is not None and previous_player_id is None:
+                try:
+                    provided_player_id = int(provided_player_id)
+                    if 0 <= provided_player_id < 512:  # Valid player range (not observer)
+                        previous_player_id = provided_player_id
+                        if not is_reconnecting:
                             is_reconnecting = True
-                            logger.info(
-                                f"🔄 Late reconnection for {self.agent_id} with provided player_id={provided_player_id}\n"
-                                f"   Session expired but client retained player_id for game {game_id}"
-                            )
-                    except (ValueError, TypeError):
-                        logger.warning(f"Invalid player_id provided by {self.agent_id}: {provided_player_id}")
+                        logger.info(
+                            f"🔄 Using client-provided player_id={provided_player_id} for {self.agent_id}\n"
+                            f"   Session {'resumed (player_id missing)' if self.session_id else 'expired'}"
+                        )
+                except (ValueError, TypeError):
+                    logger.warning(f"Invalid player_id provided by {self.agent_id}: {provided_player_id}")
 
             # Create new session if we don't have one from resume
             # Late reconnection (player_id provided, session expired) still needs a
@@ -639,16 +642,25 @@ class LLMWSHandler(websocket.WebSocketHandler):
                     )
 
                     # STATE VERIFICATION: Check if expected_turn matches actual game state
-                    # This catches the case where reconnection went to a different/reset game
-                    # Allow ±TURN_DRIFT_TOLERANCE turn tolerance for reused CivCom: pod restart
-                    # + recovery can take minutes, during which AI players advance turns.
-                    # Session resumption already proves game identity, so the turn check is
-                    # a secondary sanity check here. expected_turn=0 means "client doesn't
-                    # know the turn yet" (pregame only), so skip verification like None.
+                    # With pause-on-disconnect, turns should NOT advance during disconnection.
+                    # Large drift means the civserver was reset (new game on same port).
+                    # Destroy the stale CivCom so the next reconnection attempt won't hit the
+                    # same mismatch (breaks the infinite retry loop).
                     if expected_turn is not None and expected_turn > 0:
                         current_turn = getattr(self.civcom, 'game_turn', 0)
                         turn_drift = abs(current_turn - expected_turn)
                         if turn_drift > TURN_DRIFT_TOLERANCE:
+                            # Destroy stale CivCom BEFORE sending error — this breaks
+                            # the infinite retry loop where the same stale CivCom is reused
+                            logger.warning(
+                                f"Destroying stale CivCom for {self.agent_id} before state mismatch abort "
+                                f"(turn drift {turn_drift}: expected={expected_turn}, actual={current_turn})"
+                            )
+                            self.civcom.stopped = True
+                            self.civcom.close_connection()
+                            civcom_registry.unregister_game(game_id, self.agent_id)
+                            self.civcom = None
+
                             self._abort_with_state_mismatch(
                                 expected_turn, current_turn,
                                 'Game state lost — connected to reset or different civserver instance',
@@ -679,9 +691,9 @@ class LLMWSHandler(websocket.WebSocketHandler):
                     self._connect_to_civserver(civserver_port, game_id)
                     logger.info(f"✓ Agent {self.agent_id} civcom connection established to port {civserver_port}")
 
-                    # FIX: Detect "already connected" rejection and retry after cleanup
-                    # When civserver still has a stale TCP connection for this username,
-                    # it rejects the new join. We force-close the old connection and retry once.
+                    # FIX: Detect any civserver rejection during reconnection and retry after cleanup
+                    # When civserver rejects the join (stale connection, timeout, etc.),
+                    # we force-close old connections and retry once.
                     if is_reconnecting and self.civcom:
                         # Wait for handshake to complete (PACKET_SERVER_JOIN_REPLY)
                         # Uses asyncio.to_thread to bridge threading.Event → async without polling
@@ -692,12 +704,19 @@ class LLMWSHandler(websocket.WebSocketHandler):
                             )
                         except asyncio.TimeoutError:
                             logger.warning(f"Handshake timeout for {self.agent_id} after {STALE_CONN_HANDSHAKE_WAIT_SEC}s")
+                            if not self.civcom.join_rejected:
+                                self.civcom.join_rejected = True
+                                self.civcom.join_rejection_reason = f"Handshake timeout ({STALE_CONN_HANDSHAKE_WAIT_SEC}s)"
 
-                        if self.civcom.join_rejected and 'already connected' in (self.civcom.join_rejection_reason or ''):
+                        # Skip retry for definitively non-retriable rejections
+                        reason_lower = (self.civcom.join_rejection_reason or '').lower()
+                        is_non_retriable = any(r in reason_lower for r in NON_RETRIABLE_REASONS)
+
+                        if self.civcom.join_rejected and not is_non_retriable:
                             logger.warning(
-                                f"🔄 Stale connection detected for {self.agent_id}: "
+                                f"🔄 Join rejected during reconnection for {self.agent_id}: "
                                 f"{self.civcom.join_rejection_reason}\n"
-                                f"   Force-closing stale connection and retrying..."
+                                f"   Cleaning up and retrying connection..."
                             )
 
                             # 1. Stop the rejected CivCom cleanly
@@ -727,6 +746,9 @@ class LLMWSHandler(websocket.WebSocketHandler):
                                 )
                             except asyncio.TimeoutError:
                                 logger.warning(f"Retry handshake timeout for {self.agent_id}")
+                                if not self.civcom.join_rejected:
+                                    self.civcom.join_rejected = True
+                                    self.civcom.join_rejection_reason = f"Retry handshake timeout ({STALE_CONN_HANDSHAKE_WAIT_SEC}s)"
 
                             if self.civcom.join_rejected:
                                 logger.error(
