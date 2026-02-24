@@ -156,7 +156,21 @@ class CivComRegistry:
         key = (game_id, agent_id)
         with self._lock:
             if key in self._civcom_instances:
-                logger.warning(f"Replacing CivCom for agent {agent_id} in game {game_id}")
+                old_civcom = self._civcom_instances[key]
+                if old_civcom is not civcom:
+                    logger.warning(
+                        f"Replacing CivCom for agent {agent_id} in game {game_id} — "
+                        f"stopping old instance (alive={old_civcom.is_alive()}, stopped={old_civcom.stopped})"
+                    )
+                    if not old_civcom.stopped:
+                        old_civcom.stopped = True
+                        try:
+                            if old_civcom.socket is not None:
+                                old_civcom.socket.close()
+                                old_civcom.socket = None
+                        except Exception as e:
+                            logger.debug(f"Error closing old CivCom socket: {e}")
+                        old_civcom.civwebserver = None
 
             self._civcom_instances[key] = civcom
             self._game_metadata[key] = metadata or {}

@@ -118,6 +118,23 @@ class ConnectionManager:
 
         time_since_disconnect = time.time() - cached_session.disconnected_at
 
+        # Minimum cooldown to prevent rapid connect/disconnect spirals
+        # that leak zombie CivCom instances. Does NOT reduce the 2-hour
+        # reconnection window — only prevents the 0.0s instant-reconnect loop.
+        # NOTE: Returning None causes add_connection() to create a fresh session
+        # instead of resuming. The agent gets a new session but Fix 1 (registry
+        # replacement) safely stops the old CivCom. Agent-clash retry logic
+        # handles the brief delay.
+        MIN_RECONNECT_COOLDOWN_SECS = 5.0
+        if time_since_disconnect < MIN_RECONNECT_COOLDOWN_SECS:
+            remaining = MIN_RECONNECT_COOLDOWN_SECS - time_since_disconnect
+            logger.info(
+                f"Reconnect cooldown for {identifier}: "
+                f"{time_since_disconnect:.1f}s since disconnect, "
+                f"need {MIN_RECONNECT_COOLDOWN_SECS}s. Rejecting — retry in {remaining:.1f}s"
+            )
+            return None
+
         if time_since_disconnect <= self.session_resumption_window:
             logger.info(
                 f"Found resumable session for {identifier}: "

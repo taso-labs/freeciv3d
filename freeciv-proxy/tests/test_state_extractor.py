@@ -861,5 +861,83 @@ class TestStateExtractorPlayerZero(unittest.TestCase):
             del os.environ['CACHE_HMAC_SECRET']
 
 
+class TestCivComRegistryZombieCleanup(unittest.TestCase):
+    """Test that register_game stops old CivCom when replacing with a new one (Fix 1)"""
+
+    def setUp(self):
+        self.registry = CivComRegistry()
+
+    def test_replace_stops_old_civcom(self):
+        """Registering a new CivCom for the same key stops the old one"""
+        old_civcom = Mock()
+        old_civcom.stopped = False
+        old_socket = Mock()
+        old_civcom.socket = old_socket
+        old_civcom.is_alive = Mock(return_value=True)
+
+        new_civcom = Mock()
+        new_civcom.stopped = False
+
+        self.registry.register_game('game1', 'agent1', old_civcom)
+        self.registry.register_game('game1', 'agent1', new_civcom)
+
+        # Old CivCom should be stopped and its socket closed
+        self.assertTrue(old_civcom.stopped)
+        old_socket.close.assert_called_once()
+        self.assertIsNone(old_civcom.socket)
+        self.assertIsNone(old_civcom.civwebserver)
+
+        # New CivCom should be the registered one
+        self.assertIs(self.registry.get_civcom('game1', 'agent1'), new_civcom)
+
+    def test_reregister_same_instance_does_not_stop(self):
+        """Re-registering the same CivCom instance should NOT stop it"""
+        civcom = Mock()
+        civcom.stopped = False
+        civcom.socket = Mock()
+        civcom.is_alive = Mock(return_value=True)
+
+        self.registry.register_game('game1', 'agent1', civcom)
+        self.registry.register_game('game1', 'agent1', civcom)
+
+        # Same instance — should NOT be stopped
+        self.assertFalse(civcom.stopped)
+        civcom.socket.close.assert_not_called()
+
+    def test_replace_already_stopped_civcom(self):
+        """Replacing an already-stopped CivCom should not error"""
+        old_civcom = Mock()
+        old_civcom.stopped = True
+        old_civcom.socket = None
+        old_civcom.is_alive = Mock(return_value=False)
+
+        new_civcom = Mock()
+        new_civcom.stopped = False
+
+        self.registry.register_game('game1', 'agent1', old_civcom)
+        self.registry.register_game('game1', 'agent1', new_civcom)
+
+        # Old was already stopped — socket.close should not be called
+        self.assertIs(self.registry.get_civcom('game1', 'agent1'), new_civcom)
+
+    def test_replace_with_socket_close_error(self):
+        """Socket close errors should be caught, not propagated"""
+        old_civcom = Mock()
+        old_civcom.stopped = False
+        old_civcom.socket = Mock()
+        old_civcom.socket.close.side_effect = OSError("Connection reset")
+        old_civcom.is_alive = Mock(return_value=True)
+
+        new_civcom = Mock()
+        new_civcom.stopped = False
+
+        self.registry.register_game('game1', 'agent1', old_civcom)
+        # Should not raise despite socket.close() error
+        self.registry.register_game('game1', 'agent1', new_civcom)
+
+        self.assertTrue(old_civcom.stopped)
+        self.assertIs(self.registry.get_civcom('game1', 'agent1'), new_civcom)
+
+
 if __name__ == '__main__':
     unittest.main()

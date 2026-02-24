@@ -1306,12 +1306,12 @@ def start_periodic_cleanup(interval_ms: int = 300000) -> None:
             except Exception as e:
                 logger.error(f"Stale paused-session cleanup scheduling error: {e}")
 
-            # Dead CivCom cleanup — gentle TTL (24h default, configurable)
-            # Gives agent-clash plenty of time to reconnect before cleaning up
+            # Dead CivCom cleanup — 2h default (DEAD_CIVCOM_TTL_SECS)
+            # Gives agents time to reconnect while preventing zombie accumulation
             try:
                 from state_extractor import civcom_registry
                 _sync_dead_markers(civcom_registry)
-                max_age = int(os.getenv('SESSION_SUSPENSION_TIMEOUT_SECS', '86400'))
+                max_age = int(os.getenv('DEAD_CIVCOM_TTL_SECS', '7200'))
                 civcom_cleaned = civcom_registry.cleanup_dead_civcoms(max_age)
                 if civcom_cleaned > 0:
                     logger.info(f"Periodic cleanup removed {civcom_cleaned} dead CivCom(s)")
