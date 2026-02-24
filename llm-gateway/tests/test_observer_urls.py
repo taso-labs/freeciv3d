@@ -114,8 +114,8 @@ class TestObserverUrlsEndpoint:
         assert "player1" in data["observer_urls"]
         assert "player2" in data["observer_urls"]
 
-    def test_global_url_has_strategic_camera(self):
-        """Global observer URL should use strategic camera preset for bird's eye view"""
+    def test_global_url_has_worldmap_camera(self):
+        """Global observer URL should use worldmap camera preset with dynamic zoom"""
         with patch("api_endpoints.connection_manager") as mock_cm:
             setup_mock_connection_manager(mock_cm, civserver_port=6001)
 

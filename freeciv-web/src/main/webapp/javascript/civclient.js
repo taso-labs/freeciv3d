@@ -1384,7 +1384,7 @@ function calculate_zoom_for_worldmap_territory(radius_x, radius_y)
   var dy_for_x = (padded_x * tile_size) / (fov_half_tan * aspect);
 
   var dy = Math.ceil(Math.max(dy_for_x, dy_for_y));
-  return Math.floor(Math.max(WORLDMAP_MIN_ZOOM_DY, Math.min(WORLDMAP_MAX_ZOOM_DY, dy)));
+  return Math.max(WORLDMAP_MIN_ZOOM_DY, Math.min(WORLDMAP_MAX_ZOOM_DY, dy));
 }
 
 /****************************************************************************

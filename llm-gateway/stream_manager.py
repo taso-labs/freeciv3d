@@ -40,7 +40,12 @@ JOB_RETRY_DELAY = float(os.environ.get("STREAM_JOB_RETRY_DELAY", "2.0"))
 # Job TTL after completion - default 30 min for debugging and backup upload
 JOB_TTL_AFTER_FINISHED = int(os.environ.get("STREAM_JOB_TTL_SECONDS", "1800"))
 # Worldmap zoom mode for global observer view ('static' or 'dynamic')
-WORLDMAP_ZOOM_MODE = os.environ.get("WORLDMAP_ZOOM_MODE", "dynamic")
+_WORLDMAP_ZOOM_MODE_RAW = os.environ.get("WORLDMAP_ZOOM_MODE", "dynamic")
+if _WORLDMAP_ZOOM_MODE_RAW not in ("static", "dynamic"):
+    raise ValueError(
+        f"Invalid WORLDMAP_ZOOM_MODE='{_WORLDMAP_ZOOM_MODE_RAW}'; must be 'static' or 'dynamic'"
+    )
+WORLDMAP_ZOOM_MODE = _WORLDMAP_ZOOM_MODE_RAW
 
 # Readiness check configuration
 # Set to 0 to disable readiness checking (jobs will be created but not verified)
@@ -372,8 +377,7 @@ class StreamManager:
 
         # Add zoom_mode for worldmap camera
         if view == "global":
-            worldmap_zoom_mode = WORLDMAP_ZOOM_MODE
-            params.append(f"zoom_mode={worldmap_zoom_mode}")
+            params.append(f"zoom_mode={WORLDMAP_ZOOM_MODE}")
 
         # Add player-specific params for fog-of-war perspective
         if view in ("player1", "player2") and player_names:
@@ -1055,8 +1059,7 @@ class LocalStreamManager:
 
         # Add zoom_mode for worldmap camera
         if view == "global":
-            worldmap_zoom_mode = WORLDMAP_ZOOM_MODE
-            params.append(f"zoom_mode={worldmap_zoom_mode}")
+            params.append(f"zoom_mode={WORLDMAP_ZOOM_MODE}")
 
         if view in ("player1", "player2") and player_names:
             player_name = player_names.get(view, "")
