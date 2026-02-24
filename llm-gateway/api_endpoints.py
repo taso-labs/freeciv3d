@@ -879,9 +879,9 @@ async def get_observer_urls(
 
     All URLs include embed=1 and autojoin=1 for seamless iframe embedding.
 
-    The global URL includes a zoom_mode parameter (configurable via env GATEWAY_WORLDMAP_ZOOM_MODE):
-    - static: entire map displayed at all times (default)
-    - dynamic: camera fits tightly around both agents' combined territories
+    The global URL includes a zoom_mode parameter (configurable via WORLDMAP_ZOOM_MODE env var):
+    - static: entire map displayed at all times
+    - dynamic: camera fits tightly around both agents' combined territories (default)
     """
     try:
         # Poll for game info with timeout to handle race condition where

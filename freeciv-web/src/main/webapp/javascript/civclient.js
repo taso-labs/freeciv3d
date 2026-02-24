@@ -1271,6 +1271,8 @@ var WORLDMAP_MAX_ZOOM_DY = 3000;
 // Extra padding (in tiles) added around territory so territory shading
 // (which extends ~3 tiles beyond city/unit positions) is fully visible.
 var WORLDMAP_TERRITORY_PADDING_TILES = 5;
+// Fallback tile size in scene units when MAPVIEW_ASPECT_FACTOR is not yet loaded.
+var WORLDMAP_DEFAULT_TILE_SIZE = 35.71;
 
 /****************************************************************************
   Calculate the centroid and spread of all territory (cities + units) from
@@ -1312,16 +1314,16 @@ function get_all_players_territory_centroid_and_spread()
   if (typeof units !== 'undefined') {
     for (var unit_id in units) {
       var punit = units[unit_id];
-      var owner_id = punit['owner'];
-      if (is_barbarian_player(owner_id)) continue;
-      var player = players[owner_id];
-      if (!player || !player['is_alive']) continue;
+      var unit_owner_id = punit['owner'];
+      if (is_barbarian_player(unit_owner_id)) continue;
+      var unit_player = players[unit_owner_id];
+      if (!unit_player || !unit_player['is_alive']) continue;
       if (punit['tile'] == null) continue;
-      var ptile = index_to_tile(punit['tile']);
-      if (ptile) {
-        positions.push({ x: ptile['x'], y: ptile['y'], weight: 1 });
+      var unit_tile = index_to_tile(punit['tile']);
+      if (unit_tile) {
+        positions.push({ x: unit_tile['x'], y: unit_tile['y'], weight: 1 });
         unit_count++;
-        players_with_territory[owner_id] = true;
+        players_with_territory[unit_owner_id] = true;
       }
     }
   }
@@ -1344,6 +1346,20 @@ function get_all_players_territory_centroid_and_spread()
 }
 
 /****************************************************************************
+  Get viewport aspect ratio (width/height) for zoom calculations.
+  Returns actual window dimensions in a browser, falls back to 16:9.
+****************************************************************************/
+function worldmap_get_viewport_aspect()
+{
+  if (typeof $ !== 'undefined' && typeof window !== 'undefined') {
+    var w = $(window).width();
+    var h = $(window).height();
+    if (w > 0 && h > 0) return w / h;
+  }
+  return 16 / 9;  // fallback for recording resolution
+}
+
+/****************************************************************************
   Calculate camera height for worldmap dynamic zoom based on territory
   extents in X and Y, accounting for viewport aspect ratio.
   PerspectiveCamera FOV=45°, so visible half-height = dy * tan(22.5°).
@@ -1354,15 +1370,10 @@ function calculate_zoom_for_worldmap_territory(radius_x, radius_y)
 {
   var padded_x = radius_x + WORLDMAP_TERRITORY_PADDING_TILES;
   var padded_y = radius_y + WORLDMAP_TERRITORY_PADDING_TILES;
-  var tile_size = (typeof MAPVIEW_ASPECT_FACTOR !== 'undefined') ? MAPVIEW_ASPECT_FACTOR : 35.71;
+  var tile_size = (typeof MAPVIEW_ASPECT_FACTOR !== 'undefined') ? MAPVIEW_ASPECT_FACTOR : WORLDMAP_DEFAULT_TILE_SIZE;
   var fov_half_tan = Math.tan((45 / 2) * Math.PI / 180);  // tan(22.5°) ≈ 0.4142
 
-  // Viewport aspect ratio (width/height). Falls back to 16:9 for recording.
-  var aspect = 16 / 9;
-  if (typeof mapview_model_width !== 'undefined' && typeof mapview_model_height !== 'undefined'
-      && mapview_model_height > 0) {
-    aspect = $(window).width() / $(window).height();
-  }
+  var aspect = worldmap_get_viewport_aspect();
 
   // dy needed so vertical extent fits: padded_y tiles from center
   var dy_for_y = (padded_y * tile_size) / fov_half_tan;
@@ -1390,12 +1401,11 @@ function center_on_all_territories_with_zoom()
   );
 
   center_tile_mapcanvas(territory_data.tile);
-
-  var target_dy = calculate_zoom_for_worldmap_territory(territory_data.radius_x, territory_data.radius_y);
-  camera_dy = target_dy;
   camera_dz = camera_presets['worldmap'].dz;  // Keep near top-down for worldmap view
 
   if (should_update_zoom) {
+    var target_dy = calculate_zoom_for_worldmap_territory(territory_data.radius_x, territory_data.radius_y);
+    camera_dy = target_dy;
     observer_last_worldmap_territory_radius = territory_data.effective_radius;
     freelog(LOG_DEBUG, '[Observer Worldmap] Territory: centroid=(' + territory_data.centroid.x + ',' +
             territory_data.centroid.y + ') rx=' + Math.round(territory_data.radius_x) +
@@ -1480,14 +1490,18 @@ function observer_worldmap_fit_entire_map()
   // Calculate camera_dy to fit the entire map in the viewport.
   // Each tile is MAPVIEW_ASPECT_FACTOR (~35.71) scene units.
   // PerspectiveCamera FOV=45°, so visible ground height ≈ 2 * dy * tan(22.5°).
-  // Required dy = scene_extent / (2 * tan(22.5°)).
-  // For 16:9 aspect ratio, vertical dimension is the constraint.
-  // We use the larger map dimension and add 15% padding for edges.
-  var map_extent = Math.max(map['xsize'], map['ysize']);
-  var scene_extent = map_extent * (typeof MAPVIEW_ASPECT_FACTOR !== 'undefined' ? MAPVIEW_ASPECT_FACTOR : 35.71);
+  // We compute dy needed for each axis independently (accounting for aspect ratio)
+  // and take the max, with 15% padding for edges.
+  var tile_size = (typeof MAPVIEW_ASPECT_FACTOR !== 'undefined') ? MAPVIEW_ASPECT_FACTOR : WORLDMAP_DEFAULT_TILE_SIZE;
   var fov_half_tan = Math.tan((45 / 2) * Math.PI / 180);  // tan(22.5°) ≈ 0.414
   var padding = 1.15;  // 15% padding to avoid clipping at edges
-  var target_dy = Math.floor(Math.max(800, (scene_extent * padding) / (2 * fov_half_tan)));
+  var aspect = worldmap_get_viewport_aspect();
+  // Half-map extents from center in scene units
+  var half_x = (map['xsize'] / 2) * tile_size * padding;
+  var half_y = (map['ysize'] / 2) * tile_size * padding;
+  var dy_for_y = half_y / fov_half_tan;
+  var dy_for_x = half_x / (fov_half_tan * aspect);
+  var target_dy = Math.floor(Math.max(800, dy_for_x, dy_for_y));
   camera_dy = target_dy;
   // Keep camera nearly top-down for full map view
   camera_dz = camera_presets['worldmap'].dz;

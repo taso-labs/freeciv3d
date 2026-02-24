@@ -23,6 +23,7 @@ from urllib.parse import quote
 import kubernetes
 from kubernetes.client.rest import ApiException
 
+from config import Settings
 from youtube_client import YouTubeClient
 
 logger = logging.getLogger(__name__)
@@ -370,7 +371,7 @@ class StreamManager:
 
         # Add zoom_mode for worldmap camera
         if view == "global":
-            worldmap_zoom_mode = os.environ.get("GATEWAY_WORLDMAP_ZOOM_MODE", "dynamic")
+            worldmap_zoom_mode = Settings().worldmap_zoom_mode
             params.append(f"zoom_mode={worldmap_zoom_mode}")
 
         # Add player-specific params for fog-of-war perspective
@@ -1053,7 +1054,7 @@ class LocalStreamManager:
 
         # Add zoom_mode for worldmap camera
         if view == "global":
-            worldmap_zoom_mode = os.environ.get("GATEWAY_WORLDMAP_ZOOM_MODE", "dynamic")
+            worldmap_zoom_mode = Settings().worldmap_zoom_mode
             params.append(f"zoom_mode={worldmap_zoom_mode}")
 
         if view in ("player1", "player2") and player_names:
