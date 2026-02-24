@@ -873,11 +873,15 @@ async def get_observer_urls(
     Get observer URLs for embedding game views in agent-clash-client.
 
     Returns 3 observer URLs:
-    - global: Bird's eye view with strategic camera preset
+    - global: World map view with both agents' territories visible (worldmap camera preset)
     - player1: AI*1's perspective with fog-of-war and cinematic camera
     - player2: AI*2's perspective with fog-of-war and cinematic camera
 
     All URLs include embed=1 and autojoin=1 for seamless iframe embedding.
+
+    The global URL includes a zoom_mode parameter (configurable via GATEWAY_WORLDMAP_ZOOM_MODE):
+    - static: entire map displayed at all times (default)
+    - dynamic: camera fits tightly around both agents' combined territories
     """
     try:
         # Poll for game info with timeout to handle race condition where
@@ -980,10 +984,14 @@ async def get_observer_urls(
         #
         # Connection delays removed - Option B (lazy loading in agent-clash-client) handles
         # loading iframes one at a time when user selects them, eliminating the need for stagger.
+        # Worldmap zoom mode: 'static' shows entire map, 'dynamic' fits territories
+        worldmap_zoom_mode = getattr(settings, 'worldmap_zoom_mode', 'static')
+
         observer_urls = {
             "global": (
                 f"{webclient_path}?action=observe&civserverport={game_port}"
-                f"&embed=1&autojoin=1&name={global_viewer_name}&camera=strategic"
+                f"&embed=1&autojoin=1&name={global_viewer_name}&camera=worldmap"
+                f"&zoom_mode={worldmap_zoom_mode}"
             ),
             "player1": (
                 f"{webclient_path}?action=observe&civserverport={game_port}"

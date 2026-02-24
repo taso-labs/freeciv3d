@@ -356,8 +356,8 @@ class StreamManager:
         """
         base_url = FREECIV_WEB_BASE_URL.rstrip("/")
 
-        # Global view uses strategic camera, player views use cinematic
-        camera = "strategic" if view == "global" else "cinematic"
+        # Global view uses worldmap camera, player views use cinematic
+        camera = "worldmap" if view == "global" else "cinematic"
 
         params = [
             "action=observe",
@@ -367,6 +367,11 @@ class StreamManager:
             "autojoin=1",
             f"name=stream_{view}_{civserver_port}",
         ]
+
+        # Add zoom_mode for worldmap camera
+        if view == "global":
+            worldmap_zoom_mode = getattr(settings, 'worldmap_zoom_mode', 'static')
+            params.append(f"zoom_mode={worldmap_zoom_mode}")
 
         # Add player-specific params for fog-of-war perspective
         if view in ("player1", "player2") and player_names:
@@ -1035,7 +1040,7 @@ class LocalStreamManager:
             Complete observer URL with camera and player params
         """
         base_url = LOCAL_FREECIV_WEB_URL.rstrip("/")
-        camera = "strategic" if view == "global" else "cinematic"
+        camera = "worldmap" if view == "global" else "cinematic"
 
         params = [
             "action=observe",
@@ -1045,6 +1050,11 @@ class LocalStreamManager:
             "autojoin=1",
             f"name=stream_{view}_{civserver_port}",
         ]
+
+        # Add zoom_mode for worldmap camera
+        if view == "global":
+            worldmap_zoom_mode = getattr(settings, 'worldmap_zoom_mode', 'static')
+            params.append(f"zoom_mode={worldmap_zoom_mode}")
 
         if view in ("player1", "player2") and player_names:
             player_name = player_names.get(view, "")

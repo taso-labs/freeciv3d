@@ -125,7 +125,8 @@ class TestObserverUrlsEndpoint:
         global_url = data["observer_urls"]["global"]
 
         # Parse URL and check parameters
-        assert "camera=strategic" in global_url
+        assert "camera=worldmap" in global_url
+        assert "zoom_mode=static" in global_url
         assert "embed=1" in global_url
         assert "autojoin=1" in global_url
         assert "action=observe" in global_url

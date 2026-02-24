@@ -41,6 +41,7 @@ var camera_presets = {
   'strategic':  { dx: 50,  dy: 800, dz: 100 },  // ~83° - near top-down overview
   'cinematic':  { dx: 25,  dy: 150, dz: 200 },  // ~37° - close dramatic angle (2x zoom)
   'isometric':  { dx: 50,  dy: 500, dz: 500 },  // 45° - classic strategy game
+  'worldmap':   { dx: 50,  dy: 1200, dz: 80 },  // ~86° - near top-down for full map recording
 };
 
 /****************************************************************************

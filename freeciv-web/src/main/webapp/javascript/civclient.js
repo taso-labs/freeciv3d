@@ -324,8 +324,16 @@ function init_observer_follow_mode()
   // Global view mode: when follow is missing or explicitly "global"
   if (!follow_param || follow_param === 'global') {
     observer_follow_player = null;
-    freelog(LOG_DEBUG, '[Observer] Global view mode - will center on all players');
-    start_observer_global_view_intervals();
+
+    // Check if worldmap camera mode is active (camera=worldmap URL param)
+    var camera_param = $.getUrlVar('camera');
+    if (camera_param === 'worldmap') {
+      freelog(LOG_DEBUG, '[Observer] Worldmap view mode - will show both agents territories');
+      start_observer_worldmap_intervals();
+    } else {
+      freelog(LOG_DEBUG, '[Observer] Global view mode - will center on all players');
+      start_observer_global_view_intervals();
+    }
     return;
   }
 
@@ -1236,6 +1244,292 @@ function start_observer_global_view_intervals()
   }, INITIAL_CENTER_POLL_INTERVAL_MS);
 }
 
+// ========================================================================
+// Worldmap camera mode: shows both agents' territories in a single view
+// Supports two zoom modes via URL parameter ?zoom_mode=static|dynamic
+//   static  = entire map always visible (default)
+//   dynamic = camera fits tightly around combined territory bounding box
+// ========================================================================
+
+// Worldmap zoom mode: 'static' or 'dynamic'
+var observer_worldmap_zoom_mode = null;
+
+// Track last combined territory radius for dynamic mode hysteresis
+var observer_last_worldmap_territory_radius = null;
+var WORLDMAP_TERRITORY_RADIUS_CHANGE_THRESHOLD = 3;
+
+// Worldmap dynamic zoom configuration (camera height values)
+// Wider range than single-player territory zoom since we show all players
+var WORLDMAP_BASE_DY = 400;
+var WORLDMAP_DY_PER_TILE = 30;
+var WORLDMAP_MIN_ZOOM_DY = 350;
+var WORLDMAP_MAX_ZOOM_DY = 1500;
+
+/****************************************************************************
+  Calculate the centroid and spread of all territory (cities + units) from
+  ALL non-barbarian alive players. Used for worldmap dynamic zoom to fit
+  both agents' complete territories in view.
+  Cities are weighted more heavily to anchor near empire cores.
+  Handles wrapping maps correctly via compute_wrapped_spread_and_centroid().
+  Returns: { centroid, spread, effective_radius, city_count, unit_count,
+             player_count, count, tile }
+  Returns null if no players have territory.
+****************************************************************************/
+function get_all_players_territory_centroid_and_spread()
+{
+  if (typeof cities === 'undefined' && typeof units === 'undefined') return null;
+  if (typeof players === 'undefined') return null;
+
+  var positions = [];
+  var city_count = 0, unit_count = 0;
+  var players_with_territory = {};
+
+  // Include all cities from non-barbarian alive players
+  if (typeof cities !== 'undefined') {
+    for (var city_id in cities) {
+      var pcity = cities[city_id];
+      var owner_id = city_owner_player_id(pcity);
+      if (is_barbarian_player(owner_id)) continue;
+      var player = players[owner_id];
+      if (!player || !player['is_alive']) continue;
+      var ptile = city_tile(pcity);
+      if (ptile) {
+        positions.push({ x: ptile['x'], y: ptile['y'], weight: TERRITORY_CITY_WEIGHT });
+        city_count++;
+        players_with_territory[owner_id] = true;
+      }
+    }
+  }
+
+  // Include all units from non-barbarian alive players
+  if (typeof units !== 'undefined') {
+    for (var unit_id in units) {
+      var punit = units[unit_id];
+      var owner_id = punit['owner'];
+      if (is_barbarian_player(owner_id)) continue;
+      var player = players[owner_id];
+      if (!player || !player['is_alive']) continue;
+      if (punit['tile'] == null) continue;
+      var ptile = index_to_tile(punit['tile']);
+      if (ptile) {
+        positions.push({ x: ptile['x'], y: ptile['y'], weight: 1 });
+        unit_count++;
+        players_with_territory[owner_id] = true;
+      }
+    }
+  }
+
+  var result = compute_wrapped_spread_and_centroid(positions);
+  if (!result) return null;
+
+  return {
+    centroid: { x: result.centroid_x, y: result.centroid_y },
+    spread: result.spread,
+    effective_radius: result.effective_radius,
+    city_count: city_count,
+    unit_count: unit_count,
+    player_count: Object.keys(players_with_territory).length,
+    count: result.total_weight,
+    tile: { x: result.centroid_x, y: result.centroid_y }
+  };
+}
+
+/****************************************************************************
+  Calculate camera height for worldmap dynamic zoom based on combined
+  territory effective radius.
+****************************************************************************/
+function calculate_zoom_for_worldmap_territory(effective_radius)
+{
+  var dy = WORLDMAP_BASE_DY + effective_radius * WORLDMAP_DY_PER_TILE;
+  return Math.floor(Math.max(WORLDMAP_MIN_ZOOM_DY, Math.min(WORLDMAP_MAX_ZOOM_DY, dy)));
+}
+
+/****************************************************************************
+  Center view on ALL players' combined territory with dynamic zoom.
+  Similar to center_on_player_territory_with_zoom but across all players.
+  Zoom only updates if effective radius changes significantly.
+  Returns territory data on success, null if no territory found.
+****************************************************************************/
+function center_on_all_territories_with_zoom()
+{
+  var territory_data = get_all_players_territory_centroid_and_spread();
+  if (!territory_data) return null;
+
+  var should_update_zoom = (
+    observer_last_worldmap_territory_radius === null ||
+    Math.abs(territory_data.effective_radius - observer_last_worldmap_territory_radius) >= WORLDMAP_TERRITORY_RADIUS_CHANGE_THRESHOLD
+  );
+
+  center_tile_mapcanvas(territory_data.tile);
+
+  var target_dy = calculate_zoom_for_worldmap_territory(territory_data.effective_radius);
+  camera_dy = target_dy;
+
+  if (should_update_zoom) {
+    observer_last_worldmap_territory_radius = territory_data.effective_radius;
+    freelog(LOG_DEBUG, '[Observer Worldmap] Territory: centroid=(' + territory_data.centroid.x + ',' +
+            territory_data.centroid.y + ') radius=' + territory_data.effective_radius +
+            ' spread=' + territory_data.spread +
+            ' (' + territory_data.city_count + 'c/' + territory_data.unit_count + 'u) ' +
+            territory_data.player_count + ' players, dy=' + target_dy);
+  }
+
+  return territory_data;
+}
+
+/****************************************************************************
+  Worldmap dynamic zoom mode: center on combined territory of all players.
+  Called periodically via setInterval. Falls back to explored tile.
+****************************************************************************/
+function observer_worldmap_center_dynamic()
+{
+  if (observer_centered_notified && observer_is_interaction_cooldown_active()) {
+    return;
+  }
+
+  var territory_data = center_on_all_territories_with_zoom();
+  if (territory_data) {
+    if (!observer_centered_notified) {
+      observer_centered_notified = true;
+      observer_parent_notified = true;
+      notify_parent_iframe('observer_centered', {
+        center_type: 'worldmap_territory',
+        player_count: territory_data.player_count,
+        city_count: territory_data.city_count,
+        unit_count: territory_data.unit_count,
+        spread: territory_data.spread
+      });
+    }
+    return;
+  }
+
+  // Fall back to explored tile
+  var explored_tile = find_first_explored_tile();
+  if (explored_tile) {
+    center_tile_mapcanvas(explored_tile);
+    if (!observer_centered_notified) {
+      observer_centered_notified = true;
+      observer_parent_notified = true;
+      notify_parent_iframe('observer_centered', {
+        center_type: 'fallback_explored',
+        reason: 'no_player_territory'
+      });
+    }
+    return;
+  }
+
+  if (!observer_parent_notified) {
+    observer_parent_notified = true;
+    notify_parent_iframe('observer_centered', {
+      center_type: 'none',
+      reason: 'worldmap_no_data'
+    });
+  }
+}
+
+/****************************************************************************
+  Worldmap static zoom mode: fit the entire map in view.
+  Calculates camera position to show the full map dimensions.
+  Called once at startup and does not update periodically.
+****************************************************************************/
+function observer_worldmap_fit_entire_map()
+{
+  if (typeof map === 'undefined' || !map || !map['xsize'] || !map['ysize']) {
+    freelog(LOG_DEBUG, '[Observer Worldmap] Map not loaded yet, cannot fit');
+    return false;
+  }
+
+  // Center on the middle of the map
+  var center_x = Math.floor(map['xsize'] / 2);
+  var center_y = Math.floor(map['ysize'] / 2);
+  var center_tile = { x: center_x, y: center_y };
+
+  center_tile_mapcanvas(center_tile);
+
+  // Calculate camera_dy to fit the entire map in the viewport.
+  // The map scene dimensions are proportional to map tile dimensions.
+  // We use the larger dimension to ensure the full map fits.
+  var map_extent = Math.max(map['xsize'], map['ysize']);
+
+  // Empirically calibrated: dy ~= 20 * map_extent gives good full-map coverage
+  // at 1280x720 recording resolution. Clamped to reasonable bounds.
+  var target_dy = Math.floor(Math.max(600, Math.min(2000, 20 * map_extent)));
+  camera_dy = target_dy;
+  // Keep camera nearly top-down for full map view
+  camera_dz = 80;
+
+  freelog(LOG_DEBUG, '[Observer Worldmap] Static fit: map=' + map['xsize'] + 'x' + map['ysize'] +
+          ' center=(' + center_x + ',' + center_y + ') dy=' + target_dy);
+
+  observer_centered_notified = true;
+  observer_parent_notified = true;
+  notify_parent_iframe('observer_centered', {
+    center_type: 'worldmap_static',
+    map_size: { x: map['xsize'], y: map['ysize'] },
+    camera_dy: target_dy
+  });
+
+  return true;
+}
+
+/****************************************************************************
+  Start worldmap observer intervals based on zoom_mode parameter.
+  For static mode: fits entire map once, then does nothing.
+  For dynamic mode: periodically re-centers on combined territory.
+****************************************************************************/
+function start_observer_worldmap_intervals()
+{
+  var zoom_mode = $.getUrlVar('zoom_mode') || 'static';
+  observer_worldmap_zoom_mode = zoom_mode;
+
+  freelog(LOG_DEBUG, '[Observer Worldmap] Starting with zoom_mode=' + zoom_mode);
+
+  if (zoom_mode === 'dynamic') {
+    // Dynamic mode: center on combined territory periodically
+    observer_worldmap_center_dynamic();
+
+    observer_auto_center_interval = setInterval(
+      observer_worldmap_center_dynamic,
+      OBSERVER_AUTO_CENTER_MS
+    );
+
+    // Poll for territory data to load
+    var initial_center_attempts = 0;
+    observer_initial_center_interval = setInterval(function() {
+      initial_center_attempts++;
+      if (has_units_for_any_player()) {
+        clearInterval(observer_initial_center_interval);
+        observer_initial_center_interval = null;
+        observer_worldmap_center_dynamic();
+        freelog(LOG_DEBUG, '[Observer Worldmap] Initial center completed (dynamic mode)');
+      } else if (initial_center_attempts >= MAX_INITIAL_CENTER_ATTEMPTS) {
+        clearInterval(observer_initial_center_interval);
+        observer_initial_center_interval = null;
+        console.warn('[Observer Worldmap] No territory loaded after', MAX_INITIAL_CENTER_ATTEMPTS, 'attempts');
+        notify_observer_centered_fallback('worldmap_territory_timeout');
+      }
+    }, INITIAL_CENTER_POLL_INTERVAL_MS);
+  } else {
+    // Static mode: fit entire map once, poll until map data is available
+    if (!observer_worldmap_fit_entire_map()) {
+      var map_poll_attempts = 0;
+      observer_initial_center_interval = setInterval(function() {
+        map_poll_attempts++;
+        if (observer_worldmap_fit_entire_map()) {
+          clearInterval(observer_initial_center_interval);
+          observer_initial_center_interval = null;
+          freelog(LOG_DEBUG, '[Observer Worldmap] Static fit completed after polling');
+        } else if (map_poll_attempts >= MAX_INITIAL_CENTER_ATTEMPTS) {
+          clearInterval(observer_initial_center_interval);
+          observer_initial_center_interval = null;
+          console.warn('[Observer Worldmap] Map data not available after', MAX_INITIAL_CENTER_ATTEMPTS, 'attempts');
+          notify_observer_centered_fallback('worldmap_map_timeout');
+        }
+      }, INITIAL_CENTER_POLL_INTERVAL_MS);
+    }
+  }
+}
+
 /****************************************************************************
   Clean up observer follow mode - clear interval and reset state.
 ****************************************************************************/
@@ -1257,6 +1551,8 @@ function cleanup_observer_follow_mode()
   observer_last_unit_spread = null;
   observer_last_territory_radius = null;
   observer_last_global_spread = null;
+  observer_last_worldmap_territory_radius = null;
+  observer_worldmap_zoom_mode = null;
   observer_user_interaction_time = 0;
 
   // Remove interaction event listeners to prevent stacking on re-init

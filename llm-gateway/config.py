@@ -88,6 +88,9 @@ class Settings(BaseSettings):
     # Observer streaming settings
     freeciv_web_base_url: str = "http://localhost:8080"  # Base URL for FreeCiv web client
 
+    # Worldmap recording zoom mode: 'static' (full map) or 'dynamic' (fit territories)
+    worldmap_zoom_mode: str = "static"
+
     # Local streaming settings (for development when K8s is not available)
     # Set to enable local_stream_urls in observer-urls response
     # Streaming runs by default with `docker-compose up`
