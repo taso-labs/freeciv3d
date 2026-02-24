@@ -728,11 +728,18 @@ function compute_wrapped_spread_and_centroid(positions)
   distances.sort(function(a, b) { return a - b; });
   var effective_radius = find_outlier_cutoff_radius(distances);
 
+  // Compute max extent from centroid in each axis separately.
+  // Needed for aspect-ratio-aware zoom calculations.
+  var radius_x = Math.max(Math.abs(max_x - centroid_raw_x), Math.abs(min_x - centroid_raw_x));
+  var radius_y = Math.max(Math.abs(max_y - centroid_raw_y), Math.abs(min_y - centroid_raw_y));
+
   return {
     centroid_x: centroid_x,
     centroid_y: centroid_y,
     spread: spread,
     effective_radius: effective_radius,
+    radius_x: radius_x,
+    radius_y: radius_y,
     total_weight: total_weight
   };
 }
@@ -1259,12 +1266,9 @@ var observer_last_worldmap_territory_radius = null;
 var WORLDMAP_TERRITORY_RADIUS_CHANGE_THRESHOLD = 3;
 
 // Worldmap dynamic zoom configuration (camera height values)
-// Wider range than single-player territory zoom since we show all players
-var WORLDMAP_BASE_DY = 400;
-var WORLDMAP_DY_PER_TILE = 30;
-var WORLDMAP_MIN_ZOOM_DY = 400;   // Must be <= WORLDMAP_BASE_DY (floor when radius is 0)
-var WORLDMAP_MAX_ZOOM_DY = 1500;
-// Extra padding (in tiles) added to effective_radius so territory shading
+var WORLDMAP_MIN_ZOOM_DY = 400;
+var WORLDMAP_MAX_ZOOM_DY = 3000;
+// Extra padding (in tiles) added around territory so territory shading
 // (which extends ~3 tiles beyond city/unit positions) is fully visible.
 var WORLDMAP_TERRITORY_PADDING_TILES = 5;
 
@@ -1329,6 +1333,8 @@ function get_all_players_territory_centroid_and_spread()
     centroid: { x: result.centroid_x, y: result.centroid_y },
     spread: result.spread,
     effective_radius: result.effective_radius,
+    radius_x: result.radius_x,
+    radius_y: result.radius_y,
     city_count: city_count,
     unit_count: unit_count,
     player_count: Object.keys(players_with_territory).length,
@@ -1338,13 +1344,32 @@ function get_all_players_territory_centroid_and_spread()
 }
 
 /****************************************************************************
-  Calculate camera height for worldmap dynamic zoom based on combined
-  territory effective radius.
+  Calculate camera height for worldmap dynamic zoom based on territory
+  extents in X and Y, accounting for viewport aspect ratio.
+  PerspectiveCamera FOV=45°, so visible half-height = dy * tan(22.5°).
+  Horizontal visible half-width = dy * tan(22.5°) * aspect_ratio.
+  We pick the axis that requires more zoom-out.
 ****************************************************************************/
-function calculate_zoom_for_worldmap_territory(effective_radius)
+function calculate_zoom_for_worldmap_territory(radius_x, radius_y)
 {
-  var padded_radius = effective_radius + WORLDMAP_TERRITORY_PADDING_TILES;
-  var dy = WORLDMAP_BASE_DY + padded_radius * WORLDMAP_DY_PER_TILE;
+  var padded_x = radius_x + WORLDMAP_TERRITORY_PADDING_TILES;
+  var padded_y = radius_y + WORLDMAP_TERRITORY_PADDING_TILES;
+  var tile_size = (typeof MAPVIEW_ASPECT_FACTOR !== 'undefined') ? MAPVIEW_ASPECT_FACTOR : 35.71;
+  var fov_half_tan = Math.tan((45 / 2) * Math.PI / 180);  // tan(22.5°) ≈ 0.4142
+
+  // Viewport aspect ratio (width/height). Falls back to 16:9 for recording.
+  var aspect = 16 / 9;
+  if (typeof mapview_model_width !== 'undefined' && typeof mapview_model_height !== 'undefined'
+      && mapview_model_height > 0) {
+    aspect = $(window).width() / $(window).height();
+  }
+
+  // dy needed so vertical extent fits: padded_y tiles from center
+  var dy_for_y = (padded_y * tile_size) / fov_half_tan;
+  // dy needed so horizontal extent fits: padded_x tiles from center
+  var dy_for_x = (padded_x * tile_size) / (fov_half_tan * aspect);
+
+  var dy = Math.ceil(Math.max(dy_for_x, dy_for_y));
   return Math.floor(Math.max(WORLDMAP_MIN_ZOOM_DY, Math.min(WORLDMAP_MAX_ZOOM_DY, dy)));
 }
 
@@ -1366,14 +1391,15 @@ function center_on_all_territories_with_zoom()
 
   center_tile_mapcanvas(territory_data.tile);
 
-  var target_dy = calculate_zoom_for_worldmap_territory(territory_data.effective_radius);
+  var target_dy = calculate_zoom_for_worldmap_territory(territory_data.radius_x, territory_data.radius_y);
   camera_dy = target_dy;
   camera_dz = camera_presets['worldmap'].dz;  // Keep near top-down for worldmap view
 
   if (should_update_zoom) {
     observer_last_worldmap_territory_radius = territory_data.effective_radius;
     freelog(LOG_DEBUG, '[Observer Worldmap] Territory: centroid=(' + territory_data.centroid.x + ',' +
-            territory_data.centroid.y + ') radius=' + territory_data.effective_radius +
+            territory_data.centroid.y + ') rx=' + Math.round(territory_data.radius_x) +
+            ' ry=' + Math.round(territory_data.radius_y) +
             ' spread=' + territory_data.spread +
             ' (' + territory_data.city_count + 'c/' + territory_data.unit_count + 'u) ' +
             territory_data.player_count + ' players, dy=' + target_dy);
