@@ -163,10 +163,6 @@ class TestStaleConnectionRetryLogic(unittest.TestCase):
         should_retry = is_reconnecting and join_rejected
         self.assertTrue(should_retry)
 
-        # Case 3: Reconnection with any rejection reason - SHOULD retry
-        should_retry = is_reconnecting and join_rejected
-        self.assertTrue(should_retry)
-
     def test_handshake_timeout_treated_as_rejection(self):
         """Handshake timeout should synthesize join_rejected=True for retry."""
         # When handshake times out and join_rejected is still False,

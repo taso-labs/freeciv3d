@@ -636,7 +636,7 @@ class TestPerformanceRequirements(unittest.TestCase):
         self.assertTrue(success)
 
         stats = self.cache.get_cache_stats()
-        # Verify compression is enabled (metrics were removed for thread safety)
+        # Verify compression is enabled and cache is operational
         self.assertTrue(stats['compression_enabled'])
         # Verify data was cached successfully
         self.assertGreaterEqual(stats['cache_entries'], 1)
