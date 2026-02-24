@@ -147,7 +147,7 @@ class TestStreamManagerJobCreation:
                 env_dict = {e.name: e.value for e in container.env}
                 observer_url = env_dict["OBSERVER_URL"]
                 assert "camera=worldmap" in observer_url
-                assert "zoom_mode=static" in observer_url
+                assert "zoom_mode=dynamic" in observer_url
                 assert "civserverport=6005" in observer_url
                 break
 

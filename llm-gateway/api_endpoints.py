@@ -985,7 +985,7 @@ async def get_observer_urls(
         # Connection delays removed - Option B (lazy loading in agent-clash-client) handles
         # loading iframes one at a time when user selects them, eliminating the need for stagger.
         # Worldmap zoom mode: 'static' shows entire map, 'dynamic' fits territories
-        worldmap_zoom_mode = getattr(settings, 'worldmap_zoom_mode', 'static')
+        worldmap_zoom_mode = getattr(settings, 'worldmap_zoom_mode', 'dynamic')
 
         observer_urls = {
             "global": (

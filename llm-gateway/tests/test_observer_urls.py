@@ -126,7 +126,7 @@ class TestObserverUrlsEndpoint:
 
         # Parse URL and check parameters
         assert "camera=worldmap" in global_url
-        assert "zoom_mode=static" in global_url
+        assert "zoom_mode=dynamic" in global_url
         assert "embed=1" in global_url
         assert "autojoin=1" in global_url
         assert "action=observe" in global_url

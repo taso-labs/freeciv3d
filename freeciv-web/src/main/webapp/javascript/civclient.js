@@ -1264,6 +1264,9 @@ var WORLDMAP_BASE_DY = 400;
 var WORLDMAP_DY_PER_TILE = 30;
 var WORLDMAP_MIN_ZOOM_DY = 400;   // Must be <= WORLDMAP_BASE_DY (floor when radius is 0)
 var WORLDMAP_MAX_ZOOM_DY = 1500;
+// Extra padding (in tiles) added to effective_radius so territory shading
+// (which extends ~3 tiles beyond city/unit positions) is fully visible.
+var WORLDMAP_TERRITORY_PADDING_TILES = 5;
 
 /****************************************************************************
   Calculate the centroid and spread of all territory (cities + units) from
@@ -1340,7 +1343,8 @@ function get_all_players_territory_centroid_and_spread()
 ****************************************************************************/
 function calculate_zoom_for_worldmap_territory(effective_radius)
 {
-  var dy = WORLDMAP_BASE_DY + effective_radius * WORLDMAP_DY_PER_TILE;
+  var padded_radius = effective_radius + WORLDMAP_TERRITORY_PADDING_TILES;
+  var dy = WORLDMAP_BASE_DY + padded_radius * WORLDMAP_DY_PER_TILE;
   return Math.floor(Math.max(WORLDMAP_MIN_ZOOM_DY, Math.min(WORLDMAP_MAX_ZOOM_DY, dy)));
 }
 
@@ -1448,13 +1452,16 @@ function observer_worldmap_fit_entire_map()
   center_tile_mapcanvas(center_tile);
 
   // Calculate camera_dy to fit the entire map in the viewport.
-  // The map scene dimensions are proportional to map tile dimensions.
-  // We use the larger dimension to ensure the full map fits.
+  // Each tile is MAPVIEW_ASPECT_FACTOR (~35.71) scene units.
+  // PerspectiveCamera FOV=45°, so visible ground height ≈ 2 * dy * tan(22.5°).
+  // Required dy = scene_extent / (2 * tan(22.5°)).
+  // For 16:9 aspect ratio, vertical dimension is the constraint.
+  // We use the larger map dimension and add 15% padding for edges.
   var map_extent = Math.max(map['xsize'], map['ysize']);
-
-  // Empirically calibrated: dy ~= 20 * map_extent gives good full-map coverage
-  // at 1280x720 recording resolution. Clamped to reasonable bounds.
-  var target_dy = Math.floor(Math.max(600, Math.min(2000, 20 * map_extent)));
+  var scene_extent = map_extent * (typeof MAPVIEW_ASPECT_FACTOR !== 'undefined' ? MAPVIEW_ASPECT_FACTOR : 35.71);
+  var fov_half_tan = Math.tan((45 / 2) * Math.PI / 180);  // tan(22.5°) ≈ 0.414
+  var padding = 1.15;  // 15% padding to avoid clipping at edges
+  var target_dy = Math.floor(Math.max(800, (scene_extent * padding) / (2 * fov_half_tan)));
   camera_dy = target_dy;
   // Keep camera nearly top-down for full map view
   camera_dz = camera_presets['worldmap'].dz;

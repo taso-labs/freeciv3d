@@ -91,7 +91,7 @@ class Settings(BaseSettings):
 
     # Worldmap recording zoom mode: 'static' (full map) or 'dynamic' (fit territories)
     # Validated values: 'static' or 'dynamic'
-    worldmap_zoom_mode: str = "static"
+    worldmap_zoom_mode: str = "dynamic"
 
     @field_validator('worldmap_zoom_mode')
     @classmethod

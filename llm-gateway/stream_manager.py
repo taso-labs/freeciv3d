@@ -370,7 +370,7 @@ class StreamManager:
 
         # Add zoom_mode for worldmap camera
         if view == "global":
-            worldmap_zoom_mode = os.environ.get("GATEWAY_WORLDMAP_ZOOM_MODE", "static")
+            worldmap_zoom_mode = os.environ.get("GATEWAY_WORLDMAP_ZOOM_MODE", "dynamic")
             params.append(f"zoom_mode={worldmap_zoom_mode}")
 
         # Add player-specific params for fog-of-war perspective
@@ -1053,7 +1053,7 @@ class LocalStreamManager:
 
         # Add zoom_mode for worldmap camera
         if view == "global":
-            worldmap_zoom_mode = os.environ.get("GATEWAY_WORLDMAP_ZOOM_MODE", "static")
+            worldmap_zoom_mode = os.environ.get("GATEWAY_WORLDMAP_ZOOM_MODE", "dynamic")
             params.append(f"zoom_mode={worldmap_zoom_mode}")
 
         if view in ("player1", "player2") and player_names:
