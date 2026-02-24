@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.60](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.59...freeciv3d-v0.3.60) (2026-02-24)
+
+
+### Bug Fixes
+
+* **proxy:** broaden stale connection retry and fix pre-existing bugs ([#166](https://github.com/taso-ventures/freeciv3d/issues/166)) ([d15e3a7](https://github.com/taso-ventures/freeciv3d/commit/d15e3a79d993b4950f988c2932221ebaa0a11d01))
+
 ## [0.3.59](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.58...freeciv3d-v0.3.59) (2026-02-23)
 
 
