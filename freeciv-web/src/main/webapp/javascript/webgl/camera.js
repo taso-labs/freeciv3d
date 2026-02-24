@@ -46,7 +46,7 @@ var camera_presets = {
 
 /****************************************************************************
   Apply a camera preset by name.
-  @param {string} preset_name - One of: default, strategic, cinematic, isometric
+  @param {string} preset_name - One of: default, strategic, cinematic, isometric, worldmap
 ****************************************************************************/
 function set_camera_preset(preset_name)
 {

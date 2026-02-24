@@ -1262,7 +1262,7 @@ var WORLDMAP_TERRITORY_RADIUS_CHANGE_THRESHOLD = 3;
 // Wider range than single-player territory zoom since we show all players
 var WORLDMAP_BASE_DY = 400;
 var WORLDMAP_DY_PER_TILE = 30;
-var WORLDMAP_MIN_ZOOM_DY = 350;
+var WORLDMAP_MIN_ZOOM_DY = 400;   // Must be <= WORLDMAP_BASE_DY (floor when radius is 0)
 var WORLDMAP_MAX_ZOOM_DY = 1500;
 
 /****************************************************************************
@@ -1364,6 +1364,7 @@ function center_on_all_territories_with_zoom()
 
   var target_dy = calculate_zoom_for_worldmap_territory(territory_data.effective_radius);
   camera_dy = target_dy;
+  camera_dz = camera_presets['worldmap'].dz;  // Keep near top-down for worldmap view
 
   if (should_update_zoom) {
     observer_last_worldmap_territory_radius = territory_data.effective_radius;
@@ -1456,7 +1457,7 @@ function observer_worldmap_fit_entire_map()
   var target_dy = Math.floor(Math.max(600, Math.min(2000, 20 * map_extent)));
   camera_dy = target_dy;
   // Keep camera nearly top-down for full map view
-  camera_dz = 80;
+  camera_dz = camera_presets['worldmap'].dz;
 
   freelog(LOG_DEBUG, '[Observer Worldmap] Static fit: map=' + map['xsize'] + 'x' + map['ysize'] +
           ' center=(' + center_x + ',' + center_y + ') dy=' + target_dy);
@@ -1510,6 +1511,9 @@ function start_observer_worldmap_intervals()
       }
     }, INITIAL_CENTER_POLL_INTERVAL_MS);
   } else {
+    if (zoom_mode !== 'static') {
+      console.warn('[Observer Worldmap] Unknown zoom_mode="' + zoom_mode + '", defaulting to static');
+    }
     // Static mode: fit entire map once, poll until map data is available
     if (!observer_worldmap_fit_entire_map()) {
       var map_poll_attempts = 0;
