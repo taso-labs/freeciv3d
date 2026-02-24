@@ -122,6 +122,7 @@ TURN_DRIFT_TOLERANCE = llm_config.get('reconnection.turn_drift_tolerance', 5)  #
 # Stale connection retry constants — when civserver rejects join during reconnection
 STALE_CONN_HANDSHAKE_WAIT_SEC = 5.0  # Max wait for handshake reply from civserver
 STALE_CONN_DISCONNECT_WAIT_SEC = 3.0  # Wait after force-closing old connection before retry
+NON_RETRIABLE_REASONS = ('server is full', 'game has already started')  # Rejections that should not trigger stale-conn retry
 
 # Connection health monitoring - threshold for marking connection as dead
 # After this many consecutive send failures, the connection is marked dead and game is paused
@@ -708,7 +709,6 @@ class LLMWSHandler(websocket.WebSocketHandler):
                                 self.civcom.join_rejection_reason = f"Handshake timeout ({STALE_CONN_HANDSHAKE_WAIT_SEC}s)"
 
                         # Skip retry for definitively non-retriable rejections
-                        NON_RETRIABLE_REASONS = ('server is full', 'game has already started')
                         reason_lower = (self.civcom.join_rejection_reason or '').lower()
                         is_non_retriable = any(r in reason_lower for r in NON_RETRIABLE_REASONS)
 

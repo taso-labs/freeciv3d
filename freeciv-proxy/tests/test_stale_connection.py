@@ -107,29 +107,45 @@ class TestCivComJoinRejected(unittest.TestCase):
 class TestStaleConnectionRetryLogic(unittest.TestCase):
     """Test the retry decision logic for stale connections.
 
-    Any civserver rejection during reconnection should trigger cleanup-and-retry.
-    The rejection reason string is not matched — only join_rejected=True matters.
+    Most civserver rejections during reconnection trigger cleanup-and-retry.
+    However, definitively non-retriable rejections (e.g. server full, game
+    already started) skip retry to avoid futile reconnection attempts.
     """
 
-    def test_any_rejection_triggers_retry(self):
-        """Any join_rejected=True during reconnection should trigger retry,
-        regardless of reason string (including None)."""
-        # The condition in llm_handler.py is: if self.civcom.join_rejected:
-        # No string matching on the reason — any rejection is retriable.
-        # (None was a production failure with old string-matching logic.)
-        reasons = [
+    def test_retriable_rejection_triggers_retry(self):
+        """Retriable rejections during reconnection should trigger retry."""
+        from llm_handler import NON_RETRIABLE_REASONS
+
+        retriable_reasons = [
             None,
             "'Grok-41_Fast' already connected.",
-            "Server is full",
             "Invalid username",
-            "Game has already started",
             f"Handshake timeout (5.0s)",
         ]
-        for reason in reasons:
+        for reason in retriable_reasons:
             join_rejected = True
             is_reconnecting = True
-            should_retry = is_reconnecting and join_rejected
+            reason_lower = (reason or '').lower()
+            is_non_retriable = any(r in reason_lower for r in NON_RETRIABLE_REASONS)
+            should_retry = is_reconnecting and join_rejected and not is_non_retriable
             self.assertTrue(should_retry, f"Should retry for reason: {reason!r}")
+
+    def test_non_retriable_rejection_skips_retry(self):
+        """Non-retriable rejections (server full, game started) should skip retry."""
+        from llm_handler import NON_RETRIABLE_REASONS
+
+        non_retriable_reasons = [
+            "Server is full",
+            "Game has already started",
+            "server is full",  # case-insensitive
+        ]
+        for reason in non_retriable_reasons:
+            join_rejected = True
+            is_reconnecting = True
+            reason_lower = (reason or '').lower()
+            is_non_retriable = any(r in reason_lower for r in NON_RETRIABLE_REASONS)
+            should_retry = is_reconnecting and join_rejected and not is_non_retriable
+            self.assertFalse(should_retry, f"Should NOT retry for reason: {reason!r}")
 
     def test_retry_only_during_reconnection(self):
         """Retry logic should only activate when is_reconnecting=True."""
