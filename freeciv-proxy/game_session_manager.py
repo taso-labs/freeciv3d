@@ -860,7 +860,7 @@ class GameSessionManager:
         when no local servers are available on the current pod in Kubernetes).
 
         Args:
-            game_id: Unique game identifier (e.g., match_id from agent-clash)
+            game_id: Unique game identifier provided by the connecting agent
 
         Returns:
             Allocated port number, or None if allocation failed after all retries
@@ -1220,7 +1220,7 @@ class GameSessionManager:
         Args:
             suspension_timeout_secs: How long a paused session is kept alive for
                 potential reconnect before its port is reclaimed.  Defaults to
-                the ``SESSION_SUSPENSION_TIMEOUT_SECS`` env-var (3600 s / 60 min).
+                the ``SESSION_SUSPENSION_TIMEOUT_SECS`` env-var (default varies by deployment).
 
         Returns:
             Number of stale paused sessions successfully cleaned up.

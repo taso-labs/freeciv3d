@@ -14,12 +14,12 @@ HEALTH_CHECK_TIMEOUT = 5.0  # Health check ping timeout
 CLEANUP_CYCLE_SECONDS = 60  # Connection cleanup cycle
 TOKEN_TTL_SECONDS = 86400  # Token time-to-live (24 hours)
 SESSION_TIMEOUT_SECONDS = 3600  # Session timeout (1 hour)
-SESSION_RESUMPTION_WINDOW = 300  # seconds to allow session resume after disconnect (5 min, matches config.py)
+SESSION_RESUMPTION_WINDOW = 3600  # seconds to allow session resume after disconnect (1 hour, matches config.py)
 DEFAULT_AGENT_TIMEOUT = 600  # 10 minutes for longer games
 
 # Rate limiting constants
-DEFAULT_REQUESTS_PER_MINUTE = 200  # Increased for 2-4 player concurrent games
-DEFAULT_BURST_SIZE = 40  # Increased to handle turn spikes (20-24 messages/turn)
+DEFAULT_REQUESTS_PER_MINUTE = 300  # Increased from 200 for concurrent multi-player games (matches config.py)
+DEFAULT_BURST_SIZE = 80  # Increased from 40 - allows ~20 actions per turn for 4 players (matches config.py)
 RATE_LIMIT_WINDOW_SECONDS = 60
 MAX_TIMED_OUT_REQUESTS_WARNING = 10  # Warning threshold for timed out requests
 RATE_LIMIT_GRACE_PERIOD = 30  # seconds before blocking on violations

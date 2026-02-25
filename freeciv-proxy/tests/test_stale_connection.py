@@ -341,7 +341,7 @@ class TestTurnDriftCivComDestruction(unittest.TestCase):
     def test_expected_turn_zero_skips_verification(self):
         """expected_turn=0 (or None) should skip state verification entirely."""
         # The guard condition: if expected_turn is not None and expected_turn > 0
-        # Both None and 0 skip verification — agent-clash uses this on retry.
+        # Both None and 0 skip verification — callers use this on retry.
         for expected_turn in [None, 0]:
             should_verify = expected_turn is not None and expected_turn > 0
             self.assertFalse(should_verify, f"expected_turn={expected_turn!r} should skip verification")

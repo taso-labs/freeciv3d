@@ -24,7 +24,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 # Disable API key for testing
 os.environ["GATEWAY_REQUIRE_API_KEY"] = "false"
 # ROOT.war deploys at / context, so no path prefix needed
-os.environ["GATEWAY_FREECIV_WEB_BASE_URL"] = "https://freeciv.agentclash.gg"
+os.environ["GATEWAY_FREECIV_WEB_BASE_URL"] = "https://freeciv.example.com"
 
 from fastapi.testclient import TestClient
 from main import app
@@ -175,7 +175,7 @@ class TestObserverUrlsEndpoint:
 
         # All URLs should start with configured base URL + /webclient/
         for view_type, url in data["observer_urls"].items():
-            assert url.startswith("https://freeciv.agentclash.gg/webclient/"), \
+            assert url.startswith("https://freeciv.example.com/webclient/"), \
                 f"{view_type} URL should use configured base URL"
 
     def test_urls_include_civserverport_parameter(self):
@@ -249,7 +249,7 @@ class TestObserverUrlsConfig:
         assert settings.freeciv_web_base_url == "https://custom.example.com"
 
         # Restore original value (ROOT.war deploys at / context)
-        os.environ["GATEWAY_FREECIV_WEB_BASE_URL"] = "https://freeciv.agentclash.gg"
+        os.environ["GATEWAY_FREECIV_WEB_BASE_URL"] = "https://freeciv.example.com"
 
     def test_freeciv_web_base_url_has_default(self):
         """Setting should have a default value when env var not set"""

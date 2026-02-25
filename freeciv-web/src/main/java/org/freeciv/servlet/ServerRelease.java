@@ -34,7 +34,7 @@ import org.freeciv.util.Constants;
 import org.json.JSONObject;
 
 /**
- * Server release API for LLM game arena integration
+ * Server release API for LLM agent integration
  * Releases allocated servers back to the available pool
  *
  * Supports game_id parameter:

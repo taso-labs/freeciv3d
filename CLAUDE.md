@@ -58,7 +58,7 @@ Freeciv3D is a multi-component web-based strategy game with the following archit
    - **LLM Gateway API** (port 8003) - WebSocket API for LLM agent integration
    - Pass-through architecture with message transformation
    - Connection management, rate limiting, authentication
-   - Enables agent-clash to control FreeCiv games
+   - Enables external LLM agents to control FreeCiv games
    - **Both components start automatically** with defaults from docker-compose.yml
 
 ### Communication Flow
@@ -70,7 +70,7 @@ Browser (WebGL/WebGPU) → nginx → freeciv-web (Tomcat) → freeciv-proxy (Web
 
 **LLM Agent Flow:**
 ```
-agent-clash → llm-gateway (8003) → freeciv-proxy (8002) → freeciv server (6000-6009)
+LLM agent → llm-gateway (8003) → freeciv-proxy (8002) → freeciv server (6000-6009)
 ```
 
 ### Server Allocation System
@@ -81,7 +81,7 @@ The LLM Gateway integration includes **dynamic server pool management** to preve
 
 - **ServerRelease** (`POST /freeciv-web/meta/release`) - Returns a game server to the available pool after game completion, resetting its state to 'Pregame'.
 
-- **MetaserverClient** (`llm-gateway/metaserver_client.py`) - Python client for calling the allocation/release servlets from agent-clash or other Python components.
+- **MetaserverClient** (`llm-gateway/metaserver_client.py`) - Python client for calling the allocation/release servlets from LLM agent clients or other Python components.
 
 These servlets enable concurrent LLM games by treating the 10 game servers as a shared resource pool. The allocation system is documented in the `servers` MySQL table and managed through Java servlets in `freeciv-web/src/main/java/org/freeciv/servlet/`. For complete API documentation and usage examples, see [llm-gateway/README.md](llm-gateway/README.md).
 

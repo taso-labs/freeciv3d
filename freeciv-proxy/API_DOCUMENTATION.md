@@ -266,9 +266,9 @@ HttpResponse response = httpClient.get(url);
 GameState state = mapper.readValue(response.body(), GameState.class);
 ```
 
-### With Game Arena Framework
+### With Python Client
 ```python
-# Python Game Arena can access the endpoints directly
+# Python clients can access the endpoints directly
 import requests
 
 response = requests.get(f"http://localhost:8002/api/game/{game_id}/state",
@@ -291,7 +291,7 @@ The service is implemented as a Python extension to the existing freeciv-proxy, 
 
 - **Leverages existing infrastructure**: Uses established Python state extraction capabilities
 - **Direct server access**: Maintains direct connection to FreeCiv C server
-- **Eliminates redundancy**: Avoids Game Arena → Java → Python → FreeCiv communication chain
+- **Eliminates redundancy**: Avoids extra hops in the communication chain
 - **Better performance**: Reduces latency and improves maintainability
 - **Single responsibility**: Centralizes all state management in one service
 

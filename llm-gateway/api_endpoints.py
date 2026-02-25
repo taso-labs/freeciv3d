@@ -308,7 +308,7 @@ async def get_global_game_state(
     """Get authoritative global game state without fog of war.
 
     Returns all units, cities, and players from the game server's in-memory
-    state. Used by match orchestrator for stats collection.
+    state. Used by external clients for stats collection.
     """
     try:
         if gateway is None:
@@ -656,7 +656,7 @@ async def stop_game(
     """
     Stop a game session and return final state.
 
-    Called by AgentClash gateway when an admin stops a match.
+    Called by the controlling client when an admin stops a game.
     Captures final game statistics before cleanup.
 
     Modes:
@@ -870,7 +870,7 @@ async def get_observer_urls(
     request: Request
 ) -> Dict[str, Any]:
     """
-    Get observer URLs for embedding game views in agent-clash-client.
+    Get observer URLs for embedding game views in an external application.
 
     Returns 3 observer URLs:
     - global: World map view with both agents' territories visible (worldmap camera preset)
@@ -885,7 +885,7 @@ async def get_observer_urls(
     """
     try:
         # Poll for game info with timeout to handle race condition where
-        # agent-clash requests observer URLs before auth_success is processed.
+        # the client requests observer URLs before auth_success is processed.
         max_attempts = OBSERVER_URL_MAX_RETRY_ATTEMPTS
         attempt_delay = OBSERVER_URL_RETRY_DELAY_SECONDS
         max_wait_seconds = max_attempts * attempt_delay
@@ -982,7 +982,7 @@ async def get_observer_urls(
         # - Observer registration failures
         # - Incomplete game state synchronization
         #
-        # Connection delays removed - Option B (lazy loading in agent-clash-client) handles
+        # Connection delays removed - Option B (lazy loading in the embedding application) handles
         # loading iframes one at a time when user selects them, eliminating the need for stagger.
         # Worldmap zoom mode: 'static' shows entire map, 'dynamic' fits territories
         worldmap_zoom_mode = settings.worldmap_zoom_mode

@@ -337,7 +337,7 @@ if __name__ == "__main__":
         # WebSocket keepalive to prevent idle connection timeouts
         # GKE load balancer has 600s default idle timeout, nginx has 90s proxy_read_timeout
         # Sending pings every 30s ensures connections stay alive through all proxies
-        # Agent-clash client also sends pings (5s interval), but server-side pings provide
+        # LLM agent clients also send pings (5s interval), but server-side pings provide
         # redundancy and ensure bidirectional keepalive
         # Increased to 180s (3 min) for LLM agent connections that may have slow response times
         # Must match llm-gateway's uvicorn ws-ping-timeout (docker-entrypoint.sh, start-llm-gateway.sh)

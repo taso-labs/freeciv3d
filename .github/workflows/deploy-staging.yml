@@ -196,7 +196,7 @@ jobs:
                   - type: "mrkdwn"
                     text: "*Version:*\n`${{ steps.version.outputs.version }}`"
                   - type: "mrkdwn"
-                    text: "*URL:*\n<https://staging.agentclash.ai|staging.agentclash.ai>"
+                    text: "*URL:*\n<https://staging.freeciv3d.example.com|staging>"
               - type: "actions"
                 elements:
                   - type: "button"

@@ -16,6 +16,6 @@ CREATE TABLE IF NOT EXISTS game_allocations (
 );
 
 -- Comment on table explaining its purpose
--- game_allocations persists the mapping between game IDs (from agent-clash match_id)
+-- game_allocations persists the mapping between game IDs (from LLM agent clients)
 -- and the civserver port allocated for that game. When an agent reconnects,
 -- ServerAllocator checks this table first to return the same port.

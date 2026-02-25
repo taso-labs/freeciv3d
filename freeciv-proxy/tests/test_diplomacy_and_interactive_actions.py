@@ -8,7 +8,7 @@ Covers:
 - Advanced spy action generation (6 new actions)
 - Expel unit action generation
 - Packet converter mappings for diplomacy actions
-- _normalize_agent_clash_action() diplomacy support
+- _normalize_agent_action() diplomacy support
 - get_all_players_with_diplomacy() enrichment
 """
 
@@ -508,8 +508,8 @@ class TestExpelUnitAction:
         assert result is False
 
 
-class TestNormalizeAgentClashDiplomacyAction:
-    """Test _normalize_agent_clash_action handles diplomacy actions (Step 9)."""
+class TestNormalizeAgentDiplomacyAction:
+    """Test _normalize_agent_action handles diplomacy actions (Step 9)."""
 
     def _make_handler_stub(self):
         """Create a minimal LLMHandler-like object for normalize testing."""

@@ -152,47 +152,13 @@ else
 fi
 
 echo ""
-echo "Testing agent-clash compatibility..."
+echo "Testing LLM agent compatibility..."
 
-# Check if agent-clash directory exists
-if [ -d "../agent-clash" ]; then
-    echo "Testing connection from agent-clash client..."
-
-    # Try to run a simple connection test from agent-clash
-    cd ../agent-clash
-    if python3 -c "
-import asyncio
-import sys
-import os
-sys.path.append('.')
-from agent_clash.harness.freeciv_proxy_client import FreeCivLLMTester
-
-async def test_connection():
-    tester = FreeCivLLMTester('localhost', 8002)
-    try:
-        connected = await tester.connect()
-        if connected:
-            print('✓ agent-clash can connect to FreeCiv3D LLM Gateway')
-            await tester.disconnect()
-            return True
-        else:
-            print('✗ agent-clash cannot connect to FreeCiv3D LLM Gateway')
-            return False
-    except Exception as e:
-        print(f'✗ Connection test failed: {e}')
-        return False
-
-result = asyncio.run(test_connection())
-exit(0 if result else 1)
-" 2>/dev/null; then
-        print_status "ok" "agent-clash integration test passed"
-    else
-        print_status "warn" "agent-clash integration test failed (may need agent-clash setup)"
-    fi
-
-    cd "$FREECIV_DIR"
+# Test WebSocket gateway is reachable
+if curl -s -o /dev/null -w "%{http_code}" "http://localhost:8003/health" | grep -q "200"; then
+    print_status "ok" "LLM Gateway health check passed"
 else
-    print_status "warn" "agent-clash directory not found, skipping integration test"
+    print_status "warn" "LLM Gateway health check failed (may need gateway setup)"
 fi
 
 echo ""

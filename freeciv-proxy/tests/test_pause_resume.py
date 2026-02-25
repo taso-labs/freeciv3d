@@ -1397,7 +1397,7 @@ class TestStaleHandlerGuard(unittest.TestCase):
 
 class TestReconnectionStillWorks(unittest.TestCase):
     """Verify the full disconnect -> reconnect -> resume flow still works
-    after the cascade fix. The orchestrator relies on coordinated disconnect
+    after the cascade fix. External clients rely on coordinated disconnect
     to trigger reconnection."""
 
     def setUp(self):

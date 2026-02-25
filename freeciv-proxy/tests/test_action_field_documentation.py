@@ -2,15 +2,15 @@
 TDD Documentation: Action Field Names Protocol
 
 Documents ALL field names that FreeCiv3D sends in legal_actions.
-These fields MUST be preserved through the agent-clash LLM round-trip.
+These fields MUST be preserved through the LLM agent client LLM round-trip.
 
 ## Purpose
 This test file serves as living documentation of the action protocol.
 If a test fails, it means either:
-1. The validator changed field requirements (update agent-clash)
+1. The validator changed field requirements (update LLM agent client)
 2. A field name was accidentally changed (fix the regression)
 
-## Field Reference for agent-clash ActionTarget struct
+## Field Reference for LLM agent client ActionTarget struct
 
 | Field Name       | Used By Actions                            | Purpose                    |
 |------------------|-------------------------------------------|----------------------------|
@@ -119,7 +119,7 @@ GAME_STATE = {
 class TestTransportActionFields(unittest.TestCase):
     """
     Document fields for transport operations.
-    These fields MUST be in agent-clash ActionTarget struct.
+    These fields MUST be in LLM agent client ActionTarget struct.
 
     Transport operations allow units to board and exit transports (ships, carriers).
     The key field is `transport_id` which identifies the target transport.
@@ -239,7 +239,7 @@ class TestTransportActionFields(unittest.TestCase):
 class TestEspionageActionFields(unittest.TestCase):
     """
     Document fields for spy/diplomat operations.
-    These fields MUST be in agent-clash ActionTarget struct.
+    These fields MUST be in LLM agent client ActionTarget struct.
 
     Espionage actions use diplomats/spies against enemy cities or units.
     Key fields: target_city_id, target_unit_id, sub_target (for targeted ops).
@@ -424,7 +424,7 @@ class TestEspionageActionFields(unittest.TestCase):
 class TestCombatActionFields(unittest.TestCase):
     """
     Document fields for combat operations.
-    These fields MUST be in agent-clash ActionTarget struct.
+    These fields MUST be in LLM agent client ActionTarget struct.
 
     Combat actions can target by coordinates (target_x, target_y) or
     by specific unit/city ID (target_unit_id, target_city_id).
@@ -549,7 +549,7 @@ class TestCombatActionFields(unittest.TestCase):
 class TestMovementActionFields(unittest.TestCase):
     """
     Document fields for special movement operations.
-    These fields MUST be in agent-clash ActionTarget struct.
+    These fields MUST be in LLM agent client ActionTarget struct.
 
     Special movement uses coordinates for destination or city IDs.
     """
@@ -610,7 +610,7 @@ class TestMovementActionFields(unittest.TestCase):
 class TestTradeActionFields(unittest.TestCase):
     """
     Document fields for trade/caravan operations.
-    These fields MUST be in agent-clash ActionTarget struct.
+    These fields MUST be in LLM agent client ActionTarget struct.
 
     Trade actions use target_city_id for the destination city.
     """
@@ -690,7 +690,7 @@ class TestTradeActionFields(unittest.TestCase):
 class TestTerrainActionFields(unittest.TestCase):
     """
     Document fields for terrain improvement operations.
-    These fields MUST be in agent-clash ActionTarget struct.
+    These fields MUST be in LLM agent client ActionTarget struct.
 
     Terrain actions may specify optional targets (what to pillage, base type).
     """
@@ -745,7 +745,7 @@ class TestTerrainActionFields(unittest.TestCase):
 class TestCityActionFields(unittest.TestCase):
     """
     Document fields for city management operations.
-    These fields MUST be in agent-clash ActionTarget struct.
+    These fields MUST be in LLM agent client ActionTarget struct.
     """
 
     def setUp(self):
@@ -825,7 +825,7 @@ class TestCityActionFields(unittest.TestCase):
 class TestDiplomacyActionFields(unittest.TestCase):
     """
     Document fields for diplomacy operations.
-    These fields MUST be in agent-clash ActionTarget struct.
+    These fields MUST be in LLM agent client ActionTarget struct.
     """
 
     def setUp(self):

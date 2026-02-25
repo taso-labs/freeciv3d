@@ -140,7 +140,7 @@ spec:
 
             # Session timeout configuration
             # SESSION_TIMEOUT_SECONDS: Max session lifetime (default: 1 hour)
-            # SESSION_SUSPENSION_TIMEOUT_SECS: Suspended session reconnect window (default: 24 hours)
+            # SESSION_SUSPENSION_TIMEOUT_SECS: Suspended session reconnect window (set to 24 hours for production)
             - name: SESSION_TIMEOUT_SECONDS
               value: "3600"
             - name: SESSION_SUSPENSION_TIMEOUT_SECS

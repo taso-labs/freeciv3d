@@ -104,6 +104,9 @@ docs/**
 docs/*
 docs/
 
+# Audit reports (local-only, not tracked)
+AUDIT_BUGS.md
+
 # Streaming container development artifacts
 streaming/node_modules/
 streaming/coverage/

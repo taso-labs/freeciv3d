@@ -2451,7 +2451,7 @@ class CivCom(Thread):
         game_turn = getattr(self, 'game_turn', 1)
         game_phase = getattr(self, 'game_phase', 'movement')
 
-        # Always include 'game' dict at top level for agent-clash compatibility
+        # Always include 'game' dict at top level for LLM API compatibility
         game_dict = {
             'turn': game_turn,
             'phase': game_phase,
@@ -2462,7 +2462,7 @@ class CivCom(Thread):
         legal_actions = self._get_legal_actions_optimized(player_id)
 
         # Convert all_players list to dict keyed by player ID (as string)
-        # Required for agent-clash FreeCivState compatibility
+        # Required for FreeCivState API compatibility
         # Enrich with diplomatic state relative to requesting player
         players_dict = {}
         for p in self.get_all_players_with_diplomacy(player_id):
@@ -2485,7 +2485,7 @@ class CivCom(Thread):
             'tactical': self._build_tactical_view(player_id),
             'economic': self._build_economic_view(player_id),
             'legal_actions': legal_actions,
-            # Required fields for agent-clash FreeCivState compatibility
+            # Required fields for FreeCivState API compatibility
             'players': players_dict,
             'units': units_dict,
             'cities': cities_dict,

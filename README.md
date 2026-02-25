@@ -48,7 +48,7 @@ Freeciv-Web consists of these components:
   Implemented in Python.
 
 * [LLM Gateway](llm-gateway) - a FastAPI-based WebSocket gateway that enables AI agent integration.
-  Provides a pass-through layer for agent-clash LLM agents to control FreeCiv games via WebSocket API.
+  Provides a pass-through layer for LLM agents to control FreeCiv games via WebSocket API.
   Includes connection management, rate limiting, authentication, and message transformation.
   Implemented in Python. **(Starts automatically with sensible defaults)**
 
@@ -58,7 +58,7 @@ Freeciv-Web consists of these components:
 graph LR
     subgraph "Client Layer"
         B[Web Browser]
-        A[agent-clash<br/>LLM Agents]
+        A[LLM Agent<br/>Client]
     end
 
     subgraph "Gateway Layer"
@@ -156,7 +156,7 @@ http://localhost:8080/
 
 #### LLM Gateway for AI Integration
 
-FreeCiv3D includes an LLM Gateway that enables AI agents (like those in agent-clash) to play FreeCiv through a WebSocket API. The complete gateway system starts automatically with sensible defaults - no configuration needed for testing.
+FreeCiv3D includes an LLM Gateway that enables AI agents to play FreeCiv through a WebSocket API. The complete gateway system starts automatically with sensible defaults - no configuration needed for testing.
 
 **Architecture:**
 
@@ -180,9 +180,9 @@ docker logs fciv-net | grep -E "(FreeCiv proxy|LLM Gateway)"
 # ✓ LLM Gateway started on port 8003 (PID: XXXXX)
 ```
 
-**For agent-clash Integration:**
+**Authentication:**
 
-The gateway uses authentication tokens to secure connections from agent-clash. Default tokens are provided for testing:
+The gateway uses authentication tokens to secure connections from LLM agents. Default tokens are provided for testing:
 
 * `test-token-fc3d-001`
 * `test-token-fc3d-002`
@@ -199,7 +199,7 @@ services:
 
 Or use a `.env` file (see [`.env.example`](.env.example) for all options).
 
-**Note**: LLM provider API keys (OpenAI, Gemini, etc.) are handled by agent-clash, not freeciv3d.
+**Note**: LLM provider API keys (OpenAI, Gemini, etc.) are handled by your agent client, not freeciv3d.
 
 **Local Development Setup:**
 ```bash
@@ -222,24 +222,30 @@ python3 tests/test_llm_websocket.py localhost 8002
 
 For detailed Docker optimization information, see [DOCKER_OPTIMIZATION.md](DOCKER_OPTIMIZATION.md).
 
-**agent-clash Integration:**
-To connect agent-clash to FreeCiv3D:
+**LLM Agent Integration:**
+To connect an LLM agent to FreeCiv3D:
 
 ```python
-from agent_clash.harness.freeciv_proxy_client import FreeCivProxyClient
+import websockets
+import json
 
-client = FreeCivProxyClient(
-    host="localhost",  # or "fciv-net" when running inside Docker network
-    port=8003,  # LLM Gateway API port
-    api_token="test-token-fc3d-001",
-    agent_id="my_ai_agent",
-    game_id="test_game"
-)
+# Connect via WebSocket to LLM Gateway
+async with websockets.connect("ws://localhost:8003/ws/agent/my_ai_agent") as ws:
+    # Authenticate
+    await ws.send(json.dumps({
+        "type": "llm_connect",
+        "agent_id": "my_ai_agent",
+        "data": {
+            "api_token": "test-token-fc3d-001",
+            "port": 6001,  # From ServerAllocator
+        }
+    }))
+    response = json.loads(await ws.recv())
 
-# Connect and play
-await client.connect()
-state = await client.get_state()
-# ... AI logic here ...
+    # Query game state
+    await ws.send(json.dumps({"type": "state_query", "data": {"format": "llm_optimized"}}))
+    state = json.loads(await ws.recv())
+    # ... AI logic here ...
 ```
 
 **Multiplayer LLM Games:**
@@ -250,13 +256,7 @@ LLM agents can play against each other in multiplayer mode. The system automatic
 - Manages game sessions so both players connect to the same server
 - Handles FreeCiv packet protocol (tech research uses tech IDs, not names)
 
-Example with agent-clash:
-```bash
-cd /path/to/agent-clash
-python3 run_freeciv_game.py --turns 10 --host localhost
-```
-
-This creates two LLM agents (Gemini vs OpenAI) that play against each other for 10 turns.
+See [llm-gateway/README.md](llm-gateway/README.md) for the full WebSocket protocol documentation and action examples.
 
 Start and stop Freeciv-web with the following commands:
   start-freeciv-web.sh

@@ -131,7 +131,7 @@ class ConnectionManager:
         # reconnection window — only prevents the 0.0s instant-reconnect loop.
         # NOTE: Returning None causes add_connection() to create a fresh session
         # instead of resuming. The agent gets a new session but Fix 1 (registry
-        # replacement) safely stops the old CivCom. Agent-clash retry logic
+        # replacement) safely stops the old CivCom. Client retry logic
         # handles the brief delay.
         if time_since_disconnect < self.MIN_RECONNECT_COOLDOWN_SECS:
             remaining = self.MIN_RECONNECT_COOLDOWN_SECS - time_since_disconnect

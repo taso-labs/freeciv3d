@@ -38,7 +38,7 @@ import org.json.JSONObject;
 import java.util.logging.Logger;
 
 /**
- * Server allocation API for LLM game arena integration
+ * Server allocation API for LLM agent integration
  * Allocates available FreeCiv servers from the pool
  *
  * Supports game_id parameter for persistent game-port mapping:
@@ -71,11 +71,11 @@ public class ServerAllocator extends HttpServlet {
 	// to prevent premature port release during valid reconnection windows.
 	//
 	// Configuration examples:
-	//   - Default: SESSION_SUSPENSION_TIMEOUT_SECS=300 (5 min) → threshold=10 min is safe
-	//   - 30-min reconnection: SESSION_SUSPENSION_TIMEOUT_SECS=1800 → threshold=45 min
+	//   - Docker default: SESSION_SUSPENSION_TIMEOUT_SECS=1800 (30 min) → threshold=45 min recommended
+	//   - K8s production: SESSION_SUSPENSION_TIMEOUT_SECS=86400 (24 hours) → threshold=1500 min (25h)
 	//
-	// Default 10 min matches default 5-min session suspension with 2x safety margin.
-	// Override via: -Dfreeciv.stale.allocation.threshold.minutes=45
+	// Default 10 min is only safe for very short session windows.
+	// Override via: -Dfreeciv.stale.allocation.threshold.minutes=<value>
 	private static final int STALE_ALLOCATION_THRESHOLD_MINUTES =
 		Integer.getInteger("freeciv.stale.allocation.threshold.minutes", 10);
 
@@ -370,7 +370,7 @@ public class ServerAllocator extends HttpServlet {
 
 		JSONObject params = new JSONObject();
 		params.put("type", "Game type (singleplayer, multiplayer, pbem, longturn). Default: multiplayer");
-		params.put("game_id", "Optional. Unique game identifier (e.g., match_id from agent-clash). If provided, returns same port for same game_id on reconnection.");
+		params.put("game_id", "Optional. Unique game identifier from the connecting agent. If provided, returns same port for same game_id on reconnection.");
 		docs.put("parameters", params);
 
 		JSONObject responseExample = new JSONObject();

@@ -172,7 +172,7 @@ class InputSanitizer:
     def sanitize_action_data(cls, action: Dict[str, Any]) -> Dict[str, Any]:
         """Sanitize action data dictionary
 
-        DEFENSE-IN-DEPTH: Support both 'type' (normalized) and 'action_type' (agent-clash format)
+        DEFENSE-IN-DEPTH: Support both 'type' (normalized) and 'action_type' (LLM agent client format)
         to handle cases where normalization might not have run yet.
         """
         if not isinstance(action, dict):
@@ -180,7 +180,7 @@ class InputSanitizer:
 
         sanitized = {}
 
-        # Support both 'type' (normalized) and 'action_type' (agent-clash format)
+        # Support both 'type' (normalized) and 'action_type' (LLM agent client format)
         # The normalization should convert action_type → type, but this provides a fallback
         action_type = action.get('type') or action.get('action_type', '')
 
@@ -262,7 +262,7 @@ class InputSanitizer:
                 sanitized['dest_x'] = int(action['dest_x'])
             if 'dest_y' in action:
                 sanitized['dest_y'] = int(action['dest_y'])
-            # Flat target coordinates (produced by _normalize_agent_clash_action)
+            # Flat target coordinates (produced by _normalize_agent_action)
             if 'target_x' in action and 'target_y' in action:
                 sanitized['target_x'], sanitized['target_y'] = cls.sanitize_coordinates(
                     action['target_x'], action['target_y']

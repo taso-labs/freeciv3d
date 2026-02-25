@@ -270,7 +270,7 @@ jobs:
                   - type: "mrkdwn"
                     text: "*Version:*\n`${{ needs.validate.outputs.version }}`"
                   - type: "mrkdwn"
-                    text: "*URL:*\n<https://agentclash.ai|agentclash.ai>"
+                    text: "*URL:*\n<https://freeciv3d.example.com|production>"
               - type: "actions"
                 elements:
                   - type: "button"

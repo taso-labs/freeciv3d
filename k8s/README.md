@@ -84,9 +84,9 @@ kubectl get services -n freeciv
 kubectl logs -n freeciv -l app=fciv-net -c fciv-net --tail=100
 ```
 
-## Integration with AgentClash
+## Integration with LLM Agent Clients
 
-FreeCiv3D services are accessed internally by AgentClash via Kubernetes DNS:
+FreeCiv3D services are accessed internally by LLM agent clients via Kubernetes DNS:
 
 - `fciv-net.freeciv.svc.cluster.local:8080` - Web interface
 - `fciv-net.freeciv.svc.cluster.local:8002` - FreeCiv proxy

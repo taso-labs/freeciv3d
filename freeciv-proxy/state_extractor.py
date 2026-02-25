@@ -566,7 +566,7 @@ class StateExtractor:
 
                 # Log warning if units are empty - don't block waiting for packets
                 # The blocking time.sleep() was removed because it freezes Tornado's IOLoop
-                # Agent-clash should retry state queries if needed
+                # Callers should retry state queries if needed
                 if not raw_state.get('units'):
                     state_turn = raw_state.get('turn', 0)
                     logger.warning(
@@ -2117,7 +2117,7 @@ class StateExtractor:
         economic = self._build_economic_view(raw_state, player_id)
 
         # ALWAYS construct game dict with all required fields - don't trust raw_state
-        # This ensures current_player is always present for agent-clash
+        # This ensures current_player is always present for LLM agent client
         game_dict = {
             'turn': raw_state.get('turn', 1),
             'phase': raw_state.get('phase', 'movement'),
@@ -2132,7 +2132,7 @@ class StateExtractor:
             'strategic': strategic,
             'tactical': tactical,
             'economic': economic,
-            # Required fields for agent-clash FreeCivState compatibility
+            # Required fields for LLM agent client FreeCivState compatibility
             'game': game_dict,
             'map': self._ensure_valid_map(raw_state.get('map', {})),
             'players': self._ensure_dict(raw_state.get('players')),
@@ -2807,7 +2807,7 @@ class ForceEndTurnHandler(web.RequestHandler):
     """Tornado HTTP handler for POST /api/game/{game_id}/force_end_turn
 
     Sends PACKET_PLAYER_PHASE_DONE on behalf of agent(s) whose WebSocket
-    may be dead.  This is the REST fallback used by the orchestrator when
+    may be dead.  This is the REST fallback used by external clients when
     the normal WebSocket-based force_end_turn cannot reach the agent.
     """
 
@@ -2818,7 +2818,7 @@ class ForceEndTurnHandler(web.RequestHandler):
         """Force end turn for one or all agents in a game.
 
         Rate limiting is intentionally omitted: this endpoint is called only by
-        the orchestrator during timeout recovery, and the orchestrator already
+        external clients during timeout recovery, and the caller already
         gates invocations.
         """
         try:
