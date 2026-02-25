@@ -1274,6 +1274,20 @@ def start_periodic_cleanup(interval_ms: int = 300000) -> None:
         logger.warning("Periodic cleanup already started, ignoring duplicate call")
         return
 
+    # Validate env var invariant: CivCom TTL should be >= session suspension timeout
+    dead_civcom_ttl = int(os.getenv('DEAD_CIVCOM_TTL_SECS', '7200'))
+    suspension_timeout = int(os.getenv('SESSION_SUSPENSION_TIMEOUT_SECS', '86400'))
+    logger.info(
+        f"Cleanup config: DEAD_CIVCOM_TTL_SECS={dead_civcom_ttl}, "
+        f"SESSION_SUSPENSION_TIMEOUT_SECS={suspension_timeout}"
+    )
+    if dead_civcom_ttl < suspension_timeout:
+        logger.warning(
+            f"DEAD_CIVCOM_TTL_SECS ({dead_civcom_ttl}) < SESSION_SUSPENSION_TIMEOUT_SECS ({suspension_timeout}). "
+            f"CivCom connections may be cleaned up before suspended sessions expire, "
+            f"causing premature state loss on agent reconnect."
+        )
+
     try:
         from tornado.ioloop import PeriodicCallback
 

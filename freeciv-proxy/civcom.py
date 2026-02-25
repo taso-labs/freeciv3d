@@ -1250,8 +1250,11 @@ class CivCom(Thread):
         self.send_packets_to_client()
         self.send_packets_to_civserver()
 
-        if (hasattr(self.civwebserver, "civcoms") and self.key in list(self.civwebserver.civcoms.keys())):
-            del self.civwebserver.civcoms[self.key]
+        # Snapshot civwebserver to avoid TOCTOU race — another thread
+        # (e.g. register_game zombie cleanup) may null civwebserver between check and use
+        civwebserver = self.civwebserver
+        if civwebserver is not None and hasattr(civwebserver, "civcoms") and self.key in list(civwebserver.civcoms.keys()):
+            del civwebserver.civcoms[self.key]
 
         if (self.socket is not None):
             self.socket.close()
