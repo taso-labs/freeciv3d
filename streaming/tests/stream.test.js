@@ -133,7 +133,7 @@ describe('StreamCapture', () => {
 
   describe('Navigation', () => {
     test('navigates to observer URL', async () => {
-      const observerUrl = 'http://localhost:8080/webclient/?action=observe&camera=strategic';
+      const observerUrl = 'http://localhost:8080/webclient/?action=observe&camera=worldmap&zoom_mode=dynamic';
       const capture = new StreamCapture({
         observerUrl,
         streamKey: 'test-key',

@@ -296,14 +296,15 @@ describe('Autojoin Mode', () => {
 
     test('should handle full observer URL parameters', () => {
       // Simulate a full URL like:
-      // /webclient/?action=observe&civserverport=6001&embed=1&autojoin=1&name=global_view&camera=strategic
+      // /webclient/?action=observe&civserverport=6001&embed=1&autojoin=1&name=global_view&camera=worldmap&zoom_mode=dynamic
       setUrlParams({
         action: 'observe',
         civserverport: '6001',
         embed: '1',
         autojoin: '1',
         name: 'global_view',
-        camera: 'strategic'
+        camera: 'worldmap',
+        zoom_mode: 'dynamic'
       });
 
       init_autojoin_mode();
