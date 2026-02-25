@@ -622,6 +622,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                     # Reuse existing CivCom - it has all the game state (units, cities, etc.)
                     self.civcom = existing_civcom
                     self.civcom.civwebserver = self  # Reconnect CivCom to new WebSocket handler
+                    self.civcom._dead_since = None  # Reset cleanup timer — agent is back
                     self.state_extractor.civcom = self.civcom  # Update StateExtractor reference
 
                     # Clear stale outbound packets from previous session
