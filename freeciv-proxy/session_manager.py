@@ -1274,6 +1274,20 @@ def start_periodic_cleanup(interval_ms: int = 300000) -> None:
         logger.warning("Periodic cleanup already started, ignoring duplicate call")
         return
 
+    # Validate env var invariant: CivCom TTL should be >= session suspension timeout
+    dead_civcom_ttl = int(os.getenv('DEAD_CIVCOM_TTL_SECS', '7200'))
+    suspension_timeout = int(os.getenv('SESSION_SUSPENSION_TIMEOUT_SECS', '86400'))
+    logger.info(
+        f"Cleanup config: DEAD_CIVCOM_TTL_SECS={dead_civcom_ttl}, "
+        f"SESSION_SUSPENSION_TIMEOUT_SECS={suspension_timeout}"
+    )
+    if dead_civcom_ttl < suspension_timeout:
+        logger.warning(
+            f"DEAD_CIVCOM_TTL_SECS ({dead_civcom_ttl}) < SESSION_SUSPENSION_TIMEOUT_SECS ({suspension_timeout}). "
+            f"CivCom connections may be cleaned up before suspended sessions expire, "
+            f"causing premature state loss on agent reconnect."
+        )
+
     try:
         from tornado.ioloop import PeriodicCallback
 
@@ -1306,12 +1320,12 @@ def start_periodic_cleanup(interval_ms: int = 300000) -> None:
             except Exception as e:
                 logger.error(f"Stale paused-session cleanup scheduling error: {e}")
 
-            # Dead CivCom cleanup — gentle TTL (24h default, configurable)
-            # Gives agent-clash plenty of time to reconnect before cleaning up
+            # Dead CivCom cleanup — 2h default (DEAD_CIVCOM_TTL_SECS)
+            # Gives agents time to reconnect while preventing zombie accumulation
             try:
                 from state_extractor import civcom_registry
                 _sync_dead_markers(civcom_registry)
-                max_age = int(os.getenv('SESSION_SUSPENSION_TIMEOUT_SECS', '86400'))
+                max_age = int(os.getenv('DEAD_CIVCOM_TTL_SECS', '7200'))
                 civcom_cleaned = civcom_registry.cleanup_dead_civcoms(max_age)
                 if civcom_cleaned > 0:
                     logger.info(f"Periodic cleanup removed {civcom_cleaned} dead CivCom(s)")

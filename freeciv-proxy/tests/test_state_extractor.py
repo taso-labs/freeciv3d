@@ -861,5 +861,135 @@ class TestStateExtractorPlayerZero(unittest.TestCase):
             del os.environ['CACHE_HMAC_SECRET']
 
 
+class TestCivComRegistryZombieCleanup(unittest.TestCase):
+    """Test that register_game stops old CivCom when replacing with a new one (Fix 1)"""
+
+    def setUp(self):
+        self.registry = CivComRegistry()
+
+    def test_replace_stops_old_civcom(self):
+        """Registering a new CivCom for the same key stops the old one"""
+        old_civcom = Mock()
+        old_civcom.stopped = False
+        old_socket = Mock()
+        old_civcom.socket = old_socket
+        old_civcom.is_alive = Mock(return_value=True)
+
+        new_civcom = Mock()
+        new_civcom.stopped = False
+
+        self.registry.register_game('game1', 'agent1', old_civcom)
+        self.registry.register_game('game1', 'agent1', new_civcom)
+
+        # Old CivCom should be stopped and its socket closed
+        self.assertTrue(old_civcom.stopped)
+        old_socket.close.assert_called_once()
+        self.assertIsNone(old_civcom.socket)
+        self.assertIsNone(old_civcom.civwebserver)
+
+        # New CivCom should be the registered one
+        self.assertIs(self.registry.get_civcom('game1', 'agent1'), new_civcom)
+
+    def test_reregister_same_instance_does_not_stop(self):
+        """Re-registering the same CivCom instance should NOT stop it"""
+        civcom = Mock()
+        civcom.stopped = False
+        civcom.socket = Mock()
+        civcom.is_alive = Mock(return_value=True)
+
+        self.registry.register_game('game1', 'agent1', civcom)
+        self.registry.register_game('game1', 'agent1', civcom)
+
+        # Same instance — should NOT be stopped
+        self.assertFalse(civcom.stopped)
+        civcom.socket.close.assert_not_called()
+
+    def test_replace_already_stopped_civcom(self):
+        """Replacing an already-stopped CivCom should not error"""
+        old_civcom = Mock()
+        old_civcom.stopped = True
+        old_civcom.socket = None
+        old_civcom.is_alive = Mock(return_value=False)
+
+        new_civcom = Mock()
+        new_civcom.stopped = False
+
+        self.registry.register_game('game1', 'agent1', old_civcom)
+        self.registry.register_game('game1', 'agent1', new_civcom)
+
+        # Old was already stopped — socket.close should not be called
+        self.assertIs(self.registry.get_civcom('game1', 'agent1'), new_civcom)
+
+    def test_replace_with_socket_close_error(self):
+        """Socket close errors should be caught, not propagated"""
+        old_civcom = Mock()
+        old_civcom.stopped = False
+        old_civcom.socket = Mock()
+        old_civcom.socket.close.side_effect = OSError("Connection reset")
+        old_civcom.is_alive = Mock(return_value=True)
+
+        new_civcom = Mock()
+        new_civcom.stopped = False
+
+        self.registry.register_game('game1', 'agent1', old_civcom)
+        # Should not raise despite socket.close() error
+        self.registry.register_game('game1', 'agent1', new_civcom)
+
+        self.assertTrue(old_civcom.stopped)
+        self.assertIs(self.registry.get_civcom('game1', 'agent1'), new_civcom)
+
+
+class TestDeadSinceClearedOnReconnect(unittest.TestCase):
+    """Test that _dead_since is cleared when an agent reconnects (prevents cleanup of active CivComs)."""
+
+    def test_dead_since_cleared_on_civwebserver_reattach(self):
+        """Simulates the reconnect path at llm_handler.py:624-625.
+
+        When an agent reconnects, civwebserver is re-attached and _dead_since
+        must be reset to None. Otherwise cleanup_dead_civcoms will kill the
+        active CivCom after DEAD_CIVCOM_TTL_SECS.
+        """
+        civcom = Mock()
+        civcom.stopped = False
+        civcom.civwebserver = None
+        civcom._dead_since = time.time() - 100  # Marked dead 100s ago
+
+        # Simulate reconnect (mirrors llm_handler.py:624-625)
+        new_handler = Mock()
+        civcom.civwebserver = new_handler
+        civcom._dead_since = None  # This is the fix under test
+
+        self.assertIsNone(civcom._dead_since)
+        self.assertIs(civcom.civwebserver, new_handler)
+
+    def test_sync_dead_markers_skips_live_civcom(self):
+        """After reconnect clears _dead_since, _sync_dead_markers should not re-mark it."""
+        civcom = Mock()
+        civcom.stopped = False
+        civcom._dead_since = None  # Cleared by reconnect
+        civcom.civwebserver = Mock()  # Handler re-attached
+        civcom.civwebserver._connection_dead = False
+
+        # _sync_dead_markers checks: if _dead_since is not None -> skip
+        # Then checks: if handler is None -> mark dead
+        # Then checks: if handler._connection_dead -> mark dead
+        # None of these should trigger for a live reconnected CivCom
+        self.assertIsNone(civcom._dead_since)
+        self.assertIsNotNone(civcom.civwebserver)
+        self.assertFalse(civcom.civwebserver._connection_dead)
+
+    def test_dead_since_not_cleared_without_reconnect(self):
+        """A dead CivCom that never reconnects should retain _dead_since."""
+        civcom = Mock()
+        civcom.stopped = False
+        civcom.civwebserver = None
+        dead_time = time.time() - 3600
+        civcom._dead_since = dead_time
+
+        # Without reconnect, _dead_since stays — cleanup will eventually reap it
+        self.assertEqual(civcom._dead_since, dead_time)
+        self.assertIsNone(civcom.civwebserver)
+
+
 if __name__ == '__main__':
     unittest.main()

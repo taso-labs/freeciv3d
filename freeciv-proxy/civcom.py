@@ -1110,7 +1110,10 @@ class CivCom(Thread):
                                     logger.info(f"Chat message for {self.username}: {msg_text}")
                                     
                                     # For LLM agents, emit structured chat_message event
-                                    if self.civwebserver and hasattr(self.civwebserver, 'is_llm_agent') and self.civwebserver.is_llm_agent:
+                                    # Snapshot civwebserver to avoid TOCTOU race — another thread
+                                    # (Tornado IOLoop) may set civwebserver=None between check and use
+                                    handler = self.civwebserver
+                                    if handler and hasattr(handler, 'is_llm_agent') and handler.is_llm_agent:
                                         import time as time_module
                                         chat_event = json.dumps({
                                             'type': 'chat_message',
@@ -1123,8 +1126,7 @@ class CivCom(Thread):
                                         })
                                         # Send chat_message event via WebSocket
                                         try:
-                                            conn = self.civwebserver
-                                            conn.io_loop.add_callback(lambda msg=chat_event: conn.write_message(msg))
+                                            handler.io_loop.add_callback(lambda msg=chat_event: handler.write_message(msg))
                                         except Exception as chat_err:
                                             logger.debug(f"Could not send chat_message event: {chat_err}")
                             except Exception:
@@ -1248,8 +1250,11 @@ class CivCom(Thread):
         self.send_packets_to_client()
         self.send_packets_to_civserver()
 
-        if (hasattr(self.civwebserver, "civcoms") and self.key in list(self.civwebserver.civcoms.keys())):
-            del self.civwebserver.civcoms[self.key]
+        # Snapshot civwebserver to avoid TOCTOU race — another thread
+        # (e.g. register_game zombie cleanup) may null civwebserver between check and use
+        civwebserver = self.civwebserver
+        if civwebserver is not None and hasattr(civwebserver, "civcoms") and self.key in list(civwebserver.civcoms.keys()):
+            del civwebserver.civcoms[self.key]
 
         if (self.socket is not None):
             self.socket.close()
@@ -1293,19 +1298,22 @@ class CivCom(Thread):
     # sends packets to client (WebSockets client / browser)
     def send_packets_to_client(self):
         packet = self.get_client_result_string()
-        if (packet is not None and self.civwebserver is not None):
+        # Snapshot civwebserver to avoid TOCTOU race — another thread
+        # (Tornado IOLoop) may set civwebserver=None between check and use
+        conn = self.civwebserver
+        if (packet is not None and conn is not None):
             # Check if handler has buffering enabled (LLM agents buffer during auth)
             # If buffer_enabled=True, store packets instead of sending them immediately
-            if hasattr(self.civwebserver, 'buffer_enabled') and self.civwebserver.buffer_enabled:
+            if hasattr(conn, 'buffer_enabled') and conn.buffer_enabled:
                 # Buffer the packet instead of sending it
-                if hasattr(self.civwebserver, 'packet_buffer'):
+                if hasattr(conn, 'packet_buffer'):
                     # Check buffer size limits to prevent memory exhaustion
                     # Import limits from llm_handler at runtime to avoid circular import
                     try:
                         from llm_handler import MAX_PACKET_BUFFER_SIZE, MAX_PACKET_BUFFER_BYTES
 
-                        buffer_count = len(self.civwebserver.packet_buffer)
-                        current_size = sum(len(p.encode('utf-8')) for p in self.civwebserver.packet_buffer)
+                        buffer_count = len(conn.packet_buffer)
+                        current_size = sum(len(p.encode('utf-8')) for p in conn.packet_buffer)
                         packet_size = len(packet.encode('utf-8'))
 
                         # Check if adding this packet would exceed limits
@@ -1315,9 +1323,9 @@ class CivCom(Thread):
                                 f"{buffer_count} packets exceeds limit of {MAX_PACKET_BUFFER_SIZE}. "
                                 f"Closing connection to prevent memory exhaustion."
                             )
-                            self.civwebserver.buffer_enabled = False
-                            self.civwebserver.packet_buffer.clear()
-                            self.civwebserver.close()
+                            conn.buffer_enabled = False
+                            conn.packet_buffer.clear()
+                            conn.close()
                             return
 
                         if current_size + packet_size > MAX_PACKET_BUFFER_BYTES:
@@ -1327,13 +1335,13 @@ class CivCom(Thread):
                                 f"{MAX_PACKET_BUFFER_BYTES/(1024*1024):.0f}MB. "
                                 f"Closing connection to prevent memory exhaustion."
                             )
-                            self.civwebserver.buffer_enabled = False
-                            self.civwebserver.packet_buffer.clear()
-                            self.civwebserver.close()
+                            conn.buffer_enabled = False
+                            conn.packet_buffer.clear()
+                            conn.close()
                             return
 
                         # Buffer is within limits - add packet
-                        self.civwebserver.packet_buffer.append(packet)
+                        conn.packet_buffer.append(packet)
                         buffer_count += 1
                         logger.debug(
                             f"🔒 BUFFERING PACKET during auth for {self.username}: "
@@ -1344,9 +1352,9 @@ class CivCom(Thread):
                     except ImportError:
                         # Fallback if llm_handler not available (shouldn't happen in production)
                         logger.warning(f"Could not import buffer limits - buffering without size checks")
-                        self.civwebserver.packet_buffer.append(packet)
+                        conn.packet_buffer.append(packet)
                         packet_size = len(packet.encode('utf-8'))
-                        buffer_count = len(self.civwebserver.packet_buffer)
+                        buffer_count = len(conn.packet_buffer)
                         logger.debug(
                             f"🔒 BUFFERING PACKET during auth for {self.username}: "
                             f"{packet_size:,} bytes ({packet_size/(1024*1024):.2f}MB), "
@@ -1374,7 +1382,7 @@ class CivCom(Thread):
 
             # Calls the write_message callback on the next Tornado I/O loop iteration (thread safely).
             # Uses _safe_write_message for error tracking and proactive pause capability.
-            conn = self.civwebserver
+            # conn was captured at method entry (snapshot-then-check pattern)
             # Capture packet and size for the lambda closure
             p, ps = packet, packet_size
 
@@ -1668,9 +1676,11 @@ class CivCom(Thread):
                         logger.info(f"🎯 CivCom[{self.username}] received first unit for player {self.player_id} - initial state ready")
                         # Notify LLM handler that game state is ready (if connected via LLM gateway)
                         # This allows agents to wait for this signal before querying state
-                        if hasattr(self.civwebserver, 'send_game_ready'):
+                        # Snapshot to avoid TOCTOU race with civwebserver=None on disconnect
+                        handler = self.civwebserver
+                        if handler and hasattr(handler, 'send_game_ready'):
                             try:
-                                self.civwebserver.send_game_ready()
+                                handler.send_game_ready()
                             except Exception as e:
                                 logger.error(f"Failed to send game_ready signal: {e}", exc_info=True)
 

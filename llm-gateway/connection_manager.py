@@ -9,6 +9,7 @@ Handles WebSocket connections, heartbeats, and cleanup
 import asyncio
 import json
 import logging
+import os
 import time
 import uuid
 from typing import Dict, Any, Optional, Set, List
@@ -70,6 +71,13 @@ class ConnectionInfo:
 class ConnectionManager:
     """Manages WebSocket connections with heartbeat and cleanup"""
 
+    # Minimum seconds between disconnect and reconnect to prevent rapid
+    # connect/disconnect spirals that leak zombie CivCom instances.
+    # Configurable via MIN_RECONNECT_COOLDOWN_SECS env var.
+    MIN_RECONNECT_COOLDOWN_SECS: float = float(
+        os.environ.get('MIN_RECONNECT_COOLDOWN_SECS', '5.0')
+    )
+
     def __init__(self):
         self.connections: Dict[str, ConnectionInfo] = {}
         self.agent_connections: Dict[str, Set[str]] = {}  # agent_id -> set of connection_ids
@@ -117,6 +125,22 @@ class ConnectionManager:
             return None
 
         time_since_disconnect = time.time() - cached_session.disconnected_at
+
+        # Minimum cooldown to prevent rapid connect/disconnect spirals
+        # that leak zombie CivCom instances. Does NOT reduce the 2-hour
+        # reconnection window — only prevents the 0.0s instant-reconnect loop.
+        # NOTE: Returning None causes add_connection() to create a fresh session
+        # instead of resuming. The agent gets a new session but Fix 1 (registry
+        # replacement) safely stops the old CivCom. Agent-clash retry logic
+        # handles the brief delay.
+        if time_since_disconnect < self.MIN_RECONNECT_COOLDOWN_SECS:
+            remaining = self.MIN_RECONNECT_COOLDOWN_SECS - time_since_disconnect
+            logger.info(
+                f"Reconnect cooldown for {identifier}: "
+                f"{time_since_disconnect:.1f}s since disconnect, "
+                f"need {self.MIN_RECONNECT_COOLDOWN_SECS}s. Rejecting — retry in {remaining:.1f}s"
+            )
+            return None
 
         if time_since_disconnect <= self.session_resumption_window:
             logger.info(

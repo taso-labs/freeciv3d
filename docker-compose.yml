@@ -53,6 +53,9 @@ services:
       # ──────────────────────────────────────────────────────────────────────
       - SESSION_TIMEOUT_SECONDS=${SESSION_TIMEOUT_SECONDS:-3600}
       - SESSION_SUSPENSION_TIMEOUT_SECS=${SESSION_SUSPENSION_TIMEOUT_SECS:-1800}
+      # Effective reconnect window = min(SESSION_SUSPENSION_TIMEOUT_SECS, DEAD_CIVCOM_TTL_SECS)
+      # CivCom TTL should be >= session suspension timeout to avoid premature state loss
+      - DEAD_CIVCOM_TTL_SECS=${DEAD_CIVCOM_TTL_SECS:-7200}
       - MAX_LLM_AGENTS=${MAX_LLM_AGENTS:-10}
       - MAX_SESSIONS_PER_PLAYER=${MAX_SESSIONS_PER_PLAYER:-3}
       - CACHE_TTL_SECONDS=${CACHE_TTL_SECONDS:-5}

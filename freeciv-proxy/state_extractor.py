@@ -154,12 +154,31 @@ class CivComRegistry:
             raise ValueError("civcom instance cannot be None")
 
         key = (game_id, agent_id)
+        old_socket = None
         with self._lock:
             if key in self._civcom_instances:
-                logger.warning(f"Replacing CivCom for agent {agent_id} in game {game_id}")
+                old_civcom = self._civcom_instances[key]
+                if old_civcom is not civcom:
+                    logger.warning(
+                        f"Replacing CivCom for agent {agent_id} in game {game_id} — "
+                        f"stopping old instance (alive={old_civcom.is_alive()}, stopped={old_civcom.stopped})"
+                    )
+                    if not old_civcom.stopped:
+                        old_civcom.stopped = True
+                        old_socket = old_civcom.socket
+                        old_civcom.socket = None
+                        old_civcom.civwebserver = None
 
             self._civcom_instances[key] = civcom
             self._game_metadata[key] = metadata or {}
+
+        # Close old socket outside the lock to avoid blocking registry operations
+        # if the kernel buffer flush stalls
+        if old_socket is not None:
+            try:
+                old_socket.close()
+            except Exception as e:
+                logger.debug(f"Error closing old CivCom socket: {e}")
 
         logger.info(f"Registered CivCom for agent {agent_id} in game {game_id}")
 

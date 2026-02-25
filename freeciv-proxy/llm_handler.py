@@ -622,6 +622,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                     # Reuse existing CivCom - it has all the game state (units, cities, etc.)
                     self.civcom = existing_civcom
                     self.civcom.civwebserver = self  # Reconnect CivCom to new WebSocket handler
+                    self.civcom._dead_since = None  # Reset cleanup timer — agent is back
                     self.state_extractor.civcom = self.civcom  # Update StateExtractor reference
 
                     # Clear stale outbound packets from previous session
@@ -4940,6 +4941,12 @@ class LLMWSHandler(websocket.WebSocketHandler):
             )
             # Don't destroy civcom - it stays registered in civcom_registry for reconnection
             # Just clear our reference (civcom thread keeps running)
+            # Detach handler so _sync_dead_markers() can start the cleanup clock.
+            # CivCom thread keeps running: run() loop checks self.stopped and self.socket (not civwebserver).
+            # Packet handlers (handle_unit_info, etc.) update internal state dicts (not civwebserver).
+            # send_packets_to_client() already checks civwebserver != None before writing.
+            # On reconnection, line 624 re-attaches: self.civcom.civwebserver = self
+            self.civcom.civwebserver = None
         else:
             # Session not suspended (terminated) or civcom already stopped - clean up fully
             if self.civcom:
