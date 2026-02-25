@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.3.61](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.60...freeciv3d-v0.3.61) (2026-02-25)
+
+
+### Features
+
+* **observer:** add worldmap camera mode with static/dynamic zoom ([#168](https://github.com/taso-ventures/freeciv3d/issues/168)) ([1985577](https://github.com/taso-ventures/freeciv3d/commit/19855773953b3c6a0fe375ee1f71d8895d6ec398))
+
+
+### Bug Fixes
+
+* **proxy,gateway:** kill zombie CivCom connections preventing new games ([#169](https://github.com/taso-ventures/freeciv3d/issues/169)) ([9d1f962](https://github.com/taso-ventures/freeciv3d/commit/9d1f9626e269a7ca454596cafbdad81cd200867b))
+
 ## [0.3.60](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.59...freeciv3d-v0.3.60) (2026-02-24)
 
 
