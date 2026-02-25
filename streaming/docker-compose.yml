@@ -45,7 +45,7 @@ services:
       mediamtx:
         condition: service_healthy
     environment:
-      - OBSERVER_URL=${OBSERVER_URL_GLOBAL:-http://host.docker.internal:8080/webclient/?action=observe&camera=strategic&embed=1&autojoin=1&name=stream_global}
+      - OBSERVER_URL=${OBSERVER_URL_GLOBAL:-http://host.docker.internal:8080/webclient/?action=observe&camera=worldmap&zoom_mode=dynamic&embed=1&autojoin=1&name=stream_global}
       - DEV_MODE=local
       - LOCAL_RTMP_URL=rtmp://mediamtx:1935/stream/global
       - BACKUP_PATH=/backup/dev-global.mp4
@@ -139,7 +139,7 @@ services:
     profiles: ["default"]
     environment:
       # Required: Observer URL for FreeCiv game
-      - OBSERVER_URL=${OBSERVER_URL:-http://host.docker.internal:8080/webclient/?action=observe&camera=strategic&embed=1&autojoin=1}
+      - OBSERVER_URL=${OBSERVER_URL:-http://host.docker.internal:8080/webclient/?action=observe&camera=worldmap&zoom_mode=dynamic&embed=1&autojoin=1}
 
       # Development mode: "local" streams to MediaMTX, "file" saves to backup only
       # If not set, uses YouTube RTMPS (requires STREAM_KEY)

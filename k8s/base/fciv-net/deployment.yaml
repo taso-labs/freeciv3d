@@ -186,6 +186,13 @@ spec:
             - name: GATEWAY_FREECIV_WEB_BASE_URL
               value: "https://freeciv.clashai.live"
 
+            # Worldmap camera zoom mode for global observer view recordings
+            # "dynamic" = camera tracks combined territory of all agents (default)
+            # "static"  = camera fits entire map at all times
+            # Used by stream_manager.py when building observer URLs for streaming jobs
+            - name: WORLDMAP_ZOOM_MODE
+              value: "dynamic"
+
             # YouTube OAuth credentials for streaming (MVP: global view only)
             - name: YOUTUBE_CREDS_GLOBAL
               valueFrom:

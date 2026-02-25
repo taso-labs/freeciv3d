@@ -433,11 +433,16 @@ global.compute_wrapped_spread_and_centroid = function(positions) {
   distances.sort(function(a, b) { return a - b; });
   var effective_radius = find_outlier_cutoff_radius(distances);
 
+  var radius_x = Math.max(Math.abs(max_x - centroid_raw_x), Math.abs(min_x - centroid_raw_x));
+  var radius_y = Math.max(Math.abs(max_y - centroid_raw_y), Math.abs(min_y - centroid_raw_y));
+
   return {
     centroid_x: centroid_x,
     centroid_y: centroid_y,
     spread: spread,
     effective_radius: effective_radius,
+    radius_x: radius_x,
+    radius_y: radius_y,
     total_weight: total_weight
   };
 };

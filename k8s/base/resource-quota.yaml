@@ -1,5 +1,12 @@
 # Resource Quota limits total resource consumption in the freeciv namespace
 # Prevents runaway resource usage from affecting other workloads
+#
+# Capacity planning (2 concurrent matches × 3 streaming views each):
+#   fciv-net pod:   1 × 2Gi limit  =  2Gi
+#   redis pod:      1 × 512Mi      =  0.5Gi
+#   streaming jobs: 6 × 4Gi limit  = 24Gi
+#   headroom for restarts/bursts:     5.5Gi
+#   total:                           ~32Gi  (was tight at 32Gi, bumped limits.memory to 40Gi)
 apiVersion: v1
 kind: ResourceQuota
 metadata:
@@ -10,10 +17,10 @@ metadata:
 spec:
   hard:
     # CPU limits
-    requests.cpu: "8"
-    limits.cpu: "16"
-    # Memory limits
-    requests.memory: 16Gi
-    limits.memory: 32Gi
-    # Pod count limit
+    requests.cpu: "10"
+    limits.cpu: "20"
+    # Memory limits (sized for 2 concurrent matches × 3 streaming views + headroom)
+    requests.memory: 20Gi
+    limits.memory: 40Gi
+    # Pod count limit (fciv-net + redis + 6 streaming jobs + buffer)
     pods: "20"

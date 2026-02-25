@@ -39,6 +39,13 @@ MAX_JOB_RETRIES = int(os.environ.get("STREAM_JOB_MAX_RETRIES", "3"))
 JOB_RETRY_DELAY = float(os.environ.get("STREAM_JOB_RETRY_DELAY", "2.0"))
 # Job TTL after completion - default 30 min for debugging and backup upload
 JOB_TTL_AFTER_FINISHED = int(os.environ.get("STREAM_JOB_TTL_SECONDS", "1800"))
+# Worldmap zoom mode for global observer view ('static' or 'dynamic')
+_WORLDMAP_ZOOM_MODE_RAW = os.environ.get("WORLDMAP_ZOOM_MODE", "dynamic")
+if _WORLDMAP_ZOOM_MODE_RAW not in ("static", "dynamic"):
+    raise ValueError(
+        f"Invalid WORLDMAP_ZOOM_MODE='{_WORLDMAP_ZOOM_MODE_RAW}'; must be 'static' or 'dynamic'"
+    )
+WORLDMAP_ZOOM_MODE = _WORLDMAP_ZOOM_MODE_RAW
 
 # Readiness check configuration
 # Set to 0 to disable readiness checking (jobs will be created but not verified)
@@ -356,8 +363,8 @@ class StreamManager:
         """
         base_url = FREECIV_WEB_BASE_URL.rstrip("/")
 
-        # Global view uses strategic camera, player views use cinematic
-        camera = "strategic" if view == "global" else "cinematic"
+        # Global view uses worldmap camera, player views use cinematic
+        camera = "worldmap" if view == "global" else "cinematic"
 
         params = [
             "action=observe",
@@ -367,6 +374,10 @@ class StreamManager:
             "autojoin=1",
             f"name=stream_{view}_{civserver_port}",
         ]
+
+        # Add zoom_mode for worldmap camera
+        if view == "global":
+            params.append(f"zoom_mode={WORLDMAP_ZOOM_MODE}")
 
         # Add player-specific params for fog-of-war perspective
         if view in ("player1", "player2") and player_names:
@@ -1035,7 +1046,7 @@ class LocalStreamManager:
             Complete observer URL with camera and player params
         """
         base_url = LOCAL_FREECIV_WEB_URL.rstrip("/")
-        camera = "strategic" if view == "global" else "cinematic"
+        camera = "worldmap" if view == "global" else "cinematic"
 
         params = [
             "action=observe",
@@ -1045,6 +1056,10 @@ class LocalStreamManager:
             "autojoin=1",
             f"name=stream_{view}_{civserver_port}",
         ]
+
+        # Add zoom_mode for worldmap camera
+        if view == "global":
+            params.append(f"zoom_mode={WORLDMAP_ZOOM_MODE}")
 
         if view in ("player1", "player2") and player_names:
             player_name = player_names.get(view, "")

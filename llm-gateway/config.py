@@ -7,6 +7,7 @@ Configuration settings for LLM API Gateway
 
 import os
 from typing import List, Optional
+from pydantic import field_validator
 from pydantic_settings import BaseSettings
 
 try:
@@ -87,6 +88,17 @@ class Settings(BaseSettings):
 
     # Observer streaming settings
     freeciv_web_base_url: str = "http://localhost:8080"  # Base URL for FreeCiv web client
+
+    # Worldmap recording zoom mode: 'static' (full map) or 'dynamic' (fit territories)
+    # Validated values: 'static' or 'dynamic'
+    worldmap_zoom_mode: str = "dynamic"
+
+    @field_validator('worldmap_zoom_mode')
+    @classmethod
+    def validate_worldmap_zoom_mode(cls, v: str) -> str:
+        if v not in ('static', 'dynamic'):
+            raise ValueError(f"worldmap_zoom_mode must be 'static' or 'dynamic', got '{v}'")
+        return v
 
     # Local streaming settings (for development when K8s is not available)
     # Set to enable local_stream_urls in observer-urls response
