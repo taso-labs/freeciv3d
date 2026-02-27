@@ -358,7 +358,7 @@ class CivCom(Thread):
         self.map_info = {}
         self.player_units = {}  # Dict keyed by unit_id for efficient updates
         self.other_units = {}   # Dict keyed by unit_id for non-player units
-        self.combat_log = []    # Accumulated PACKET_UNIT_COMBAT_INFO events, drained on state read
+        self.combat_log = []    # Accumulated PACKET_UNIT_COMBAT_INFO events, drained on state read (max 500)
         self.player_cities = {}  # Dict keyed by city_id for efficient updates
         self.all_players = []
         self.known_techs = []
@@ -1822,31 +1822,54 @@ class CivCom(Thread):
                 defender_id = packet.get('defender_unit_id')
                 att_hp = packet.get('attacker_hp', 0)
                 def_hp = packet.get('defender_hp', 0)
+                make_att_vet = packet.get('make_att_veteran', False)
+                make_def_vet = packet.get('make_def_veteran', False)
 
-                # Look up pre-combat HP and unit types from tracked state
-                att_unit = self.player_units.get(attacker_id) or self.other_units.get(attacker_id, {})
-                def_unit = self.player_units.get(defender_id) or self.other_units.get(defender_id, {})
+                # Look up pre-combat HP and unit types from tracked state.
+                # Use explicit `is None` check — `.get()` can return an empty dict
+                # which is falsy and would incorrectly fall through with `or`.
+                att_unit = self.player_units.get(attacker_id)
+                if att_unit is None:
+                    att_unit = self.other_units.get(attacker_id)
+                def_unit = self.player_units.get(defender_id)
+                if def_unit is None:
+                    def_unit = self.other_units.get(defender_id)
 
-                att_type = get_unit_type_name(att_unit.get('utype', '?'))
-                def_type = get_unit_type_name(def_unit.get('utype', '?'))
+                if att_unit is None:
+                    logger.debug(f"Combat attacker unit {attacker_id} not in tracked state (fog-of-war)")
+                if def_unit is None:
+                    logger.debug(f"Combat defender unit {defender_id} not in tracked state (fog-of-war)")
+
+                att_type = get_unit_type_name((att_unit or {}).get('utype', 'unknown'))
+                def_type = get_unit_type_name((def_unit or {}).get('utype', 'unknown'))
+
+                # Determine outcome: attacker_won, defender_won, or mutual_destruction
+                attacker_won = def_hp <= 0 and att_hp > 0
+                defender_won = att_hp <= 0 and def_hp > 0
 
                 combat_event = {
                     'attacker_unit_id': attacker_id,
                     'defender_unit_id': defender_id,
                     'attacker_unit_type': att_type,
                     'defender_unit_type': def_type,
-                    'attacker_hp_before': att_unit.get('hp'),
+                    'attacker_hp_before': (att_unit or {}).get('hp'),
                     'attacker_hp_after': att_hp,
-                    'defender_hp_before': def_unit.get('hp'),
+                    'defender_hp_before': (def_unit or {}).get('hp'),
                     'defender_hp_after': def_hp,
-                    'attacker_won': def_hp <= 0,
+                    'attacker_won': attacker_won,
+                    'defender_won': defender_won,
+                    'make_att_veteran': make_att_vet,
+                    'make_def_veteran': make_def_vet,
                     'turn': self.game_turn,
                     'timestamp': time.time()
                 }
                 self.combat_log.append(combat_event)
+                # Cap combat_log size to prevent unbounded growth if state is never read
+                if len(self.combat_log) > 500:
+                    self.combat_log = self.combat_log[-500:]
                 logger.info(
                     f"⚔ Combat: {att_type} (id={attacker_id}) vs {def_type} (id={defender_id}) → "
-                    f"att_hp={att_hp}, def_hp={def_hp}"
+                    f"att_hp={att_hp}, def_hp={def_hp}, vet={make_att_vet}/{make_def_vet}"
                 )
 
             # Tile info packet - visibility/fog-of-war updates after movement
@@ -2535,10 +2558,12 @@ class CivCom(Thread):
             'timestamp': time.time(),
             'player_perspective': player_id
         }
-        # Include and drain accumulated combat events
+        # Include and drain accumulated combat events (atomic swap).
+        # Contract: combat_log is drained by the first state read after combat occurs.
+        # In our architecture, each agent's harness calls one state method per turn,
+        # and each CivCom instance is per-player, so events are not shared across agents.
         if self.combat_log:
-            state['combat_log'] = list(self.combat_log)
-            self.combat_log.clear()
+            state['combat_log'], self.combat_log = self.combat_log, []
         return state
 
     def _build_strategic_view(self, player_id):
@@ -3090,8 +3115,7 @@ class CivCom(Thread):
         state['player_id'] = player_id
         state['visible_tiles'] = getattr(self, 'visible_tiles', [])
         if self.combat_log:
-            state['combat_log'] = list(self.combat_log)
-            self.combat_log.clear()
+            state['combat_log'], self.combat_log = self.combat_log, []
         return state
 
     def get_full_state_global(self) -> dict:
@@ -3119,8 +3143,7 @@ class CivCom(Thread):
 
         state = self._build_state_dict(units=all_units, cities=all_cities)
         if self.combat_log:
-            state['combat_log'] = list(self.combat_log)
-            self.combat_log.clear()
+            state['combat_log'], self.combat_log = self.combat_log, []
         return state
 
     def _get_valid_map_info(self):
