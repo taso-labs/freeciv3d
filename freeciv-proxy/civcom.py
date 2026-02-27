@@ -66,6 +66,7 @@ from packet_constants import (
     PACKET_DIPLOMACY_CREATE_CLAUSE_REQ,  # Request to add treaty clause (cs)
     PACKET_DIPLOMACY_ACCEPT_TREATY,  # Treaty accepted (sc)
     PACKET_UNIT_DO_ACTION,  # Unit action packet for disbanding
+    PACKET_UNIT_COMBAT_INFO,  # Unit combat information (attacker/defender/HP)
     CLAUSE_VISION,  # Treaty clause type for vision sharing
     DS_WAR, DS_ARMISTICE, DS_CEASEFIRE, DS_PEACE, DS_ALLIANCE, DS_NO_CONTACT, DS_NAMES,
     get_packet_name
@@ -357,6 +358,7 @@ class CivCom(Thread):
         self.map_info = {}
         self.player_units = {}  # Dict keyed by unit_id for efficient updates
         self.other_units = {}   # Dict keyed by unit_id for non-player units
+        self.combat_log = []    # Accumulated PACKET_UNIT_COMBAT_INFO events, drained on state read
         self.player_cities = {}  # Dict keyed by city_id for efficient updates
         self.all_players = []
         self.known_techs = []
@@ -1812,6 +1814,41 @@ class CivCom(Thread):
                     else:
                         logger.debug(f"Received PACKET_UNIT_REMOVE for unit {unit_id} (not in our tracked units)")
 
+            # Unit combat info packet - sent when two units fight
+            # Fields: attacker_unit_id, defender_unit_id, attacker_hp, defender_hp,
+            #         make_att_veteran, make_def_veteran
+            elif packet_type == PACKET_UNIT_COMBAT_INFO:
+                attacker_id = packet.get('attacker_unit_id')
+                defender_id = packet.get('defender_unit_id')
+                att_hp = packet.get('attacker_hp', 0)
+                def_hp = packet.get('defender_hp', 0)
+
+                # Look up pre-combat HP and unit types from tracked state
+                att_unit = self.player_units.get(attacker_id) or self.other_units.get(attacker_id, {})
+                def_unit = self.player_units.get(defender_id) or self.other_units.get(defender_id, {})
+
+                att_type = get_unit_type_name(att_unit.get('utype', '?'))
+                def_type = get_unit_type_name(def_unit.get('utype', '?'))
+
+                combat_event = {
+                    'attacker_unit_id': attacker_id,
+                    'defender_unit_id': defender_id,
+                    'attacker_unit_type': att_type,
+                    'defender_unit_type': def_type,
+                    'attacker_hp_before': att_unit.get('hp'),
+                    'attacker_hp_after': att_hp,
+                    'defender_hp_before': def_unit.get('hp'),
+                    'defender_hp_after': def_hp,
+                    'attacker_won': def_hp <= 0,
+                    'turn': self.game_turn,
+                    'timestamp': time.time()
+                }
+                self.combat_log.append(combat_event)
+                logger.info(
+                    f"⚔ Combat: {att_type} (id={attacker_id}) vs {def_type} (id={defender_id}) → "
+                    f"att_hp={att_hp}, def_hp={def_hp}"
+                )
+
             # Tile info packet - visibility/fog-of-war updates after movement
             # Sent by server when units move and reveal new tiles
             # Critical for action validation (terrain checks, city proximity)
@@ -2498,6 +2535,10 @@ class CivCom(Thread):
             'timestamp': time.time(),
             'player_perspective': player_id
         }
+        # Include and drain accumulated combat events
+        if self.combat_log:
+            state['combat_log'] = list(self.combat_log)
+            self.combat_log.clear()
         return state
 
     def _build_strategic_view(self, player_id):
@@ -3048,6 +3089,9 @@ class CivCom(Thread):
         )
         state['player_id'] = player_id
         state['visible_tiles'] = getattr(self, 'visible_tiles', [])
+        if self.combat_log:
+            state['combat_log'] = list(self.combat_log)
+            self.combat_log.clear()
         return state
 
     def get_full_state_global(self) -> dict:
@@ -3073,7 +3117,11 @@ class CivCom(Thread):
         # plus any enemy cities within visibility range.
         all_cities = self._normalize_to_dict(self.player_cities)
 
-        return self._build_state_dict(units=all_units, cities=all_cities)
+        state = self._build_state_dict(units=all_units, cities=all_cities)
+        if self.combat_log:
+            state['combat_log'] = list(self.combat_log)
+            self.combat_log.clear()
+        return state
 
     def _get_valid_map_info(self):
         """Return map_info with valid dimensions or a default."""
