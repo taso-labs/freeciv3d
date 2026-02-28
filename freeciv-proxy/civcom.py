@@ -22,6 +22,7 @@ import time
 import json
 import os
 import asyncio
+from collections import deque
 from tornado import ioloop
 
 # Import packet ID constants for type-safe packet handling
@@ -358,7 +359,7 @@ class CivCom(Thread):
         self.map_info = {}
         self.player_units = {}  # Dict keyed by unit_id for efficient updates
         self.other_units = {}   # Dict keyed by unit_id for non-player units
-        self.combat_log = []    # Accumulated PACKET_UNIT_COMBAT_INFO events, drained on state read (max 500)
+        self.combat_log = deque(maxlen=500)  # Accumulated PACKET_UNIT_COMBAT_INFO events, drained on state read
         self.player_cities = {}  # Dict keyed by city_id for efficient updates
         self.all_players = []
         self.known_techs = []
@@ -1809,7 +1810,7 @@ class CivCom(Thread):
                 if unit_id is not None and isinstance(self.player_units, dict):
                     if unit_id in self.player_units:
                         removed_unit = self.player_units.pop(unit_id)
-                        unit_type = removed_unit.get('utype', 'unknown')
+                        unit_type = removed_unit.get('type', 'unknown')
                         logger.info(f"✓ Removed unit {unit_id} (type={unit_type}) - consumed/destroyed")
                     else:
                         logger.debug(f"Received PACKET_UNIT_REMOVE for unit {unit_id} (not in our tracked units)")
@@ -1840,12 +1841,13 @@ class CivCom(Thread):
                 if def_unit is None:
                     logger.debug(f"Combat defender unit {defender_id} not in tracked state (fog-of-war)")
 
-                att_type = get_unit_type_name((att_unit or {}).get('utype', 'unknown'))
-                def_type = get_unit_type_name((def_unit or {}).get('utype', 'unknown'))
+                att_type = (att_unit or {}).get('type', 'unknown')
+                def_type = (def_unit or {}).get('type', 'unknown')
 
                 # Determine outcome: attacker_won, defender_won, or mutual_destruction
                 attacker_won = def_hp <= 0 and att_hp > 0
                 defender_won = att_hp <= 0 and def_hp > 0
+                mutual_destruction = att_hp <= 0 and def_hp <= 0
 
                 combat_event = {
                     'attacker_unit_id': attacker_id,
@@ -1858,15 +1860,13 @@ class CivCom(Thread):
                     'defender_hp_after': def_hp,
                     'attacker_won': attacker_won,
                     'defender_won': defender_won,
+                    'mutual_destruction': mutual_destruction,
                     'make_att_veteran': make_att_vet,
                     'make_def_veteran': make_def_vet,
                     'turn': self.game_turn,
                     'timestamp': time.time()
                 }
                 self.combat_log.append(combat_event)
-                # Cap combat_log size to prevent unbounded growth if state is never read
-                if len(self.combat_log) > 500:
-                    self.combat_log = self.combat_log[-500:]
                 logger.info(
                     f"⚔ Combat: {att_type} (id={attacker_id}) vs {def_type} (id={defender_id}) → "
                     f"att_hp={att_hp}, def_hp={def_hp}, vet={make_att_vet}/{make_def_vet}"
@@ -2563,7 +2563,7 @@ class CivCom(Thread):
         # In our architecture, each agent's harness calls one state method per turn,
         # and each CivCom instance is per-player, so events are not shared across agents.
         if self.combat_log:
-            state['combat_log'], self.combat_log = self.combat_log, []
+            state['combat_log'], self.combat_log = list(self.combat_log), deque(maxlen=500)
         return state
 
     def _build_strategic_view(self, player_id):
@@ -3115,7 +3115,7 @@ class CivCom(Thread):
         state['player_id'] = player_id
         state['visible_tiles'] = getattr(self, 'visible_tiles', [])
         if self.combat_log:
-            state['combat_log'], self.combat_log = self.combat_log, []
+            state['combat_log'], self.combat_log = list(self.combat_log), deque(maxlen=500)
         return state
 
     def get_full_state_global(self) -> dict:
@@ -3143,7 +3143,7 @@ class CivCom(Thread):
 
         state = self._build_state_dict(units=all_units, cities=all_cities)
         if self.combat_log:
-            state['combat_log'], self.combat_log = self.combat_log, []
+            state['combat_log'], self.combat_log = list(self.combat_log), deque(maxlen=500)
         return state
 
     def _get_valid_map_info(self):
