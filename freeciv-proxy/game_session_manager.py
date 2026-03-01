@@ -161,6 +161,23 @@ class GameSession:
             f"port={self.civserver_port} reason={reason}"
         )
 
+        # Write marker file so init-freeciv-web.sh knows saves can be cleaned.
+        # Without this marker, quitidle exits (code 0) would also clean saves,
+        # destroying game state needed for crash recovery.
+        save_path = os.environ.get("FREECIV_SAVE_PATH")
+        if save_path:
+            try:
+                marker = os.path.join(save_path, ".game_completed")
+                with open(marker, "w") as f:
+                    f.write(f"{reason}\n{time.time()}\n")
+                logger.info(
+                    f"Wrote game completion marker: {marker}"
+                )
+            except OSError as e:
+                logger.warning(
+                    f"Could not write game completion marker to {save_path}: {e}"
+                )
+
     def reset_port_releasing_flag(self, reason: str) -> None:
         """Reset the _port_releasing flag after release attempt completes.
 

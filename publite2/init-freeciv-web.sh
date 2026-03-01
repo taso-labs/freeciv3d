@@ -84,10 +84,14 @@ ${HOME}/freeciv/bin/freeciv-web "${args[@]}" > "../logs/freeciv-web-stdout-${2}.
 
 rc=$?;
 kill -9 $proxy_pid;
-# Clean saves after normal game exit (exit code 0 = clean end)
-# Keeps saves only for crash recovery (non-zero exit = pod eviction, OOM, etc.)
-if [ $rc -eq 0 ]; then
+# Clean saves only when game truly completed (ENDGAME_REPORT → .game_completed marker).
+# Quitidle exits (code 0, no marker) preserve saves for auto-reload on restart.
+# Crash exits (non-zero) also preserve saves for recovery.
+if [ -f "${savesdir}/.game_completed" ]; then
   rm -f "${savesdir}"/*.sav*
-  echo "Cleaned saves after normal game exit (port ${2})"
+  rm -f "${savesdir}/.game_completed"
+  echo "Cleaned saves after completed game (port ${2})"
+else
+  echo "Preserving saves for recovery (exit code ${rc}, port ${2})"
 fi
 exit $rc

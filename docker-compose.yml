@@ -78,6 +78,9 @@ services:
       - ./freeciv-proxy:/docker/freeciv-proxy
       - ./llm-gateway:/docker/llm-gateway
       - ./logs:/docker/logs
+      # Persistent savegames volume — matches K8s PVC mount at same path.
+      # Preserves civserver saves across container restarts for crash recovery.
+      - savegames:/var/lib/tomcat10/webapps/data/savegames
       # Docker socket for LocalStreamManager to create streaming containers on-demand
       - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
@@ -239,4 +242,5 @@ services:
 volumes:
   mysql_data:
   redis_data:
+  savegames:         # Civserver save files — persists across container restarts for crash recovery
   streaming_backup:  # Used by on-demand streaming containers for local backups
