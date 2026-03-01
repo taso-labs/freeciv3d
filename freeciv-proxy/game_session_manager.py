@@ -164,18 +164,22 @@ class GameSession:
         # Write marker file so init-freeciv-web.sh knows saves can be cleaned.
         # Without this marker, quitidle exits (code 0) would also clean saves,
         # destroying game state needed for crash recovery.
-        save_path = os.environ.get("FREECIV_SAVE_PATH")
+        # Note: For longturn games the marker is still written but never checked
+        # by init-freeciv-web.sh (cleanup only runs in the non-longturn branch).
+        save_path = os.environ.get("FCWEB_SAVE_DIR")
         if save_path:
             try:
                 marker = os.path.join(save_path, ".game_completed")
                 with open(marker, "w") as f:
-                    f.write(f"{reason}\n{time.time()}\n")
+                    f.write("%s\n%s\n%s\n" % (self.game_id, reason, time.time()))
                 logger.info(
-                    f"Wrote game completion marker: {marker}"
+                    "Wrote game completion marker: %s (game_id=%s)",
+                    marker, self.game_id
                 )
             except OSError as e:
                 logger.warning(
-                    f"Could not write game completion marker to {save_path}: {e}"
+                    "Could not write game completion marker to %s: %s",
+                    save_path, e
                 )
 
     def reset_port_releasing_flag(self, reason: str) -> None:

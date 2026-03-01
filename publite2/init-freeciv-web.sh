@@ -66,7 +66,7 @@ else
 fi
 addArgs --saves "${savesdir}"
 
-export FREECIV_SAVE_PATH="${savesdir}"
+export FCWEB_SAVE_DIR="${savesdir}"
 rm -f "/var/lib/tomcat10/webapps/data/scorelogs/score-${2}.log"
 rm -f "../logs/freeciv-web-log-${2}.log"
 
