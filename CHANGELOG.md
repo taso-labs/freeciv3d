@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.62](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.61...freeciv3d-v0.3.62) (2026-03-02)
+
+
+### Bug Fixes
+
+* preserve civserver saves across quitidle restarts (AGE-445 4c) ([#173](https://github.com/taso-ventures/freeciv3d/issues/173)) ([c4f8612](https://github.com/taso-ventures/freeciv3d/commit/c4f8612764ca7b4a077a22bd53ec4d9947be0775))
+
 ## [0.3.61](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.60...freeciv3d-v0.3.61) (2026-02-25)
 
 
