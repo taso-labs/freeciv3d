@@ -22,6 +22,7 @@ import time
 import json
 import os
 import asyncio
+from collections import deque
 from tornado import ioloop
 
 # Import packet ID constants for type-safe packet handling
@@ -66,6 +67,7 @@ from packet_constants import (
     PACKET_DIPLOMACY_CREATE_CLAUSE_REQ,  # Request to add treaty clause (cs)
     PACKET_DIPLOMACY_ACCEPT_TREATY,  # Treaty accepted (sc)
     PACKET_UNIT_DO_ACTION,  # Unit action packet for disbanding
+    PACKET_UNIT_COMBAT_INFO,  # Unit combat information (attacker/defender/HP)
     CLAUSE_VISION,  # Treaty clause type for vision sharing
     DS_WAR, DS_ARMISTICE, DS_CEASEFIRE, DS_PEACE, DS_ALLIANCE, DS_NO_CONTACT, DS_NAMES,
     get_packet_name
@@ -357,6 +359,7 @@ class CivCom(Thread):
         self.map_info = {}
         self.player_units = {}  # Dict keyed by unit_id for efficient updates
         self.other_units = {}   # Dict keyed by unit_id for non-player units
+        self.combat_log = deque(maxlen=500)  # Accumulated PACKET_UNIT_COMBAT_INFO events, drained on state read
         self.player_cities = {}  # Dict keyed by city_id for efficient updates
         self.all_players = []
         self.known_techs = []
@@ -1807,10 +1810,79 @@ class CivCom(Thread):
                 if unit_id is not None and isinstance(self.player_units, dict):
                     if unit_id in self.player_units:
                         removed_unit = self.player_units.pop(unit_id)
-                        unit_type = removed_unit.get('utype', 'unknown')
+                        unit_type = removed_unit.get('type', 'unknown')
                         logger.info(f"✓ Removed unit {unit_id} (type={unit_type}) - consumed/destroyed")
                     else:
                         logger.debug(f"Received PACKET_UNIT_REMOVE for unit {unit_id} (not in our tracked units)")
+
+            # Unit combat info packet - sent when two units fight
+            # Fields: attacker_unit_id, defender_unit_id, attacker_hp, defender_hp,
+            #         make_att_veteran, make_def_veteran
+            elif packet_type == PACKET_UNIT_COMBAT_INFO:
+                attacker_id = packet.get('attacker_unit_id')
+                defender_id = packet.get('defender_unit_id')
+
+                # Guard: skip malformed packets missing unit IDs
+                if attacker_id is None or defender_id is None:
+                    logger.debug(f"PACKET_UNIT_COMBAT_INFO missing unit IDs: att={attacker_id}, def={defender_id}")
+                else:
+                    att_hp = packet.get('attacker_hp', 0)
+                    def_hp = packet.get('defender_hp', 0)
+                    make_att_vet = packet.get('make_att_veteran', False)
+                    make_def_vet = packet.get('make_def_veteran', False)
+
+                    # Look up pre-combat HP and unit types from tracked state.
+                    # Use explicit `is None` check — `.get()` can return an empty dict
+                    # which is falsy and would incorrectly fall through with `or`.
+                    att_unit = self.player_units.get(attacker_id)
+                    if att_unit is None:
+                        att_unit = self.other_units.get(attacker_id)
+                    def_unit = self.player_units.get(defender_id)
+                    if def_unit is None:
+                        def_unit = self.other_units.get(defender_id)
+
+                    if att_unit is None:
+                        logger.debug(f"Combat attacker unit {attacker_id} not in tracked state (fog-of-war)")
+                    if def_unit is None:
+                        logger.debug(f"Combat defender unit {defender_id} not in tracked state (fog-of-war)")
+
+                    att_type = att_unit.get('type', 'unknown') if att_unit is not None else 'unknown'
+                    def_type = def_unit.get('type', 'unknown') if def_unit is not None else 'unknown'
+
+                    att_hp_before = att_unit.get('hp') if att_unit is not None else None
+                    def_hp_before = def_unit.get('hp') if def_unit is not None else None
+
+                    # Determine outcome: attacker_won, defender_won, or mutual_destruction
+                    attacker_won = def_hp <= 0 and att_hp > 0
+                    defender_won = att_hp <= 0 and def_hp > 0
+                    mutual_destruction = att_hp <= 0 and def_hp <= 0
+
+                    combat_event = {
+                        'attacker_unit_id': attacker_id,
+                        'defender_unit_id': defender_id,
+                        'attacker_unit_type': att_type,
+                        'defender_unit_type': def_type,
+                        'attacker_hp_before': att_hp_before,
+                        'attacker_hp_after': att_hp,
+                        'defender_hp_before': def_hp_before,
+                        'defender_hp_after': def_hp,
+                        'attacker_won': attacker_won,
+                        'defender_won': defender_won,
+                        'mutual_destruction': mutual_destruction,
+                        'make_att_veteran': make_att_vet,
+                        'make_def_veteran': make_def_vet,
+                        'turn': self.game_turn,
+                        'timestamp': time.time()
+                    }
+                    self.combat_log.append(combat_event)
+
+                    outcome = 'mutual_destruction' if mutual_destruction else (
+                        'attacker_won' if attacker_won else 'defender_won'
+                    )
+                    logger.info(
+                        f"⚔ Combat: {att_type} (id={attacker_id}) vs {def_type} (id={defender_id}) → "
+                        f"att_hp={att_hp}, def_hp={def_hp}, outcome={outcome}, vet={make_att_vet}/{make_def_vet}"
+                    )
 
             # Tile info packet - visibility/fog-of-war updates after movement
             # Sent by server when units move and reveal new tiles
@@ -2498,6 +2570,7 @@ class CivCom(Thread):
             'timestamp': time.time(),
             'player_perspective': player_id
         }
+        self._drain_combat_log(state)
         return state
 
     def _build_strategic_view(self, player_id):
@@ -3048,6 +3121,7 @@ class CivCom(Thread):
         )
         state['player_id'] = player_id
         state['visible_tiles'] = getattr(self, 'visible_tiles', [])
+        self._drain_combat_log(state)
         return state
 
     def get_full_state_global(self) -> dict:
@@ -3073,7 +3147,20 @@ class CivCom(Thread):
         # plus any enemy cities within visibility range.
         all_cities = self._normalize_to_dict(self.player_cities)
 
-        return self._build_state_dict(units=all_units, cities=all_cities)
+        state = self._build_state_dict(units=all_units, cities=all_cities)
+        self._drain_combat_log(state)
+        return state
+
+    def _drain_combat_log(self, state: dict) -> None:
+        """Drain accumulated combat events into *state* (atomic swap).
+
+        Contract: combat_log is drained by the first state read after combat
+        occurs.  In our architecture each agent's harness calls one state
+        method per turn, and each CivCom instance is per-player, so events
+        are not shared across agents.
+        """
+        if self.combat_log:
+            state['combat_log'], self.combat_log = list(self.combat_log), deque(maxlen=500)
 
     def _get_valid_map_info(self):
         """Return map_info with valid dimensions or a default."""
