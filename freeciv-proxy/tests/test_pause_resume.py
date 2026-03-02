@@ -18,6 +18,7 @@ import json
 import sys
 import os
 import secrets
+import tempfile
 from unittest.mock import Mock, MagicMock, patch
 
 # Add parent directory to path for imports
@@ -928,6 +929,50 @@ class TestGameOverPortRelease(unittest.TestCase):
         gs.mark_game_over(reason="second_call")
         self.assertEqual(gs.game_ended_at, first_ended_at)
         self.assertEqual(gs.phase, GamePhase.ENDED)
+
+    def test_mark_game_over_writes_marker_file(self):
+        """mark_game_over() should write .game_completed marker when FCWEB_SAVE_DIR is set."""
+        gs = GameSession(game_id="marker-test-123", civserver_port=6007, min_players=2)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch.dict(os.environ, {"FCWEB_SAVE_DIR": tmpdir}):
+                gs.mark_game_over(reason="endgame_report")
+
+            marker_path = os.path.join(tmpdir, ".game_completed")
+            self.assertTrue(os.path.exists(marker_path), "Marker file should exist")
+
+            with open(marker_path) as f:
+                lines = f.read().strip().split("\n")
+            self.assertEqual(len(lines), 3)
+            self.assertEqual(lines[0], "marker-test-123")  # game_id
+            self.assertEqual(lines[1], "endgame_report")    # reason
+            float(lines[2])  # timestamp should be parseable
+
+    def test_mark_game_over_no_marker_without_env(self):
+        """mark_game_over() should not write marker when FCWEB_SAVE_DIR is unset."""
+        gs = GameSession(game_id="no-marker-test", civserver_port=6008, min_players=2)
+
+        with patch.dict(os.environ, {}, clear=True):
+            # Remove FCWEB_SAVE_DIR if present
+            os.environ.pop("FCWEB_SAVE_DIR", None)
+            gs.mark_game_over(reason="test")
+
+        # No assertion on file — just verify no crash
+
+    def test_mark_game_over_idempotent_marker(self):
+        """Second mark_game_over() should not overwrite marker (early-return guard)."""
+        gs = GameSession(game_id="idempotent-marker", civserver_port=6009, min_players=2)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch.dict(os.environ, {"FCWEB_SAVE_DIR": tmpdir}):
+                gs.mark_game_over(reason="first_call")
+                marker_path = os.path.join(tmpdir, ".game_completed")
+                first_content = open(marker_path).read()
+
+                gs.mark_game_over(reason="second_call")
+                second_content = open(marker_path).read()
+
+            self.assertEqual(first_content, second_content)
 
 
 class TestResumeDebounce(unittest.TestCase):
