@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.63](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.62...freeciv3d-v0.3.63) (2026-03-02)
+
+
+### Features
+
+* **proxy:** track combat events from PACKET_UNIT_COMBAT_INFO ([#172](https://github.com/taso-ventures/freeciv3d/issues/172)) ([b329781](https://github.com/taso-ventures/freeciv3d/commit/b3297814124e4cf41a150a68590f8677cab19998))
+
 ## [0.3.62](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.61...freeciv3d-v0.3.62) (2026-03-02)
 
 
