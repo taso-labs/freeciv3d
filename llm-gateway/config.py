@@ -45,7 +45,7 @@ class Settings(BaseSettings):
     max_agents_per_game: int = 8
 
     # Stale game session reaper settings
-    stale_game_timeout: int = 21600  # seconds (6h) - games with no activity for this long are reaped
+    stale_game_timeout: int = 86400  # seconds (24h) - games with no activity for this long are reaped
     stale_game_warn_threshold: int = 3600  # seconds (1h) - log a warning once when a session crosses this idle duration
     stale_game_reaper_interval: int = 60  # seconds - how often the reaper runs
 
