@@ -149,6 +149,9 @@ spec:
             # Set high to accommodate multi-hour matches and API credit outages.
             - name: GATEWAY_STALE_GAME_TIMEOUT
               value: "21600"
+            # Warn once (per idle period) when a session crosses this idle duration.
+            - name: GATEWAY_STALE_GAME_WARN_THRESHOLD
+              value: "3600"
 
             # Distributed tracing (OpenTelemetry with GCP Cloud Trace)
             - name: ENABLE_CLOUD_TRACE

@@ -46,6 +46,7 @@ class Settings(BaseSettings):
 
     # Stale game session reaper settings
     stale_game_timeout: int = 21600  # seconds (6h) - games with no activity for this long are reaped
+    stale_game_warn_threshold: int = 3600  # seconds (1h) - log a warning once when a session crosses this idle duration
     stale_game_reaper_interval: int = 60  # seconds - how often the reaper runs
 
     # Agent connection settings
@@ -177,6 +178,12 @@ def validate_settings() -> bool:
         # Validate stale game reaper settings
         if not (300 <= settings.stale_game_timeout <= 86400):
             errors.append(f"Invalid stale_game_timeout: {settings.stale_game_timeout} (must be 300-86400)")
+
+        if not (60 <= settings.stale_game_warn_threshold <= settings.stale_game_timeout):
+            errors.append(
+                f"Invalid stale_game_warn_threshold: {settings.stale_game_warn_threshold} "
+                f"(must be 60-{settings.stale_game_timeout}, i.e. less than stale_game_timeout)"
+            )
 
         if not (10 <= settings.stale_game_reaper_interval <= 600):
             errors.append(f"Invalid stale_game_reaper_interval: {settings.stale_game_reaper_interval} (must be 10-600)")
