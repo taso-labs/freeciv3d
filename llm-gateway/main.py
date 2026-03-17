@@ -200,6 +200,7 @@ class LLMGateway:
         # Issue #1 (PR Review): Prevents race conditions when concurrent agents update sessions
         self._sessions_lock = asyncio.Lock()
         self._running = False
+        self._reaper_task: Optional[asyncio.Task] = None
 
         # Streaming manager (optional - graceful degradation if unavailable)
         # Uses factory function to auto-detect K8s vs Docker environment
@@ -244,11 +245,13 @@ class LLMGateway:
                     "agent_id": agent_id,
                     "player_id": player_id,
                 }
+                session["last_activity"] = time.time()
                 return
 
             self.game_sessions[game_id] = {
                 "config": {},
                 "created_at": time.time(),
+                "last_activity": time.time(),
                 "status": "active",
                 "players": {
                     str(player_id): {
@@ -274,11 +277,22 @@ class LLMGateway:
         await connection_state_manager.start()
         await secure_token_manager.start()
 
+        # Start the stale game session reaper
+        self._reaper_task = asyncio.create_task(self._stale_game_reaper())
+
         logger.info("LLM Gateway started")
 
     async def stop(self):
         """Stop the gateway"""
         self._running = False
+
+        # Cancel the reaper task
+        if self._reaper_task and not self._reaper_task.done():
+            self._reaper_task.cancel()
+            try:
+                await self._reaper_task
+            except asyncio.CancelledError:
+                pass
 
         # Stop all managers
         await connection_manager.stop()
@@ -287,6 +301,66 @@ class LLMGateway:
         await secure_token_manager.stop()
 
         logger.info("LLM Gateway stopped")
+
+    def _touch_game(self, game_id: str) -> None:
+        """Update last_activity timestamp for a game session.
+
+        Called on any meaningful game activity (state updates, agent actions,
+        turn changes) to prevent the stale game reaper from evicting active games.
+        """
+        if game_id in self.game_sessions:
+            self.game_sessions[game_id]["last_activity"] = time.time()
+
+    async def _stale_game_reaper(self) -> None:
+        """Periodically evict game sessions with no recent activity.
+
+        Prevents stale game_sessions entries from accumulating and blocking
+        new games when matches fail silently or agents crash without calling
+        end_game(). Runs every `stale_game_reaper_interval` seconds and
+        removes sessions idle for longer than `stale_game_timeout`.
+        """
+        interval = settings.stale_game_reaper_interval
+        timeout = settings.stale_game_timeout
+        logger.info(
+            f"Stale game reaper started (interval={interval}s, timeout={timeout}s)"
+        )
+        while self._running:
+            try:
+                await asyncio.sleep(interval)
+                if not self._running:
+                    break
+
+                now = time.time()
+                stale_ids = []
+                async with self._sessions_lock:
+                    for game_id, session in self.game_sessions.items():
+                        last_activity = session.get(
+                            "last_activity", session.get("created_at", 0)
+                        )
+                        idle_secs = now - last_activity
+                        if idle_secs > timeout:
+                            stale_ids.append((game_id, idle_secs))
+
+                for game_id, idle_secs in stale_ids:
+                    logger.warning(
+                        f"Reaping stale game session {game_id} "
+                        f"(idle {idle_secs:.0f}s > {timeout}s threshold)"
+                    )
+                    await self.end_game(
+                        game_id,
+                        {"reason": "stale_session_reaped", "idle_seconds": idle_secs},
+                    )
+
+                if stale_ids:
+                    logger.info(
+                        f"Stale game reaper: evicted {len(stale_ids)} session(s), "
+                        f"{len(self.game_sessions)} remaining"
+                    )
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"Stale game reaper error: {e}")
+                await asyncio.sleep(interval)
 
     async def register_agent(self, agent_id: str, config: Dict[str, Any]) -> Dict[str, Any]:
         """Register agent connection - actual auth handled by proxy"""
@@ -597,6 +671,7 @@ class LLMGateway:
                 if game_id in self.game_sessions:
                     self.game_sessions[game_id]["last_state"] = message.get("data", {})
                     self.game_sessions[game_id]["last_state_time"] = message.get("timestamp", time.time())
+                    self._touch_game(game_id)
 
                 # Forward state to spectators if it contains map/game data
                 state_data = message.get("data", {})
@@ -740,6 +815,7 @@ class LLMGateway:
             self.game_sessions[game_id] = {
                 "config": config,
                 "created_at": time.time(),
+                "last_activity": time.time(),
                 "status": "active",
                 "players": {}
             }
@@ -965,6 +1041,7 @@ class LLMGateway:
             # Update game session
             if game_id in self.game_sessions:
                 self.game_sessions[game_id]["current_turn"] = turn_number
+                self._touch_game(game_id)
 
             await connection_manager.broadcast_to_spectators(game_id, {
                 "type": "turn_update",

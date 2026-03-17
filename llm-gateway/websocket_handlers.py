@@ -842,6 +842,10 @@ class AgentWebSocketHandler:
                 # Note: websockets >= 10.0 is safe for concurrent send/recv from different tasks
                 await self.proxy_connection.send(json.dumps(proxy_message))
                 logger.debug(f"Forwarded agent message to proxy: {msg_type}")
+
+                # Touch game session to prevent stale reaper from evicting active games
+                if gateway and self.game_id:
+                    gateway._touch_game(self.game_id)
             else:
                 await self._send_error(
                     "Connection to game server lost",

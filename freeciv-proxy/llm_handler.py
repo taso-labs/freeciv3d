@@ -108,6 +108,43 @@ start_periodic_cleanup(interval_ms=300000)  # 5 minutes
 llm_agents = {}
 MAX_LLM_AGENTS = llm_config.get_max_agents()
 
+# Interval for sweeping stale entries from llm_agents (seconds)
+_STALE_AGENT_SWEEP_INTERVAL_MS = 60_000  # 1 minute
+
+
+def _sweep_stale_agents():
+    """Remove llm_agents entries whose WebSocket connection is no longer open.
+
+    This is a safety net against leaked entries that can occur when:
+    - on_close() is never called (Tornado edge cases)
+    - WebSocketClosedError during authentication prevents cleanup
+    - Handler crashes before reaching the cleanup path in on_close()
+
+    Without this sweep, stale entries accumulate and eventually hit the
+    MAX_LLM_AGENTS capacity limit, blocking all new game connections.
+    """
+    stale = []
+    for agent_id, handler in list(llm_agents.items()):
+        # Check if the handler's WebSocket connection is closed
+        ws_conn = getattr(handler, 'ws_connection', None)
+        if ws_conn is None:
+            stale.append(agent_id)
+
+    if stale:
+        for agent_id in stale:
+            del llm_agents[agent_id]
+        logger.warning(
+            f"Stale agent sweep: removed {len(stale)} dead connection(s) "
+            f"from llm_agents registry: {stale}. "
+            f"Remaining: {len(llm_agents)}/{MAX_LLM_AGENTS}"
+        )
+
+
+# Start periodic stale agent sweep via Tornado PeriodicCallback
+from tornado.ioloop import PeriodicCallback as _PeriodicCallback
+_agent_sweep_callback = _PeriodicCallback(_sweep_stale_agents, _STALE_AGENT_SWEEP_INTERVAL_MS)
+_agent_sweep_callback.start()
+
 # Packet buffer limits to prevent unbounded memory growth
 # These protect against memory exhaustion if authentication hangs or fails
 MAX_PACKET_BUFFER_SIZE = 200  # Maximum number of packets to buffer (typical game sends ~150 RULESET packets)
