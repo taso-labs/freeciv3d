@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.65](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.64...freeciv3d-v0.3.65) (2026-03-17)
+
+
+### Bug Fixes
+
+* **reaper:** raise stale game timeout to 24h to prevent match failure and streaming leaks ([#178](https://github.com/taso-ventures/freeciv3d/issues/178)) ([f0426ba](https://github.com/taso-ventures/freeciv3d/commit/f0426ba7f925884b3d77bdeedf89b0966e2a145f))
+
 ## [0.3.64](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.63...freeciv3d-v0.3.64) (2026-03-17)
 
 
