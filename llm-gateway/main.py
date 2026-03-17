@@ -369,6 +369,9 @@ class LLMGateway:
                                     f"Game session {game_id} idle for {idle_secs:.0f}s "
                                     f"(warn>{warn_threshold}s, reap>{timeout}s) — possible stalled match"
                                 )
+                        else:
+                            # Session recovered — reset so the warning re-fires on the next stall.
+                            warned_sessions.discard(game_id)
 
                 reaped = 0
                 for game_id, _scan_idle in stale_ids:
