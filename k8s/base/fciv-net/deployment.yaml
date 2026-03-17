@@ -145,6 +145,10 @@ spec:
               value: "3600"
             - name: SESSION_SUSPENSION_TIMEOUT_SECS
               value: "86400"
+            # Gateway stale game reaper: end sessions idle longer than this.
+            # Set high to accommodate multi-hour matches and API credit outages.
+            - name: GATEWAY_STALE_GAME_TIMEOUT
+              value: "21600"
 
             # Distributed tracing (OpenTelemetry with GCP Cloud Trace)
             - name: ENABLE_CLOUD_TRACE

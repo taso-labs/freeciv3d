@@ -326,8 +326,9 @@ class LLMGateway:
         """
         interval = settings.stale_game_reaper_interval
         timeout = settings.stale_game_timeout
+        warn_threshold = timeout // 6  # warn at 1/6 of reap timeout (e.g., 1h if timeout=6h)
         logger.info(
-            f"Stale game reaper started (interval={interval}s, timeout={timeout}s)"
+            f"Stale game reaper started (interval={interval}s, timeout={timeout}s, warn_at={warn_threshold}s)"
         )
         while self._running:
             try:
@@ -345,6 +346,11 @@ class LLMGateway:
                         idle_secs = now - last_activity
                         if idle_secs > timeout:
                             stale_ids.append((game_id, idle_secs))
+                        elif idle_secs > warn_threshold:
+                            logger.warning(
+                                f"Game session {game_id} idle for {idle_secs:.0f}s "
+                                f"(warn>{warn_threshold}s, reap>{timeout}s) — possible stalled match"
+                            )
 
                 reaped = 0
                 for game_id, _scan_idle in stale_ids:
