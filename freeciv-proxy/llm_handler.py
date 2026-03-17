@@ -14,7 +14,7 @@ import uuid
 import asyncio
 import socket
 from tornado import websocket
-from tornado.ioloop import IOLoop
+from tornado.ioloop import IOLoop, PeriodicCallback as _PeriodicCallback
 from civcom import CivCom
 from state_cache import state_cache
 from state_extractor import StateExtractor, StateFormat, civcom_registry
@@ -125,9 +125,14 @@ def _sweep_stale_agents():
     """
     stale = []
     for agent_id, handler in list(llm_agents.items()):
-        # Check if the handler's WebSocket connection is closed
+        # Check if the handler's WebSocket connection is closed.
+        # ws_connection is None when Tornado has fully torn down the handler,
+        # but it can also be a non-None object with a closed stream when the
+        # TCP connection dropped without a clean WebSocket close.
         ws_conn = getattr(handler, 'ws_connection', None)
         if ws_conn is None:
+            stale.append(agent_id)
+        elif hasattr(ws_conn, 'stream') and ws_conn.stream and ws_conn.stream.closed():
             stale.append(agent_id)
 
     if stale:
@@ -140,8 +145,7 @@ def _sweep_stale_agents():
         )
 
 
-# Start periodic stale agent sweep via Tornado PeriodicCallback
-from tornado.ioloop import PeriodicCallback as _PeriodicCallback
+# Start periodic stale agent sweep
 _agent_sweep_callback = _PeriodicCallback(_sweep_stale_agents, _STALE_AGENT_SWEEP_INTERVAL_MS)
 _agent_sweep_callback.start()
 

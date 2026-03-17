@@ -307,6 +307,11 @@ class LLMGateway:
 
         Called on any meaningful game activity (state updates, agent actions,
         turn changes) to prevent the stale game reaper from evicting active games.
+
+        Note: intentionally does NOT acquire ``_sessions_lock``.  This method
+        is synchronous (no await), so in asyncio's single-threaded model the
+        dict write is atomic within a single coroutine step.  Skipping the
+        lock avoids contention on every forwarded message.
         """
         if game_id in self.game_sessions:
             self.game_sessions[game_id]["last_activity"] = time.time()
@@ -341,19 +346,35 @@ class LLMGateway:
                         if idle_secs > timeout:
                             stale_ids.append((game_id, idle_secs))
 
-                for game_id, idle_secs in stale_ids:
+                reaped = 0
+                for game_id, _scan_idle in stale_ids:
+                    # Re-check with fresh timestamp: game may have received
+                    # activity between the scan (under lock) and now.
+                    session = self.game_sessions.get(game_id)
+                    if session is None:
+                        continue  # Already ended by normal flow
+                    fresh_idle = time.time() - session.get(
+                        "last_activity", session.get("created_at", 0)
+                    )
+                    if fresh_idle <= timeout:
+                        logger.info(
+                            f"Skipping reap of {game_id}: activity detected since scan"
+                        )
+                        continue
+
                     logger.warning(
                         f"Reaping stale game session {game_id} "
-                        f"(idle {idle_secs:.0f}s > {timeout}s threshold)"
+                        f"(idle {fresh_idle:.0f}s > {timeout}s threshold)"
                     )
                     await self.end_game(
                         game_id,
-                        {"reason": "stale_session_reaped", "idle_seconds": idle_secs},
+                        {"reason": "stale_session_reaped", "idle_seconds": fresh_idle},
                     )
+                    reaped += 1
 
-                if stale_ids:
+                if reaped:
                     logger.info(
-                        f"Stale game reaper: evicted {len(stale_ids)} session(s), "
+                        f"Stale game reaper: evicted {reaped} session(s), "
                         f"{len(self.game_sessions)} remaining"
                     )
             except asyncio.CancelledError:
@@ -959,6 +980,7 @@ class LLMGateway:
             response = await self._send_request_and_wait(game_id, action_message, timeout=10.0)
 
             if response.get("success", False):
+                self._touch_game(game_id)
                 # Notify spectators of successful action
                 await self._notify_spectators_action(game_id, action, response)
 

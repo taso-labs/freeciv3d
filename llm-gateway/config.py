@@ -174,6 +174,13 @@ def validate_settings() -> bool:
         if not (1 <= settings.rate_limit_max_violations <= 10):
             errors.append(f"Invalid rate_limit_max_violations: {settings.rate_limit_max_violations} (must be 1-10)")
 
+        # Validate stale game reaper settings
+        if not (30 <= settings.stale_game_timeout <= 3600):
+            errors.append(f"Invalid stale_game_timeout: {settings.stale_game_timeout} (must be 30-3600)")
+
+        if not (10 <= settings.stale_game_reaper_interval <= 600):
+            errors.append(f"Invalid stale_game_reaper_interval: {settings.stale_game_reaper_interval} (must be 10-600)")
+
         # Validate auth timeout
         if not (10 <= settings.auth_timeout <= 300):
             errors.append(f"Invalid auth_timeout: {settings.auth_timeout} (must be 10-300)")
