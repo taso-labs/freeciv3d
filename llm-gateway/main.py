@@ -319,11 +319,15 @@ class LLMGateway:
     async def _stale_game_reaper(self) -> None:
         """Periodically evict game sessions with no recent activity.
 
-        Prevents stale game_sessions entries from accumulating and blocking
-        new games when matches fail silently, agents crash without calling
-        end_game(), or matches stall indefinitely (e.g. API credit exhaustion).
-        Runs every `stale_game_reaper_interval` seconds and removes sessions
-        idle for longer than `stale_game_timeout`.
+        Primary purpose: trigger streaming cleanup (stop K8s Jobs and end
+        YouTube broadcasts) for abandoned matches. end_game() is the only
+        non-manual path that calls stream_manager.stop_stream().
+
+        Also clears stale game_sessions entries that may accumulate when
+        matches fail silently, agents crash without calling end_game(), or
+        matches stall indefinitely (e.g. API credit exhaustion). Runs every
+        `stale_game_reaper_interval` seconds and removes sessions idle for
+        longer than `stale_game_timeout`.
 
         A warning is logged once per session when it first crosses
         `stale_game_warn_threshold` idle seconds, giving operators time to
@@ -337,6 +341,10 @@ class LLMGateway:
         )
         # Track sessions that have already emitted a stale warning to avoid
         # spamming logs on every reaper cycle (one warning per idle period).
+        # Note: only cleared on reaper-driven paths (skip + reap). Games that
+        # end via end_game() called externally leave their game_id here, but
+        # this is harmless — game IDs are unique ULIDs and the set is bounded
+        # by the number of concurrent sessions (max 10).
         warned_sessions: set[str] = set()
         while self._running:
             try:

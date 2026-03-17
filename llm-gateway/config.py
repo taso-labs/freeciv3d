@@ -182,7 +182,7 @@ def validate_settings() -> bool:
         if not (60 <= settings.stale_game_warn_threshold <= settings.stale_game_timeout):
             errors.append(
                 f"Invalid stale_game_warn_threshold: {settings.stale_game_warn_threshold} "
-                f"(must be 60-{settings.stale_game_timeout}, i.e. less than stale_game_timeout)"
+                f"(must be 60-{settings.stale_game_timeout}, i.e. at most stale_game_timeout)"
             )
 
         if not (10 <= settings.stale_game_reaper_interval <= 600):
