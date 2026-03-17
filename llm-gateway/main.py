@@ -319,16 +319,33 @@ class LLMGateway:
     async def _stale_game_reaper(self) -> None:
         """Periodically evict game sessions with no recent activity.
 
-        Prevents stale game_sessions entries from accumulating and blocking
-        new games when matches fail silently or agents crash without calling
-        end_game(). Runs every `stale_game_reaper_interval` seconds and
-        removes sessions idle for longer than `stale_game_timeout`.
+        Primary purpose: trigger streaming cleanup (stop K8s Jobs and end
+        YouTube broadcasts) for abandoned matches. end_game() is the only
+        non-manual path that calls stream_manager.stop_stream().
+
+        Also clears stale game_sessions entries that may accumulate when
+        matches fail silently, agents crash without calling end_game(), or
+        matches stall indefinitely (e.g. API credit exhaustion). Runs every
+        `stale_game_reaper_interval` seconds and removes sessions idle for
+        longer than `stale_game_timeout`.
+
+        A warning is logged once per session when it first crosses
+        `stale_game_warn_threshold` idle seconds, giving operators time to
+        intervene before the session is reaped.
         """
         interval = settings.stale_game_reaper_interval
         timeout = settings.stale_game_timeout
+        warn_threshold = settings.stale_game_warn_threshold
         logger.info(
-            f"Stale game reaper started (interval={interval}s, timeout={timeout}s)"
+            f"Stale game reaper started (interval={interval}s, timeout={timeout}s, warn_at={warn_threshold}s)"
         )
+        # Track sessions that have already emitted a stale warning to avoid
+        # spamming logs on every reaper cycle (one warning per idle period).
+        # Note: only cleared on reaper-driven paths (skip + reap). Games that
+        # end via end_game() called externally leave their game_id here, but
+        # this is harmless — game IDs are unique ULIDs and the set is bounded
+        # by the number of concurrent sessions (max 10).
+        warned_sessions: set[str] = set()
         while self._running:
             try:
                 await asyncio.sleep(interval)
@@ -345,6 +362,16 @@ class LLMGateway:
                         idle_secs = now - last_activity
                         if idle_secs > timeout:
                             stale_ids.append((game_id, idle_secs))
+                        elif idle_secs > warn_threshold:
+                            if game_id not in warned_sessions:
+                                warned_sessions.add(game_id)
+                                logger.warning(
+                                    f"Game session {game_id} idle for {idle_secs:.0f}s "
+                                    f"(warn>{warn_threshold}s, reap>{timeout}s) — possible stalled match"
+                                )
+                        else:
+                            # Session recovered — reset so the warning re-fires on the next stall.
+                            warned_sessions.discard(game_id)
 
                 reaped = 0
                 for game_id, _scan_idle in stale_ids:
@@ -360,12 +387,14 @@ class LLMGateway:
                         logger.info(
                             f"Skipping reap of {game_id}: activity detected since scan"
                         )
+                        warned_sessions.discard(game_id)
                         continue
 
                     logger.warning(
                         f"Reaping stale game session {game_id} "
                         f"(idle {fresh_idle:.0f}s > {timeout}s threshold)"
                     )
+                    warned_sessions.discard(game_id)
                     await self.end_game(
                         game_id,
                         {"reason": "stale_session_reaped", "idle_seconds": fresh_idle},

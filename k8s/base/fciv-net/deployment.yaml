@@ -145,6 +145,15 @@ spec:
               value: "3600"
             - name: SESSION_SUSPENSION_TIMEOUT_SECS
               value: "86400"
+            # Gateway stale game reaper: end sessions idle longer than this (streaming
+            # cleanup — stops K8s Jobs and YouTube broadcasts for abandoned matches).
+            # Intentionally aligned with SESSION_SUSPENSION_TIMEOUT_SECS above: an
+            # abandoned game's stream should not outlive the agent reconnect window.
+            - name: GATEWAY_STALE_GAME_TIMEOUT
+              value: "86400"
+            # Warn once (per idle period) when a session crosses this idle duration.
+            - name: GATEWAY_STALE_GAME_WARN_THRESHOLD
+              value: "3600"
 
             # Distributed tracing (OpenTelemetry with GCP Cloud Trace)
             - name: ENABLE_CLOUD_TRACE
