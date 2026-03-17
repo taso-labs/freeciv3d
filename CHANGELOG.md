@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.64](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.63...freeciv3d-v0.3.64) (2026-03-17)
+
+
+### Bug Fixes
+
+* **proxy+gateway:** add stale agent and game session cleanup to prevent capacity exhaustion ([#176](https://github.com/taso-ventures/freeciv3d/issues/176)) ([eac00f1](https://github.com/taso-ventures/freeciv3d/commit/eac00f130b54864e86ac440618f3989256d8c0f5))
+
 ## [0.3.63](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.62...freeciv3d-v0.3.63) (2026-03-02)
 
 
