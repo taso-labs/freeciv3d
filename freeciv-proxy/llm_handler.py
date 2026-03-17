@@ -108,8 +108,9 @@ start_periodic_cleanup(interval_ms=300000)  # 5 minutes
 llm_agents = {}
 MAX_LLM_AGENTS = llm_config.get_max_agents()
 
-# Interval for sweeping stale entries from llm_agents (seconds)
-_STALE_AGENT_SWEEP_INTERVAL_MS = 60_000  # 1 minute
+# Interval for sweeping stale entries from llm_agents
+# Configurable via STALE_AGENT_SWEEP_INTERVAL_SECS env var (default: 60s)
+_STALE_AGENT_SWEEP_INTERVAL_MS = int(os.getenv('STALE_AGENT_SWEEP_INTERVAL_SECS', '60')) * 1000
 
 
 def _sweep_stale_agents():
@@ -122,6 +123,11 @@ def _sweep_stale_agents():
 
     Without this sweep, stale entries accumulate and eventually hit the
     MAX_LLM_AGENTS capacity limit, blocking all new game connections.
+
+    Note: this only reclaims the capacity slot in the llm_agents registry.
+    Associated CivCom connections, session state, and civserver ports are
+    NOT cleaned up here — they rely on their own timeout/cleanup paths
+    (session_manager PeriodicCallback, DEAD_CIVCOM_TTL, etc.).
     """
     stale = []
     for agent_id, handler in list(llm_agents.items()):
@@ -145,9 +151,12 @@ def _sweep_stale_agents():
         )
 
 
-# Start periodic stale agent sweep
+# Start periodic stale agent sweep (stopped via atexit for clean shutdown)
 _agent_sweep_callback = _PeriodicCallback(_sweep_stale_agents, _STALE_AGENT_SWEEP_INTERVAL_MS)
 _agent_sweep_callback.start()
+
+import atexit
+atexit.register(_agent_sweep_callback.stop)
 
 # Packet buffer limits to prevent unbounded memory growth
 # These protect against memory exhaustion if authentication hangs or fails
