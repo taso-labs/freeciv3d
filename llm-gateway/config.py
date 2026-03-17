@@ -44,6 +44,10 @@ class Settings(BaseSettings):
     max_concurrent_games: int = 10
     max_agents_per_game: int = 8
 
+    # Stale game session reaper settings
+    stale_game_timeout: int = 300  # seconds (5 min) - games with no activity for this long are reaped
+    stale_game_reaper_interval: int = 60  # seconds - how often the reaper runs
+
     # Agent connection settings
     agent_timeout: int = 600  # seconds (10 minutes for longer games)
     max_connections_per_agent: int = 2
@@ -169,6 +173,13 @@ def validate_settings() -> bool:
 
         if not (1 <= settings.rate_limit_max_violations <= 10):
             errors.append(f"Invalid rate_limit_max_violations: {settings.rate_limit_max_violations} (must be 1-10)")
+
+        # Validate stale game reaper settings
+        if not (30 <= settings.stale_game_timeout <= 3600):
+            errors.append(f"Invalid stale_game_timeout: {settings.stale_game_timeout} (must be 30-3600)")
+
+        if not (10 <= settings.stale_game_reaper_interval <= 600):
+            errors.append(f"Invalid stale_game_reaper_interval: {settings.stale_game_reaper_interval} (must be 10-600)")
 
         # Validate auth timeout
         if not (10 <= settings.auth_timeout <= 300):
