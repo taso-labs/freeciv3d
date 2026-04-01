@@ -157,9 +157,12 @@ spec:
 
             # Distributed tracing disabled for cost reduction (maintenance mode)
             # OTLP collector is no longer deployed — traces fall back to basic logging
-            # To re-enable: uncomment env vars below and set enable-cloud-trace to "true"
+            # To re-enable: uncomment OTLP_ENDPOINT below and set enable-cloud-trace to "true" in configmap
             - name: ENABLE_CLOUD_TRACE
-              value: "false"
+              valueFrom:
+                configMapKeyRef:
+                  name: fciv-net-config
+                  key: enable-cloud-trace
             # - name: OTLP_ENDPOINT
             #   value: "http://opentelemetry-collector.opentelemetry.svc.cluster.local:4317"
             # Resource attributes - patched per environment (staging default)
