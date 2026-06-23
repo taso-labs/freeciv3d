@@ -155,15 +155,16 @@ spec:
             - name: GATEWAY_STALE_GAME_WARN_THRESHOLD
               value: "3600"
 
-            # Distributed tracing (OpenTelemetry with GCP Cloud Trace)
+            # Distributed tracing disabled for cost reduction (maintenance mode)
+            # OTLP collector is no longer deployed — traces fall back to basic logging
+            # To re-enable: uncomment OTLP_ENDPOINT below and set enable-cloud-trace to "true" in configmap
             - name: ENABLE_CLOUD_TRACE
               valueFrom:
                 configMapKeyRef:
                   name: fciv-net-config
                   key: enable-cloud-trace
-            # OTLP endpoint for OpenTelemetry (in-cluster collector)
-            - name: OTLP_ENDPOINT
-              value: "http://opentelemetry-collector.opentelemetry.svc.cluster.local:4317"
+            # - name: OTLP_ENDPOINT
+            #   value: "http://opentelemetry-collector.opentelemetry.svc.cluster.local:4317"
             # Resource attributes - patched per environment (staging default)
             - name: OTEL_RESOURCE_ATTRIBUTES
               value: "gcp.project_id=clashai-staging"

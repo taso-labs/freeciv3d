@@ -29,6 +29,6 @@ data:
   log-level: "info"
 
   # Distributed Tracing (OpenTelemetry with GCP Cloud Trace)
-  # Set to "true" to enable trace export to Cloud Trace
+  # Disabled for cost reduction (maintenance mode). Set to "true" to re-enable.
   # Requires roles/cloudtrace.agent on the service account
-  enable-cloud-trace: "true"
+  enable-cloud-trace: "false"
