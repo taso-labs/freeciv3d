@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.66](https://github.com/taso-labs/freeciv3d/compare/freeciv3d-v0.3.65...freeciv3d-v0.3.66) (2026-06-23)
+
+
+### Bug Fixes
+
+* disable OTEL tracing for cost reduction ([#180](https://github.com/taso-labs/freeciv3d/issues/180)) ([4f51b8f](https://github.com/taso-labs/freeciv3d/commit/4f51b8fbf71bb4e41125ce10dfb6e6bce456ba0c))
+
 ## [0.3.65](https://github.com/taso-ventures/freeciv3d/compare/freeciv3d-v0.3.64...freeciv3d-v0.3.65) (2026-03-17)
 
 
