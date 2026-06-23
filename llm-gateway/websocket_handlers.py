@@ -916,8 +916,8 @@ class AgentWebSocketHandler:
             allowed_fields = {"type", "is_ready"}
             transformed = {k: v for k, v in transformed.items() if k in allowed_fields}
         elif msg_type == "action_submit":
-            # agent-clash sends action_submit, transform to "action" for proxy
-            # agent-clash format: {type: "action_submit", action: "canonical_string", agent_id: "...", timestamp: ...}
+            # LLM agent clients send action_submit, transform to "action" for proxy
+            # Agent format: {type: "action_submit", action: "canonical_string", agent_id: "...", timestamp: ...}
             # Proxy expects: {type: "action", action: {...action data...}, timestamp (opt)}
 
             # Get the action field (could be string or dict)
@@ -939,7 +939,7 @@ class AgentWebSocketHandler:
 
         elif msg_type == "action":
             # Proxy expects: {type: "action", action: {...action data...}, timestamp (opt)}
-            # agent-clash sends: {type: "action", agent_id: "...", data: {...}}
+            # Agent sends: {type: "action", agent_id: "...", data: {...}}
             # After flattening (lines 305-308), data fields are at top level
 
             # Collect action data from either original 'data' field or flattened fields

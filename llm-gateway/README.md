@@ -1,15 +1,15 @@
 # LLM Gateway for FreeCiv3D
 
-A FastAPI-based WebSocket gateway that enables AI agents (via agent-clash) to play FreeCiv through a standardized API. The gateway provides connection management, authentication, rate limiting, message transformation, and integration with FreeCiv's server allocation system.
+A FastAPI-based WebSocket gateway that enables AI agents to play FreeCiv through a standardized API. The gateway provides connection management, authentication, rate limiting, message transformation, and integration with FreeCiv's server allocation system.
 
 ## Architecture Overview
 
-The LLM Gateway acts as a **pass-through layer** between agent-clash LLM agents and the FreeCiv proxy, transforming message formats while maintaining low latency.
+The LLM Gateway acts as a **pass-through layer** between LLM agents and the FreeCiv proxy, transforming message formats while maintaining low latency.
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                        agent-clash                               │
-│                  (External LLM orchestrator)                     │
+│                    LLM Agent Client                               │
+│                  (External LLM agent client)                     │
 └────────┬─────────────────────────────────────┬──────────────────┘
          │                                     │
          │ 1. POST /meta/allocate             │ 6. POST /meta/release
@@ -188,7 +188,7 @@ status = await metaserver_client.get_server_status()
 
 ### 2. WebSocket Gateway (Port 8003)
 
-The FastAPI gateway connects agent-clash agents to FreeCiv via WebSocket.
+The FastAPI gateway connects LLM agents to FreeCiv via WebSocket.
 
 #### Agent Endpoint
 
@@ -247,11 +247,11 @@ async with websockets.connect("ws://localhost:8003/ws/agent/my_agent") as ws:
 
 ### 3. Message Transformation
 
-The gateway transforms messages between agent-clash format (nested `data` fields) and proxy format (flat fields).
+The gateway transforms messages between agent format (nested `data` fields) and proxy format (flat fields).
 
 #### Agent → Proxy Transformation
 
-**Agent Format** (agent-clash):
+**Agent Format** (LLM agent client):
 ```json
 {
   "type": "action_submit",
@@ -324,7 +324,7 @@ LLM agents can build cities using the `unit_build_city` action:
 - `unit_id` (required): ID of the settler/worker unit
 - `name` (optional): Custom city name. Defaults to `City{unit_id}` if not provided
 
-**Note:** The current implementation uses auto-generated city names for simplicity. A future enhancement will support server-suggested culturally-appropriate names based on the civilization (e.g., "Rome", "Antium" for Romans). See Linear issue [AGE-199](https://linear.app/agentclash/issue/AGE-199) for details.
+**Note:** The current implementation uses auto-generated city names for simplicity. A future enhancement will support server-suggested culturally-appropriate names based on the civilization (e.g., "Rome", "Antium" for Romans).
 
 **Protocol Details:**
 - Internally converts to `PACKET_UNIT_DO_ACTION` (pid: 84) with `ACTION_FOUND_CITY` (27)
@@ -349,7 +349,7 @@ See [freeciv-proxy/llm_handler.py](../freeciv-proxy/llm_handler.py) for complete
 |---------|------|---------|--------|
 | nginx | 8080 | Web interface | External (`:8080`) |
 | Tomcat | 8080 | Java servlets | Internal (via nginx) |
-| **LLM Gateway** | **8003** | **WebSocket API for agent-clash** | **External (`:8003`)** |
+| **LLM Gateway** | **8003** | **WebSocket API for LLM agents** | **External (`:8003`)** |
 | **FreeCiv Proxy** | **8002** | **Main WebSocket proxy** | **External (`:8002`)** |
 | Game servers | 6000-6009 | FreeCiv C server instances | Internal only |
 | Proxy per-game | 7000-7009 | Dedicated per-game proxies | Internal only |
@@ -381,7 +381,7 @@ MAX_MESSAGE_SIZE_BYTES=104857600            # 100MB for large game states
 
 # Session Management (Updated for longer games and reconnection)
 GATEWAY_AGENT_TIMEOUT=600                   # 10 minutes (was 120s)
-GATEWAY_SESSION_RESUMPTION_WINDOW=60        # 60s to resume after disconnect
+GATEWAY_SESSION_RESUMPTION_WINDOW=3600      # 1 hour to resume after disconnect
 
 # Caching
 CACHE_TTL_SECONDS=5                  # State cache TTL
@@ -655,7 +655,7 @@ uvicorn main:app --port 8003 2>&1 | tee /docker/logs/llm-gateway.log &
 
 ```mermaid
 sequenceDiagram
-    participant GA as agent-clash
+    participant GA as LLM Agent Client
     participant SA as ServerAllocator
     participant GW as LLM Gateway
     participant FP as FreeCiv Proxy
@@ -755,4 +755,4 @@ cache_key = f"state:{game_id}:{player_id}:{turn}"
 - [Technical Specification](../Technical_Spec.md) - Full architecture documentation
 - [CLAUDE.md](../CLAUDE.md) - Developer guidance for AI assistants
 - [docker-compose.yml](../docker-compose.yml) - Service configuration
-- [agent-clash Integration](https://github.com/anthropics/agent-clash) - External LLM orchestrator
+- [LLM Agent Integration Guide](../docs/observer-streaming.md) - Observer and embedding documentation

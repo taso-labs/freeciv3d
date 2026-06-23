@@ -221,7 +221,7 @@ class SimpleAuthenticator:
                 logger.debug(f"API key authentication successful for player {player_id}")
                 return True, player_id, game_id
 
-            # Fallback: try as plain LLM_API_TOKEN (used by gateway/agent-clash).
+            # Fallback: try as plain LLM_API_TOKEN (used by gateway/LLM agent clients).
             # This also runs for fcv_-prefixed keys that failed HMAC validation above —
             # harmless because LLM tokens never use the fcv_ prefix, so _validate_llm_token
             # will return False for them too.

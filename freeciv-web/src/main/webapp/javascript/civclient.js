@@ -100,7 +100,7 @@ var parent_notification_origin = '*';
 /****************************************************************************
   PARENT IFRAME NOTIFICATION SYSTEM
 
-  When FreeCiv runs inside an iframe (e.g., agent-clash-client), the parent
+  When FreeCiv runs inside an iframe (e.g., an external application), the parent
   window needs to know when the game is ready to display. This system sends
   postMessage events at key milestones so the parent can:
   - Hide loading overlays at the right time

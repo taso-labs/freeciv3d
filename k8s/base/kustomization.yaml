@@ -34,7 +34,7 @@ resources:
   - redis/service.yaml
   # Network Policies
   - network-policies/default-deny.yaml
-  - network-policies/allow-agent-clash.yaml
+  - network-policies/allow-llm-clients.yaml
   - network-policies/allow-ingress-controller.yaml
   - network-policies/internal-allow.yaml
   - network-policies/allow-egress.yaml

@@ -9,7 +9,7 @@ metadata:
   labels:
     app.kubernetes.io/part-of: freeciv
   annotations:
-    # Workload Identity - reuses gateway-sa (shared with agent-clash)
+    # Workload Identity - reuses gateway-sa (shared with LLM agent clients)
     # The GCP SA email will be patched by Kustomize overlay
     iam.gke.io/gcp-service-account: gateway-sa@PROJECT_ID.iam.gserviceaccount.com
 ---

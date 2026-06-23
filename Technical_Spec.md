@@ -1,12 +1,12 @@
-# Technical Specification: FreeCiv3D Integration with Game Arena Framework
+# Technical Specification: FreeCiv3D Integration with LLM Gateway Framework
 
-# Technical Specification: FreeCiv3D Integration with Game Arena Framework
+# Technical Specification: FreeCiv3D Integration with LLM Gateway Framework
 
 ## Executive Summary
 
-This specification details the technical architecture for integrating Large Language Model (LLM) agents into FreeCiv3D through an extended Game Arena framework. The MVP solution consists of two primary servers:
+This specification details the technical architecture for integrating Large Language Model (LLM) agents into FreeCiv3D through an extended LLM Gateway framework. The MVP solution consists of two primary servers:
 
-1. **Game Arena Server** - Extended to handle LLM proxy connections and game control
+1. **LLM Gateway Server** - Extended to handle LLM proxy connections and game control
 2. **FreeCiv3D Server** - Modified to support headless LLM gameplay
 
 The MVP focuses on enabling a single game between two manually configured LLMs with a specific game configuration.
@@ -17,8 +17,8 @@ The MVP focuses on enabling a single game between two manually configured LLMs w
 
 ```mermaid
 graph TB
-    subgraph "Game Arena Server"
-        A[LLM Agents<br/>GPT-5/Claude/DeepSeek] --> B[Game Arena Framework<br/>Extended]
+    subgraph "LLM Gateway Server"
+        A[LLM Agents<br/>GPT-5/Claude/DeepSeek] --> B[LLM Gateway Framework<br/>Extended]
         B --> C[FreeCiv State Adapter]
         C --> D[Action Parser & Validator]
         D --> E[WebSocket Client]
@@ -46,7 +46,7 @@ graph TB
 ```mermaid
 sequenceDiagram
     participant LLM as LLM Agent
-    participant GA as Game Arena
+    participant GA as LLM Gateway
     participant Adapter as FreeCiv Adapter
     participant Proxy as freeciv-proxy
     participant Server as freeciv server
@@ -73,14 +73,14 @@ sequenceDiagram
 
 ### 1.3 LLM Gateway Integration Architecture
 
-The llm-gateway component acts as a WebSocket pass-through layer between agent-clash and freeciv-proxy, providing connection management, rate limiting, and message transformation.
+The llm-gateway component acts as a WebSocket pass-through layer between LLM agents and freeciv-proxy, providing connection management, rate limiting, and message transformation.
 
 #### Component Diagram
 
 ```mermaid
 graph TB
-    subgraph "agent-clash (External)"
-        GA[agent-clash<br/>Agents]
+    subgraph "LLM Agent Client (External)"
+        GA[LLM Agent<br/>Client]
     end
 
     subgraph "freeciv3d Docker Container"
@@ -138,7 +138,7 @@ The critical fix in commit d1083b2 corrected a Tornado IOLoop threading violatio
 
 ```mermaid
 sequenceDiagram
-    participant GA as agent-clash
+    participant GA as LLM Agent Client
     participant GW as LLM Gateway<br/>(Port 8003)
     participant LH as LLM Handler<br/>(Main Thread)
     participant CC as CivCom Thread<br/>(Worker)
@@ -172,7 +172,7 @@ sequenceDiagram
 - Packets queued to wrong IOLoop were never delivered → black screen
 - Caused code 1006 WebSocket disconnects after initial connection
 - **Fix**: Use `conn.io_loop` (captured during WebSocket setup, always main thread)
-- Result: Packets flow correctly from civserver → proxy → gateway → agent-clash
+- Result: Packets flow correctly from civserver → proxy → gateway → LLM agent
 
 #### Port Mapping Reference
 
@@ -180,7 +180,7 @@ sequenceDiagram
 |---------|--------------|-----------------|---------|
 | nginx | 80 | `:8080` | Web UI, static assets |
 | Tomcat | 8080 | `:8080` (proxied) | Java servlets, JSP |
-| **LLM Gateway** | 8003 | `:8003` | **agent-clash WebSocket API** |
+| **LLM Gateway** | 8003 | `:8003` | **LLM agent WebSocket API** |
 | **FreeCiv Proxy** | 8002 | `:8002` | **Main proxy for all connections** |
 | civserver | 6000-6009 | Internal only | Game server instances |
 | Proxy per-game | 7000-7009 | Internal only | Dedicated proxies (managed by publite2) |
@@ -195,7 +195,7 @@ The LLM Gateway integration includes a **dynamic server pool management system**
 
 ```mermaid
 sequenceDiagram
-    participant GA as agent-clash
+    participant GA as LLM Agent Client
     participant SA as ServerAllocator<br/>(Servlet)
     participant DB as MySQL<br/>(servers table)
     participant SR as ServerRelease<br/>(Servlet)
@@ -342,7 +342,7 @@ sequenceDiagram
 
 ```mermaid
 sequenceDiagram
-    participant GA as agent-clash
+    participant GA as LLM Agent Client
     participant GW as Gateway
     participant LH as LLM Handler
     participant CS as civserver
@@ -378,7 +378,7 @@ sequenceDiagram
 - Per-message: 1MB max size
 - Concurrent connections: 50 per instance
 
-## 2. Game Arena Server Components
+## 2. LLM Gateway Server Components
 
 ### 2.1 FreeCiv State Adapter
 
@@ -731,21 +731,21 @@ class ActionSpaceOptimizer:
 # tests/test_mvp_integration.py
 class TestMVPIntegration(unittest.TestCase):
     def setUp(self):
-        self.agent_clash = AgentClashServer(MVP_CONFIG)
+        self.llm_gateway = LLMGatewayServer(MVP_CONFIG)
         self.freeciv_server = FreeCiv3DServer(MVP_CONFIG)
 
     async def test_single_game_completion(self):
         """Test that a single game can complete successfully"""
         # Start servers
         await self.freeciv_server.start()
-        await self.agent_clash.start()
+        await self.llm_gateway.start()
 
         # Connect agents
         agent1 = MockLLMAgent("player1")
         agent2 = MockLLMAgent("player2")
 
         # Run game
-        result = await self.agent_clash.run_game(agent1, agent2)
+        result = await self.llm_gateway.run_game(agent1, agent2)
 
         self.assertIsNotNone(result.winner)
         self.assertLess(result.turns, 200)
@@ -756,7 +756,7 @@ class TestMVPIntegration(unittest.TestCase):
 
 ### Phase 1: Core Infrastructure (Week 1-2)
 
-- Set up Game Arena server with FreeCiv state adapter
+- Set up LLM Gateway server with FreeCiv state adapter
 - Implement WebSocket client for FreeCiv3D communication
 - Basic action parsing and validation
 
@@ -917,7 +917,7 @@ class TournamentMetrics:
 ```mermaid
 graph TB
     subgraph "Current System"
-        A[FreeCiv3D<br/>LLM Integration] --> B[Game Arena<br/>Framework]
+        A[FreeCiv3D<br/>LLM Integration] --> B[LLM Gateway<br/>Framework]
     end
 
     subgraph "Multi-Game Extensions"

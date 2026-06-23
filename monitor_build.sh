@@ -65,7 +65,7 @@ while true; do
             echo "  🤖 LLM Gateway: ws://localhost:8002/llmsocket"
             echo "  🎮 Game Server: localhost:6001"
             echo ""
-            echo "Ready to test agent-clash integration!"
+            echo "Ready to test LLM agent integration!"
             break
         fi
     fi

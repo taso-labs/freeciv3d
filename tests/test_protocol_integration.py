@@ -93,7 +93,7 @@ class TestProtocolIntegration:
                 mock_forward.return_value = None
 
                 # Route message through gateway
-                result = await gateway.route_message("agent_clash", "freeciv", llm_message.to_json())
+                result = await gateway.route_message("agent", "freeciv", llm_message.to_json())
 
                 # Verify message was routed
                 assert result["success"] is True

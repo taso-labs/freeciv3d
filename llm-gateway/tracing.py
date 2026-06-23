@@ -103,7 +103,7 @@ def init_tracing(
     # Create tracer provider
     provider = TracerProvider(resource=resource)
 
-    # Check for OTLP endpoint (matches agent-clash configuration)
+    # Check for OTLP endpoint (matches production OTLP configuration)
     otlp_endpoint = os.getenv("OTLP_ENDPOINT")
 
     # Configure BatchSpanProcessor with size limits to prevent HTTP/2 FRAME_SIZE_ERROR
@@ -115,7 +115,7 @@ def init_tracing(
     }
 
     if enable_cloud_trace and otlp_endpoint and OTLP_AVAILABLE:
-        # Prefer OTLP exporter if endpoint is configured (consistent with agent-clash)
+        # Prefer OTLP exporter if endpoint is configured
         try:
             # Use insecure=True for plaintext gRPC (in-cluster collector on port 4317)
             exporter = OTLPSpanExporter(endpoint=otlp_endpoint, insecure=True)

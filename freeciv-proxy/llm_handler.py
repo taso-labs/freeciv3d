@@ -221,7 +221,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
 
     This is the PRODUCTION WebSocket handler for LLM agents.
     Endpoint: /llmsocket/8002
-    Architecture: agent-clash → llm-gateway (port 8003) → LLMWSHandler → GameSession
+    Architecture: LLM agent → llm-gateway (port 8003) → LLMWSHandler → GameSession
 
     Player ID assignment uses GameSession.allocate_ai_slot() for sequential, thread-safe
     allocation (see game_session_manager.py). This integrates with civserver via /take commands.
@@ -1584,17 +1584,17 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 error_response['correlation_id'] = correlation_id
             self.write_message(json.dumps(error_response))
 
-    def _normalize_agent_clash_action(self, action_data: Dict[str, Any], player_id: int = None, game_id: str = None) -> Dict[str, Any]:
-        """Normalize agent-clash action format to proxy format.
+    def _normalize_agent_action(self, action_data: Dict[str, Any], player_id: int = None, game_id: str = None) -> Dict[str, Any]:
+        """Normalize LLM agent action format to proxy format.
 
-        agent-clash sends:
+        Agent sends:
             {"action_type": "tech_research", "actor_id": 1, "target": {"value": "Alphabet"}}
 
         Proxy expects:
             {"type": "tech_research", "tech_name": "alphabet", "player_id": 1}
 
         Args:
-            action_data: agent-clash format action dict
+            action_data: Agent format action dict
             player_id: Optional player ID for looking up legal_actions (for target inference)
             game_id: Optional game ID for looking up legal_actions (for target inference)
 
@@ -1608,13 +1608,13 @@ class LLMWSHandler(websocket.WebSocketHandler):
         if not action_type:
             raise ValueError("Missing action_type field")
 
-        logger.debug(f"Normalizing agent-clash action: {action_type}")
+        logger.debug(f"Normalizing agent action: {action_type}")
 
         # Build normalized action
         normalized = {"type": action_type}
 
         # Map actor_id based on action type
-        # NOTE: agent-clash uses actor_id for different meanings:
+        # NOTE: LLM agents use actor_id for different meanings:
         # - unit actions: actor_id is a unit ID
         # - city actions: actor_id is a city ID
         # - player-level actions: actor_id is a player ID
@@ -1685,7 +1685,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 normalized["city_id"] = action_data["city_id"]
 
             # Extract production_type from target dict
-            # Support both 'production_type' (canonical) and 'value' (agent-clash format) field names
+            # Support both 'production_type' (canonical) and 'value' (agent format) field names
             target = action_data.get("target", {})
             if isinstance(target, dict):
                 production = target.get("production_type") or target.get("value", "")
@@ -1705,7 +1705,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
             if "unit_id" in action_data:
                 normalized["unit_id"] = action_data["unit_id"]
 
-            # Extract city name from target dict (agent-clash sends target.name)
+            # Extract city name from target dict (agent sends target.name)
             target = action_data.get("target", {})
             if isinstance(target, dict) and "name" in target:
                 normalized["name"] = target["name"]
@@ -1714,7 +1714,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                              "unit_capture", "unit_wipe", "unit_conquer_city",
                              "unit_nuke", "unit_nuke_city", "unit_nuke_units"):
             # Extract target coordinates and IDs for combat actions
-            # Agent-clash sends target as: {"x": 33, "y": 35} or {"target_unit_id": 99}
+            # Agent sends target as: {"x": 33, "y": 35} or {"target_unit_id": 99}
             target = action_data.get("target", {})
             if isinstance(target, dict):
                 # Extract coordinates
@@ -1813,7 +1813,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
         return normalized
 
     def _parse_canonical_action(self, action_str: str) -> Dict[str, Any]:
-        """Parse agent-clash canonical format strings to JSON objects.
+        """Parse canonical format action strings to JSON objects.
 
         Canonical format: "action_type_param1(value1)_param2(value2)..."
 
@@ -1915,7 +1915,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
             elif "unit_id" in params:
                 result["unit_id"] = params["unit_id"]
 
-            # Extract city name from target dict (agent-clash sends target.name)
+            # Extract city name from target dict (agent sends target.name)
             target = params.get("target", {})
             if isinstance(target, dict) and "name" in target:
                 result["name"] = target["name"]
@@ -1981,7 +1981,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
             session_manager.update_session_activity(self.session_id)
 
         try:
-            # Extract action data from either 'data' (agent-clash format) or 'action' (legacy format)
+            # Extract action data from either 'data' (agent format) or 'action' (legacy format)
             # Use explicit check to avoid falsy value issues (empty dict, 0, False, etc.)
             action_data = msg_data.get('data') if 'data' in msg_data else msg_data.get('action', {})
             logger.info(f"🎯 Extracted action_data: {action_data}")
@@ -1990,7 +1990,7 @@ class LLMWSHandler(websocket.WebSocketHandler):
                 logger.info(f"🎯 action_data has 'action_type': {'action_type' in action_data}")
                 logger.info(f"🎯 action_data has 'type': {'type' in action_data}")
 
-            # NEW: Handle canonical string format from agent-clash
+            # Handle canonical string format from LLM agents
             if isinstance(action_data, str):
                 logger.info(f"📝 Received canonical action string: {action_data}")
                 try:
@@ -2013,17 +2013,17 @@ class LLMWSHandler(websocket.WebSocketHandler):
                     self.write_message(json.dumps(error_response))
                     return
 
-            # NEW: Handle agent-clash dict format with "action_type" instead of "type"
+            # Handle agent dict format with "action_type" instead of "type"
             if isinstance(action_data, dict) and "action_type" in action_data and "type" not in action_data:
-                logger.info(f"📝 NORMALIZATION TRIGGERED: agent-clash format detected")
+                logger.info(f"📝 NORMALIZATION TRIGGERED: agent format detected")
                 logger.info(f"📝 Original action_data: {action_data}")
                 try:
-                    action_data = self._normalize_agent_clash_action(action_data, self.player_id, self.game_id)
+                    action_data = self._normalize_agent_action(action_data, self.player_id, self.game_id)
                     logger.info(f"✅ NORMALIZATION SUCCESS: {action_data}")
                     logger.info(f"✅ Normalized action has 'type': {'type' in action_data}")
                     logger.info(f"✅ Normalized action has 'tech_name': {'tech_name' in action_data if action_data.get('type') == 'tech_research' else 'N/A'}")
                 except Exception as e:
-                    logger.error(f"❌ Failed to normalize agent-clash action: {e}")
+                    logger.error(f"❌ Failed to normalize agent action: {e}")
                     error_response = {
                         'type': 'action_rejected',
                         'error_code': 'E135',

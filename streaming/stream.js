@@ -90,7 +90,7 @@ function isValidObserverUrl(url) {
     // Whitelist of allowed hostnames (configurable via env)
     // Default includes common FreeCiv hosting domains and local development
     const allowedHostsEnv = process.env.ALLOWED_OBSERVER_HOSTS ||
-      'localhost,host.docker.internal,freeciv.clashai.live,freeciv.agentclash.gg,127.0.0.1';
+      'localhost,host.docker.internal,freeciv.clashai.live,127.0.0.1';
     const allowedHosts = allowedHostsEnv.split(',').map(h => h.trim().toLowerCase());
 
     // Check if hostname matches allowed list (exact match or subdomain)

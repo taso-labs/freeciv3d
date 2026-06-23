@@ -119,8 +119,7 @@ def create_stream_manager() -> Optional[Union[StreamManager, LocalStreamManager]
     return None
 
 
-# Configure logging to output to BOTH stdout (for GCloud) and file (for local debugging)
-# GCloud Logging captures stdout from containers
+# Configure logging to output to BOTH stdout (for container log aggregation) and file (for local debugging)
 os.makedirs("logs", exist_ok=True)
 
 # Check if structured JSON logging with tracing should be enabled
@@ -140,7 +139,7 @@ else:
         level=getattr(logging, settings.log_level.upper()),
         format=settings.log_format,
         handlers=[
-            logging.StreamHandler(sys.stdout),  # GCloud captures stdout (not stderr)
+            logging.StreamHandler(sys.stdout),  # Container runtimes capture stdout (not stderr)
             logging.FileHandler("logs/gateway.log"),  # File for local debugging
         ]
     )
@@ -188,7 +187,7 @@ else:
 
 
 class LLMGateway:
-    """Simplified gateway class - pure pass-through between Game Arena and FreeCiv3D"""
+    """Simplified gateway class - pure pass-through between LLM agents and FreeCiv3D"""
 
     def __init__(self):
         # Minimal state - just track active agents for connection management
@@ -230,7 +229,7 @@ class LLMGateway:
         """Idempotently ensure a game_sessions entry exists for a game.
 
         Called from the WebSocket auth_success handler so that WS-originated
-        games (agent-clash flow) are visible to REST endpoints like stop_game,
+        games (WebSocket flow) are visible to REST endpoints like stop_game,
         get_game_info, list_games, and get_spectator_url — all of which look
         up games via ``self.game_sessions``.
 
@@ -439,12 +438,12 @@ class LLMGateway:
             }
 
     async def route_message(self, source: str, target: str, message: Dict[str, Any]) -> Dict[str, Any]:
-        """Route message between agent-clash and FreeCiv"""
+        """Route message between LLM agents and FreeCiv"""
         try:
             if target == "freeciv":
                 return await self._route_to_freeciv(message)
-            elif target == "agent_clash":
-                return await self._route_to_agent_clash(message)
+            elif target == "agent":
+                return await self._route_to_agent(message)
             else:
                 return {
                     "success": False,
@@ -582,16 +581,6 @@ class LLMGateway:
         # All attempts failed
         await self._handle_connection_failure(game_id)
         return False
-
-    async def _is_connection_healthy(self, game_id: str) -> bool:
-        """
-        Check if connection is healthy
-
-        DEPRECATED: Use connection_state_manager.is_connection_healthy() instead
-        This method is kept for backward compatibility only.
-        """
-        # Delegate to connection state manager (thread-safe implementation)
-        return await connection_state_manager.is_connection_healthy(game_id)
 
     async def _initialize_freeciv_game(self, game_id: str, websocket) -> Dict[str, Any]:
         """Initialize a FreeCiv game by sending necessary protocol messages"""
@@ -940,16 +929,16 @@ class LLMGateway:
     async def get_global_game_state(self, game_id: str) -> Dict[str, Any]:
         """Get authoritative global game state without fog of war filtering.
 
-        Used by match orchestrator for stats collection. Unlike get_game_state(),
+        Used by external clients for stats collection. Unlike get_game_state(),
         this returns all units/cities from all players regardless of visibility.
 
-        Note: No server-side rate limiting — the caller (agent-clash match_service)
-        is expected to cache responses (1s TTL) to avoid excessive polling.
+        Note: No server-side rate limiting — the caller is expected to cache
+        responses (1s TTL) to avoid excessive polling.
         """
         try:
             # Check both game_sessions (REST-created games) and
             # connection_manager (WebSocket-connected agents) for game existence.
-            # Agent-clash connects via WebSocket, so games are only registered
+            # Agents connect via WebSocket, so games are only registered
             # in connection_manager — not in game_sessions.
             game_info = await connection_manager.get_game_info(game_id)
             if game_id not in self.game_sessions and game_info is None:
@@ -1316,11 +1305,11 @@ class LLMGateway:
 
         return {"success": True}
 
-    async def _route_to_agent_clash(self, message: Dict[str, Any]) -> Dict[str, Any]:
-        """Route message to agent-clash (not implemented in this scope)"""
+    async def _route_to_agent(self, message: Dict[str, Any]) -> Dict[str, Any]:
+        """Route message to LLM agent (not implemented in this scope)"""
         return {
             "success": False,
-            "error": "agent-clash routing not implemented in this scope"
+            "error": "Agent routing not implemented in this scope"
         }
 
 

@@ -592,7 +592,7 @@ def setup_default_rate_limits():
         RateLimitType.REQUESTS_PER_MINUTE,
         RateLimitConfig(
             limit_type=RateLimitType.REQUESTS_PER_MINUTE,
-            limit_value=DEFAULT_REQUESTS_PER_MINUTE,  # 200 requests per minute (increased for 2-4 player games)
+            limit_value=DEFAULT_REQUESTS_PER_MINUTE,  # 300 requests per minute (increased for concurrent multi-player games)
             window_seconds=60
         )
     )
@@ -603,7 +603,7 @@ def setup_default_rate_limits():
         RateLimitType.REQUESTS_PER_SECOND,
         RateLimitConfig(
             limit_type=RateLimitType.REQUESTS_PER_SECOND,
-            limit_value=DEFAULT_BURST_SIZE,  # 40 requests per second (increased to handle 20-24 msg/turn)
+            limit_value=DEFAULT_BURST_SIZE,  # 80 requests per second (allows ~20 actions per turn for 4 players)
             window_seconds=1
         )
     )
